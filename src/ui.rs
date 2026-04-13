@@ -322,15 +322,17 @@ fn render_panes(app: &mut App, frame: &mut Frame, area: Rect) {
 
     let focused_id = app.ws().focused_pane_id;
     let focus_target = app.ws().focus_target;
+    let selection = app.selection.clone();
     for (pane_id, rect) in rects {
         if let Some(pane) = app.ws().panes.get(&pane_id) {
             let is_focused = pane_id == focused_id && focus_target == FocusTarget::Pane;
-            render_single_pane(pane, is_focused, frame, rect);
+            let pane_sel = selection.as_ref().filter(|s| s.pane_id == pane_id);
+            render_single_pane(pane, is_focused, pane_sel, frame, rect);
         }
     }
 }
 
-fn render_single_pane(pane: &crate::pane::Pane, is_focused: bool, frame: &mut Frame, area: Rect) {
+fn render_single_pane(pane: &crate::pane::Pane, is_focused: bool, selection: Option<&crate::app::TextSelection>, frame: &mut Frame, area: Rect) {
     let is_claude = pane.is_claude_running();
     let border_color = if is_focused && is_claude {
         ACCENT_CLAUDE
@@ -383,13 +385,14 @@ fn render_single_pane(pane: &crate::pane::Pane, is_focused: bool, frame: &mut Fr
             .alignment(Alignment::Center);
         frame.render_widget(msg, inner);
     } else {
-        render_terminal_content(pane, is_focused, frame, inner);
+        render_terminal_content(pane, is_focused, selection, frame, inner);
     }
 }
 
 fn render_terminal_content(
     pane: &crate::pane::Pane,
     is_focused: bool,
+    selection: Option<&crate::app::TextSelection>,
     frame: &mut Frame,
     area: Rect,
 ) {
@@ -424,20 +427,69 @@ fn render_terminal_content(
                     Style::default().fg(fg).bg(bg).add_modifier(modifiers)
                 };
 
+                // Apply selection highlight (only if dragged, not single click)
+                let has_selection = selection.map_or(false, |s| {
+                    let (sr, sc, er, ec) = s.normalized();
+                    (sr != er || sc != ec) && s.contains(row as u16, col as u16)
+                });
+                let final_style = if has_selection {
+                    Style::default()
+                        .fg(Color::Rgb(0x0d, 0x11, 0x17))
+                        .bg(Color::Rgb(0x58, 0xa6, 0xff))
+                } else {
+                    style
+                };
+
                 if let Some(buf_cell) = buf.cell_mut((x, y)) {
                     buf_cell.set_symbol(display_char);
-                    buf_cell.set_style(style);
+                    buf_cell.set_style(final_style);
                 }
             }
         }
     }
 
-    if is_focused && !screen.hide_cursor() {
+    // Show cursor when pane is focused
+    let show_cursor = is_focused && (!screen.hide_cursor() || pane.is_claude_running());
+    if show_cursor {
         let cursor = screen.cursor_position();
         let cursor_x = area.x + cursor.1;
         let cursor_y = area.y + cursor.0;
         if cursor_x < area.x + area.width && cursor_y < area.y + area.height {
             frame.set_cursor_position((cursor_x, cursor_y));
+        }
+    }
+
+    drop(parser); // release lock before scrollbar_info
+
+    // Scrollbar on the right edge
+    let (scroll_offset, total_lines) = pane.scrollbar_info();
+    if total_lines > rows {
+        let scrollbar_x = area.x + area.width - 1;
+        let max_scroll = total_lines.saturating_sub(rows);
+        let visible_ratio = rows as f32 / total_lines as f32;
+        let thumb_height = (area.height as f32 * visible_ratio).max(1.0) as u16;
+
+        // Position: 0 = bottom, max_scroll = top
+        let scroll_ratio = if max_scroll > 0 {
+            1.0 - (scroll_offset as f32 / max_scroll as f32)
+        } else {
+            1.0
+        };
+        let thumb_top = ((area.height - thumb_height) as f32 * scroll_ratio) as u16;
+
+        let buf = frame.buffer_mut();
+        for row in 0..area.height {
+            let y = area.y + row;
+            let is_thumb = row >= thumb_top && row < thumb_top + thumb_height;
+            let (sym, style) = if is_thumb {
+                ("\u{2588}", Style::default().fg(Color::Rgb(0x58, 0x5e, 0x68))) // █ thumb
+            } else {
+                ("\u{2502}", Style::default().fg(Color::Rgb(0x2d, 0x33, 0x3b))) // │ track
+            };
+            if let Some(cell) = buf.cell_mut((scrollbar_x, y)) {
+                cell.set_symbol(sym);
+                cell.set_style(style);
+            }
         }
     }
 }

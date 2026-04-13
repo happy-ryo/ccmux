@@ -1,0 +1,74 @@
+# Keybindings
+
+ccmux has context-aware keybindings. The status bar at the bottom always shows the available shortcuts for the current mode.
+
+## Global
+
+These work in any mode:
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+Q` | Quit ccmux (kills all shells) |
+| `Ctrl+Right` | Cycle focus to next area |
+| `Ctrl+Left` | Cycle focus to previous area |
+
+Focus cycles through: **File Tree → Preview → Pane 1 → Pane 2 → ... → File Tree**
+
+## Pane Mode
+
+When a terminal pane is focused:
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+D` | Split vertically (left/right) |
+| `Ctrl+E` | Split horizontally (top/bottom) |
+| `Ctrl+W` | Close pane (or close tab if single pane) |
+| `Ctrl+T` | New tab |
+| `Ctrl+F` | Focus file tree |
+| `Ctrl+P` | Swap preview/terminal layout |
+| `Tab` | Forwarded to shell (tab completion) |
+| All other keys | Forwarded to shell |
+
+import { Callout } from 'nextra/components'
+
+<Callout>
+  `Tab` is always forwarded to the shell for tab completion. Pane switching is done with `Ctrl+Right/Left` or mouse click.
+</Callout>
+
+## File Tree Mode
+
+When the file tree is focused (after `Ctrl+F`):
+
+| Key | Action |
+|-----|--------|
+| `j` / `Down` | Move selection down |
+| `k` / `Up` | Move selection up |
+| `Enter` | Open file preview / expand directory |
+| `.` | Toggle hidden files |
+| `Esc` | Return to pane (keep preview open) |
+| `Ctrl+F` | Hide file tree and return to pane |
+
+## Preview Mode
+
+When the preview panel is focused (via `Ctrl+Right/Left` or click):
+
+| Key | Action |
+|-----|--------|
+| `j` / `Down` | Scroll down |
+| `k` / `Up` | Scroll up |
+| `PageDown` | Scroll down 20 lines |
+| `PageUp` | Scroll up 20 lines |
+| `Ctrl+W` | Close preview |
+| `Ctrl+P` | Swap layout |
+| `Esc` | Return to pane |
+
+## Key Conflicts
+
+Some keys are reserved by ccmux and won't be forwarded to the shell:
+
+| Key | ccmux action | Shell workaround |
+|-----|-------------|-----------------|
+| `Ctrl+D` | Vertical split | Use `exit` to logout |
+| `Ctrl+E` | Horizontal split | Use `End` key for end-of-line |
+| `Ctrl+F` | File tree | Use `/` for search in less/vim |
+| `Ctrl+W` | Close (multi-pane only) | Works in single pane mode |

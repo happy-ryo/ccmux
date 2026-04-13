@@ -4,6 +4,8 @@ Claude Code Multiplexer — manage multiple Claude Code instances in TUI split p
 
 A lightweight terminal multiplexer built specifically for running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions side-by-side.
 
+![ccmux screenshot](screenshot.png)
+
 ## Features
 
 - **Multi-pane terminal** — Split vertically/horizontally, run independent PTY shells

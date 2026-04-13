@@ -1,0 +1,35 @@
+# ccmux
+
+**Claude Code Multiplexer** — manage multiple Claude Code instances in TUI split panes.
+
+![ccmux screenshot](/screenshot.png)
+
+## What is ccmux?
+
+ccmux is a lightweight terminal multiplexer built specifically for running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions side-by-side. Think of it as tmux, but designed around the Claude Code workflow.
+
+## Why ccmux?
+
+- **Run multiple Claude Code agents simultaneously** in split panes
+- **See your project files** with syntax-highlighted preview while coding
+- **Stay in the terminal** — no editor needed, just your shell and Claude
+- **Single binary (~2MB)** — install once, run anywhere
+
+## Quick Start
+
+```bash
+git clone https://github.com/Shin-sibainu/ccmux.git
+cd ccmux
+cargo run
+```
+
+Once running, type `claude` in the terminal pane to start Claude Code.
+
+## Key Features
+
+- [**Multi-pane splits**](/en/features#pane-management) — Vertical and horizontal, up to 16 panes
+- [**File tree + preview**](/en/features#file-tree) — Browse and preview files with syntax highlighting
+- [**Tab workspaces**](/en/features#tabs) — Independent workspaces per tab
+- [**Claude detection**](/en/features#claude-detection) — Pane border turns orange when Claude is running
+- [**Text selection**](/en/features#text-selection--copy) — Drag to select, auto-copy to clipboard
+- [**Scrollback**](/en/features#terminal-scrollback) — 10,000 lines of history per pane

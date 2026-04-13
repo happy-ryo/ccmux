@@ -1,0 +1,69 @@
+# はじめ方
+
+## 必要なもの
+
+- [Rust ツールチェーン](https://rustup.rs/)（stable）
+- ターミナルエミュレータ（Windows Terminal、iTerm2 など）
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（任意。でもこれが目的）
+
+## インストール
+
+### ソースからビルド
+
+```bash
+git clone https://github.com/Shin-sibainu/ccmux.git
+cd ccmux
+cargo build --release
+```
+
+バイナリは `target/release/ccmux`（Windows は `ccmux.exe`）に生成されます。
+
+### PATH に追加（任意）
+
+```bash
+# Linux / macOS
+cp target/release/ccmux ~/.local/bin/
+
+# Windows (PowerShell)
+Copy-Item target\release\ccmux.exe $env:USERPROFILE\.local\bin\
+```
+
+## 初回起動
+
+```bash
+ccmux
+```
+
+シェルが起動したターミナルペイン、左にファイルツリーサイドバー、下にステータスバーが表示されます。
+
+## 基本ワークフロー
+
+### 1. Claude Code を起動
+
+ターミナルペインで `claude` と入力。ペインの枠がオレンジに変わり、Claude Code が動作中であることを示します。
+
+### 2. ペインを分割
+
+`Ctrl+D` で縦分割、`Ctrl+E` で横分割。新しいペインにはそれぞれ独立したシェルが起動します。
+
+### 3. ファイルを閲覧
+
+`Ctrl+F` でファイルツリーにフォーカス。`j`/`k` で移動し、`Enter` でシンタックスハイライト付きプレビューを開きます。
+
+### 4. ペイン間を移動
+
+`Ctrl+→` / `Ctrl+←` でサイドバー、プレビュー、ペインを順に切替。またはマウスクリック。
+
+### 5. 終了
+
+`Ctrl+Q` で ccmux を終了。全シェルがクリーンに終了します。
+
+## シェルの自動検出
+
+ccmux は自動的にシェルを検出します：
+
+| プラットフォーム | 優先順位 |
+|-----------------|----------|
+| **Windows** | Git Bash → PowerShell |
+| **macOS** | `$SHELL`（通常 zsh） |
+| **Linux** | `$SHELL`（通常 bash） |

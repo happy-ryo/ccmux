@@ -40,7 +40,8 @@ pub enum FocusTarget {
 pub enum DragTarget {
     FileTreeBorder,
     PreviewBorder,
-    PaneSplit(Vec<bool>, SplitDirection, Rect), // path, direction, area of the split node
+    PaneSplit(Vec<bool>, SplitDirection, Rect),
+    Scrollbar(usize, Rect), // pane_id, inner area
 }
 
 // ─── Layout Tree ──────────────────────────────────────────
@@ -205,6 +206,50 @@ fn split_rect(area: Rect, direction: SplitDirection, ratio: f32) -> (Rect, Rect)
     }
 }
 
+// ─── Text Selection ───────────────────────────────────────
+
+/// Text selection state within a pane.
+#[derive(Debug, Clone)]
+pub struct TextSelection {
+    pub pane_id: usize,
+    pub start_row: u16,
+    pub start_col: u16,
+    pub end_row: u16,
+    pub end_col: u16,
+    pub pane_rect: Rect, // inner area of the pane (for coordinate mapping)
+}
+
+impl TextSelection {
+    /// Get normalized (top-left to bottom-right) selection range.
+    pub fn normalized(&self) -> (u16, u16, u16, u16) {
+        if self.start_row < self.end_row
+            || (self.start_row == self.end_row && self.start_col <= self.end_col)
+        {
+            (self.start_row, self.start_col, self.end_row, self.end_col)
+        } else {
+            (self.end_row, self.end_col, self.start_row, self.start_col)
+        }
+    }
+
+    /// Check if a cell is within the selection.
+    pub fn contains(&self, row: u16, col: u16) -> bool {
+        let (sr, sc, er, ec) = self.normalized();
+        if row < sr || row > er {
+            return false;
+        }
+        if row == sr && row == er {
+            return col >= sc && col <= ec;
+        }
+        if row == sr {
+            return col >= sc;
+        }
+        if row == er {
+            return col <= ec;
+        }
+        true
+    }
+}
+
 // ─── Workspace (per-tab state) ────────────────────────────
 
 /// A workspace holds all state for one tab.
@@ -271,6 +316,7 @@ pub struct App {
     pub event_rx: Receiver<AppEvent>,
     next_pane_id: usize,
     pub dirty: bool,
+    pub paste_cooldown: u8, // frames to skip rendering after paste
     // Shared settings
     pub file_tree_width: u16,
     pub preview_width: u16,
@@ -282,6 +328,8 @@ pub struct App {
     // Tab bar rects for mouse click
     pub last_tab_rects: Vec<(usize, Rect)>,
     pub last_new_tab_rect: Option<Rect>,
+    // Text selection
+    pub selection: Option<TextSelection>,
 }
 
 impl App {
@@ -304,6 +352,7 @@ impl App {
             event_rx,
             next_pane_id: 2,
             dirty: true,
+            paste_cooldown: 0,
             file_tree_width: 20,
             preview_width: 40,
             layout_swapped: true,
@@ -311,6 +360,7 @@ impl App {
             hover_border: None,
             last_tab_rects: Vec::new(),
             last_new_tab_rect: None,
+            selection: None,
         })
     }
 
@@ -559,7 +609,11 @@ impl App {
         let new_id = self.next_pane_id;
         self.next_pane_id = self.next_pane_id.wrapping_add(1);
 
-        let pane = Pane::new(new_id, 10, 40, self.event_tx.clone())?;
+        // Inherit CWD from the focused pane
+        let parent_cwd = self.ws().panes.get(&self.ws().focused_pane_id)
+            .map(|p| p.cwd.clone());
+
+        let pane = Pane::new_with_cwd(new_id, 10, 40, self.event_tx.clone(), parent_cwd)?;
         let ws = self.ws_mut();
         ws.panes.insert(new_id, pane);
         ws.layout.split_pane(ws.focused_pane_id, new_id, direction);
@@ -675,6 +729,24 @@ impl App {
         }
     }
 
+    /// Scroll a pane based on scrollbar click position.
+    fn scroll_pane_to_click(&self, pane_id: usize, click_row: u16, inner: &Rect) {
+        if let Some(pane) = self.ws().panes.get(&pane_id) {
+            let (_, total_lines) = pane.scrollbar_info();
+            let visible_rows = inner.height as usize;
+            if total_lines <= visible_rows {
+                return;
+            }
+            let max_scroll = total_lines.saturating_sub(visible_rows);
+            // click_row relative to inner area: top = max scroll, bottom = 0
+            let relative_y = click_row.saturating_sub(inner.y) as f32;
+            let ratio = relative_y / inner.height.max(1) as f32;
+            let target_scroll = ((1.0 - ratio) * max_scroll as f32) as usize;
+            let mut parser = pane.parser.lock().unwrap_or_else(|e| e.into_inner());
+            parser.screen_mut().set_scrollback(target_scroll);
+        }
+    }
+
     // ─── Mouse handling ───────────────────────────────────
 
     fn is_on_file_tree_border(&self, col: u16) -> bool {
@@ -706,6 +778,9 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 let col = mouse.column;
                 let row = mouse.row;
+
+                // Clear previous selection on any click
+                self.selection = None;
 
                 // Check tab bar clicks
                 for &(tab_idx, rect) in &self.last_tab_rects {
@@ -805,6 +880,14 @@ impl App {
                     {
                         self.ws_mut().focused_pane_id = pane_id;
                         self.ws_mut().focus_target = FocusTarget::Pane;
+
+                        // Check if clicking on scrollbar (rightmost column inside border)
+                        let scrollbar_col = rect.x + rect.width - 2; // -1 border, -1 scrollbar
+                        if col >= scrollbar_col {
+                            let inner = Rect::new(rect.x + 1, rect.y + 1, rect.width.saturating_sub(2), rect.height.saturating_sub(2));
+                            self.scroll_pane_to_click(pane_id, row, &inner);
+                            self.dragging = Some(DragTarget::Scrollbar(pane_id, inner));
+                        }
                         return;
                     }
                 }
@@ -812,6 +895,8 @@ impl App {
             MouseEventKind::Drag(MouseButton::Left) => {
                 let col = mouse.column;
                 let row = mouse.row;
+
+                // Border drag takes priority
                 if let Some(ref target) = self.dragging.clone() {
                     match target {
                         DragTarget::FileTreeBorder => {
@@ -840,11 +925,64 @@ impl App {
                             };
                             self.ws_mut().layout.update_ratio(path, new_ratio);
                         }
+                        DragTarget::Scrollbar(pane_id, inner) => {
+                            self.scroll_pane_to_click(*pane_id, row, inner);
+                        }
+                    }
+                    return;
+                }
+
+                // Text selection: extend if active, or start new
+                if let Some(ref mut sel) = self.selection {
+                    let inner = sel.pane_rect;
+                    sel.end_col = col.saturating_sub(inner.x).min(inner.width.saturating_sub(1));
+                    sel.end_row = row.saturating_sub(inner.y).min(inner.height.saturating_sub(1));
+                } else {
+                    // Start new selection in pane
+                    let pane_rects = self.ws().last_pane_rects.clone();
+                    for (pane_id, rect) in pane_rects {
+                        if col >= rect.x && col < rect.x + rect.width
+                            && row >= rect.y && row < rect.y + rect.height
+                        {
+                            let inner = Rect::new(
+                                rect.x + 1, rect.y + 1,
+                                rect.width.saturating_sub(2),
+                                rect.height.saturating_sub(2),
+                            );
+                            let cell_col = col.saturating_sub(inner.x);
+                            let cell_row = row.saturating_sub(inner.y);
+                            self.selection = Some(TextSelection {
+                                pane_id,
+                                start_row: cell_row,
+                                start_col: cell_col,
+                                end_row: cell_row,
+                                end_col: cell_col,
+                                pane_rect: inner,
+                            });
+                            break;
+                        }
                     }
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.dragging = None;
+
+                // Copy selected text to clipboard
+                if let Some(ref sel) = self.selection {
+                    let (sr, sc, er, ec) = sel.normalized();
+                    // Only copy if there's an actual selection (not just a click)
+                    if sr != er || sc != ec {
+                        if let Some(pane) = self.ws().panes.get(&sel.pane_id) {
+                            let text = extract_selected_text(pane, sr, sc, er, ec);
+                            if !text.is_empty() {
+                                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                    let _ = clipboard.set_text(&text);
+                                }
+                            }
+                        }
+                    }
+                    // Keep selection visible until next click
+                }
             }
             MouseEventKind::ScrollUp => {
                 let col = mouse.column;
@@ -930,6 +1068,22 @@ impl App {
 
     // ─── PTY forwarding ───────────────────────────────────
 
+    /// Forward pasted text to PTY wrapped in bracketed paste sequences.
+    pub fn forward_paste_to_pty(&mut self, text: &str) -> Result<()> {
+        let focused_id = self.ws().focused_pane_id;
+        if let Some(pane) = self.ws_mut().panes.get_mut(&focused_id) {
+            pane.scroll_reset();
+            // Wrap in bracketed paste: \x1b[200~ ... \x1b[201~
+            let mut data = Vec::new();
+            data.extend_from_slice(b"\x1b[200~");
+            data.extend_from_slice(text.as_bytes());
+            data.extend_from_slice(b"\x1b[201~");
+            pane.write_input(&data)?;
+        }
+        Ok(())
+    }
+
+    #[allow(dead_code)]
     pub fn forward_key_to_pty(&mut self, key: KeyEvent) -> Result<()> {
         let focused_id = self.ws().focused_pane_id;
         if let Some(pane) = self.ws_mut().panes.get_mut(&focused_id) {
@@ -957,6 +1111,10 @@ impl App {
                 AppEvent::CwdChanged(pane_id, new_cwd) => {
                     for ws in &mut self.workspaces {
                         if ws.panes.contains_key(&pane_id) {
+                            // Update pane's cwd
+                            if let Some(pane) = ws.panes.get_mut(&pane_id) {
+                                pane.cwd = new_cwd.clone();
+                            }
                             if ws.focused_pane_id == pane_id && new_cwd.is_dir() {
                                 let prev_show_hidden = ws.file_tree.show_hidden;
                                 ws.file_tree = FileTree::new(new_cwd.clone());
@@ -996,6 +1154,43 @@ fn dir_name(path: &std::path::Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
+/// Extract text from a pane's vt100 screen within a selection range.
+fn extract_selected_text(pane: &Pane, sr: u16, sc: u16, er: u16, ec: u16) -> String {
+    let parser = pane.parser.lock().unwrap_or_else(|e| e.into_inner());
+    let screen = parser.screen();
+    let mut lines = Vec::new();
+
+    for row in sr..=er {
+        let mut line = String::new();
+        let col_start = if row == sr { sc } else { 0 };
+        let col_end = if row == er { ec } else { 999 };
+
+        for col in col_start..=col_end {
+            if let Some(cell) = screen.cell(row, col) {
+                let contents = cell.contents();
+                if contents.is_empty() {
+                    line.push(' ');
+                } else {
+                    line.push_str(contents);
+                }
+            }
+        }
+        lines.push(line.trim_end().to_string());
+    }
+
+    // Remove trailing empty lines
+    while lines.last().map_or(false, |l| l.is_empty()) {
+        lines.pop();
+    }
+
+    lines.join("\n")
+}
+
+/// Public wrapper for key_event_to_bytes (used by main.rs paste detection).
+pub fn key_event_to_bytes_pub(key: &KeyEvent) -> Option<Vec<u8>> {
+    key_event_to_bytes(key)
+}
+
 /// Convert a crossterm KeyEvent into bytes suitable for PTY input.
 fn key_event_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -1017,6 +1212,7 @@ fn key_event_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
         KeyCode::Backspace => Some(vec![0x7f]),
         KeyCode::Delete => Some(b"\x1b[3~".to_vec()),
         KeyCode::Tab => Some(vec![b'\t']),
+        KeyCode::BackTab => Some(b"\x1b[Z".to_vec()),
         KeyCode::Esc => Some(vec![0x1b]),
         KeyCode::Up => Some(b"\x1b[A".to_vec()),
         KeyCode::Down => Some(b"\x1b[B".to_vec()),

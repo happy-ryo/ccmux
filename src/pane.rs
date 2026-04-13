@@ -21,11 +21,17 @@ pub struct Pane {
     last_cols: u16,
     pub exited: bool,
     pub title: Arc<Mutex<String>>,
+    pub cwd: PathBuf,
+    pub total_scrollback: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Pane {
     /// Create a new pane with a PTY shell.
     pub fn new(id: usize, rows: u16, cols: u16, event_tx: Sender<AppEvent>) -> Result<Self> {
+        Self::new_with_cwd(id, rows, cols, event_tx, None)
+    }
+
+    pub fn new_with_cwd(id: usize, rows: u16, cols: u16, event_tx: Sender<AppEvent>, cwd: Option<PathBuf>) -> Result<Self> {
         let pty_system = native_pty_system();
 
         let pty_size = PtySize {
@@ -51,7 +57,8 @@ impl Pane {
             cmd.arg("--login");
         }
 
-        cmd.cwd(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let work_dir = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        cmd.cwd(&work_dir);
         cmd.env("TERM", "xterm-256color");
 
         let child = pair
@@ -78,8 +85,10 @@ impl Pane {
 
         let parser_clone = Arc::clone(&parser);
         let title_clone = Arc::clone(&pane_title);
+        let scrollback_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let scrollback_clone = Arc::clone(&scrollback_counter);
         let reader_handle = thread::spawn(move || {
-            pty_reader_thread(reader, parser_clone, title_clone, id, event_tx);
+            pty_reader_thread(reader, parser_clone, title_clone, scrollback_clone, id, event_tx);
         });
 
         let mut pane = Self {
@@ -93,6 +102,8 @@ impl Pane {
             last_cols: cols,
             exited: false,
             title: pane_title,
+            cwd: work_dir,
+            total_scrollback: scrollback_counter,
         };
 
         // Inject OSC 7 hook after shell starts
@@ -163,6 +174,18 @@ impl Pane {
         parser.screen_mut().set_scrollback(current + lines);
     }
 
+    /// Get scrollbar info: (current_offset, max_offset).
+    /// max_offset is estimated by trying to scroll to a large value and checking.
+    pub fn scrollbar_info(&self) -> (usize, usize) {
+        let parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
+        let screen = parser.screen();
+        let current = screen.scrollback();
+        // Estimate max by checking: set_scrollback clamps to actual scrollback length
+        // We can't query it directly, so use the stored total_scrollback as estimate
+        let total = self.total_scrollback.load(std::sync::atomic::Ordering::Relaxed);
+        (current, total)
+    }
+
     /// Scroll the terminal view down (towards current output).
     pub fn scroll_down(&self, lines: usize) {
         let mut parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
@@ -210,6 +233,7 @@ fn pty_reader_thread(
     mut reader: Box<dyn Read + Send>,
     parser: Arc<Mutex<vt100::Parser>>,
     title: Arc<Mutex<String>>,
+    scrollback_count: Arc<std::sync::atomic::AtomicUsize>,
     pane_id: usize,
     event_tx: Sender<AppEvent>,
 ) {
@@ -222,6 +246,12 @@ fn pty_reader_thread(
             }
             Ok(n) => {
                 let data = &buf[..n];
+
+                // Track scrollback lines (count newlines)
+                let newlines = data.iter().filter(|&&b| b == b'\n').count();
+                if newlines > 0 {
+                    scrollback_count.fetch_add(newlines, std::sync::atomic::Ordering::Relaxed);
+                }
 
                 // Detect OSC 7 (cwd notification)
                 if let Some(path) = extract_osc7(data) {

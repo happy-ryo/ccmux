@@ -1,0 +1,69 @@
+# Getting Started
+
+## Prerequisites
+
+- [Rust toolchain](https://rustup.rs/) (stable)
+- A terminal emulator (Windows Terminal, iTerm2, etc.)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (optional, but that's the point)
+
+## Installation
+
+### From source
+
+```bash
+git clone https://github.com/Shin-sibainu/ccmux.git
+cd ccmux
+cargo build --release
+```
+
+The binary will be at `target/release/ccmux` (or `ccmux.exe` on Windows).
+
+### Add to PATH (optional)
+
+```bash
+# Linux / macOS
+cp target/release/ccmux ~/.local/bin/
+
+# Windows (PowerShell)
+Copy-Item target\release\ccmux.exe $env:USERPROFILE\.local\bin\
+```
+
+## First launch
+
+```bash
+ccmux
+```
+
+You'll see a terminal pane with your shell, a file tree sidebar on the left, and a status bar at the bottom.
+
+## Basic workflow
+
+### 1. Start Claude Code
+
+Type `claude` in the terminal pane. The pane border will turn orange to indicate Claude Code is running.
+
+### 2. Split panes
+
+Press `Ctrl+D` to split vertically, or `Ctrl+E` to split horizontally. Each new pane gets its own independent shell.
+
+### 3. Browse files
+
+Press `Ctrl+F` to focus the file tree. Navigate with `j`/`k` and press `Enter` to preview a file with syntax highlighting.
+
+### 4. Switch between panes
+
+Use `Ctrl+Right` / `Ctrl+Left` to cycle through sidebar, preview, and terminal panes. Or just click.
+
+### 5. Quit
+
+Press `Ctrl+Q` to quit ccmux. All shells are terminated cleanly.
+
+## Shell detection
+
+ccmux automatically detects your shell:
+
+| Platform | Priority |
+|----------|----------|
+| **Windows** | Git Bash → PowerShell |
+| **macOS** | `$SHELL` (usually zsh) |
+| **Linux** | `$SHELL` (usually bash) |
