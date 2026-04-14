@@ -67,7 +67,7 @@ Claude Code で `@.claude/agents/evaluator.md` のようなサブエージェン
 
 データ構造はシンプルに:
 
-```rust
+```rust title="src/claude_monitor.rs"
 pub struct ClaudeState {
     pub subagent_types: Vec<String>,
     pub current_tool: Option<String>,

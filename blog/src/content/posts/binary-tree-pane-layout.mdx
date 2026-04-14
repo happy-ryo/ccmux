@@ -11,7 +11,7 @@ tags: ['rust', 'ratatui', 'architecture']
 
 ## データ構造
 
-```rust
+```rust title="src/layout.rs"
 pub enum LayoutNode {
     Leaf {
         pane_id: usize,
@@ -34,7 +34,7 @@ pub enum SplitDirection {
 
 `Ctrl+D`（縦分割）を押した時にやることは単純で、**フォーカスされているリーフを `Split` ノードに置き換える**だけ:
 
-```rust
+```rust title="src/layout.rs"
 fn split_focused(root: &mut LayoutNode, focused_id: usize, dir: SplitDirection, new_id: usize) {
     replace_leaf(root, focused_id, |leaf| LayoutNode::Split {
         direction: dir,
@@ -51,7 +51,7 @@ fn split_focused(root: &mut LayoutNode, focused_id: usize, dir: SplitDirection, 
 
 ratatui の `Rect` を再帰で分解するだけ:
 
-```rust
+```rust title="src/layout.rs"
 pub fn compute_layout(
     node: &LayoutNode,
     area: Rect,

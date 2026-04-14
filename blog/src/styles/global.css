@@ -264,39 +264,12 @@ p {
   color: var(--ink);
 }
 
-.prose pre {
-  font-family: var(--font-mono);
-  font-size: 14.5px;
-  line-height: 1.7;
-  /* shiki (github-light) sets the background inline; we only style the
-     frame. A subtle warm-cream surface keeps the block cohesive with
-     the page rather than floating as a dark slab. */
-  padding: 18px 22px;
-  border-radius: var(--r-md);
-  overflow-x: auto;
-  border: 1px solid var(--line-strong);
-  box-shadow: var(--shadow-sm);
-  margin-left: calc(var(--page-pad) * -0.5);
-  margin-right: calc(var(--page-pad) * -0.5);
-}
-
-.prose pre code {
-  background: transparent;
-  border: 0;
-  padding: 0;
-  font-size: inherit;
-  color: inherit;
-  /* Shiki outputs per-token <span style="color:..."> inline; this lets
-     those colors take over without our inline-code rules interfering. */
-  font-weight: 400;
-}
-
-/* Shiki line wrapping: when wrap:true is enabled each logical line
-   becomes a block so long lines break softly instead of hiding
-   behind horizontal scroll. */
-.prose pre code .line {
-  display: block;
-  min-height: 1em;
+/* Code blocks are rendered by Expressive Code. Our only job here is
+   to give them a bit of breathing room and let them bleed slightly
+   past the body text for visual weight on long posts. */
+.prose .expressive-code,
+.prose pre:not(.expressive-code pre) {
+  margin: 1.8em calc(var(--page-pad) * -0.4) 1.8em calc(var(--page-pad) * -0.4);
 }
 
 .prose img,

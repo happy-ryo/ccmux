@@ -25,7 +25,7 @@ C--Users-----Desktop-dev-ccmux
 
 日本語の 3 文字 `じゅぶ` が `---` に潰れているのがミソで、初期の実装では ASCII 英数字だけを保持して他を取り除いていたため、日本語パスのユーザーだけ JSONL が見つからない不具合がありました。
 
-```rust
+```rust title="src/claude_monitor.rs"
 fn encode_cwd_to_project_name(cwd: &Path) -> String {
     cwd.to_string_lossy()
         .chars()
