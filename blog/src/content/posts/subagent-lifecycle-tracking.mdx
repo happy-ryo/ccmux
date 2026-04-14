@@ -1,0 +1,174 @@
+---
+title: 'サブエージェントの lifecycle を追跡する'
+description: 'ccmux のステータスバーに "🤖 evaluator 🔧 Bash" と出す仕組み。tool_use と tool_result を ID で紐づける愚直な話。'
+pubDate: 2026-04-10
+tags: ['claude-code', 'rust', 'monitoring']
+---
+
+[前回の記事](/parsing-claude-jsonl/) では Claude Code の JSONL を読む話をしました。今回はその続きで、**サブエージェントの生存状態**をどう追跡しているかを書きます。
+
+## やりたいこと
+
+Claude Code で `@.claude/agents/evaluator.md` のようなサブエージェント機能を使うと、メインのセッションが `Agent` ツールを呼んで別のエージェントを立ち上げます。ccmux ではこれを検知して、ペインのタイトルに:
+
+```
+● claude [1] 🤖 evaluator 🔧 Bash
+```
+
+と表示しています。サブエージェントが複数同時に走っていれば `🤖 evaluator, reviewer` のように並びます。完了したら消えます。
+
+## JSONL での見え方
+
+サブエージェント起動時:
+
+```json
+{
+  "type": "assistant",
+  "message": {
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_01ABC...",
+        "name": "Agent",
+        "input": {
+          "subagent_type": "evaluator",
+          "prompt": "..."
+        }
+      }
+    ]
+  }
+}
+```
+
+完了時:
+
+```json
+{
+  "type": "user",
+  "message": {
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01ABC...",
+        "content": "..."
+      }
+    ]
+  }
+}
+```
+
+ポイントは:
+
+1. `tool_use.name === "Agent"` の時だけサブエージェント（他の `tool_use` は Bash や Edit など）
+2. 対応する終了は `tool_result.tool_use_id` が同じ ID のもの
+3. 並列で複数のサブエージェントが走ることがある
+
+## 実装: HashMap で紐づける
+
+データ構造はシンプルに:
+
+```rust
+pub struct ClaudeState {
+    pub subagent_types: Vec<String>,
+    pub current_tool: Option<String>,
+    // ...
+}
+
+pub struct PaneMonitor {
+    // tool_use_id → subagent_type
+    active_task_ids: HashMap<String, String>,
+    pub state: ClaudeState,
+    // ...
+}
+```
+
+起動イベント処理:
+
+```rust
+fn on_tool_use(monitor: &mut PaneMonitor, id: &str, name: &str, input: &Value) {
+    // 表示用の「現在のツール」
+    monitor.state.current_tool = Some(name.to_string());
+
+    // Agent ツールのみサブエージェント扱い
+    if name == "Agent" {
+        if let Some(kind) = input.get("subagent_type").and_then(|v| v.as_str()) {
+            monitor.active_task_ids.insert(id.to_string(), kind.to_string());
+            refresh_subagent_list(monitor);
+        }
+    }
+}
+```
+
+完了イベント処理:
+
+```rust
+fn on_tool_result(monitor: &mut PaneMonitor, tool_use_id: &str) {
+    if monitor.active_task_ids.remove(tool_use_id).is_some() {
+        refresh_subagent_list(monitor);
+    }
+}
+
+fn refresh_subagent_list(monitor: &mut PaneMonitor) {
+    let mut types: Vec<String> = monitor.active_task_ids.values().cloned().collect();
+    types.sort();
+    types.dedup(); // 同じ type が複数走ってても 1 つに
+    monitor.state.subagent_types = types;
+}
+```
+
+「`tool_use_id` が来たら入れる、`tool_result` の `tool_use_id` が来たら消す」という、ほぼ集合演算です。
+
+## ハマりどころ
+
+### 1. ツール名の揺れ
+
+「サブエージェントのツール名は `Agent` なのか `Task` なのか」で混乱しました。実際の JSONL を開いて中身を見ると **`Agent`** が正解でしたが、ドキュメントには `Task` と書かれている場所もあり、初期実装では `Task` だけマッチさせていたので全く動きませんでした。
+
+```rust
+// 両対応で書いておく
+if name == "Agent" || name == "Task" { /* ... */ }
+```
+
+一次情報（実ファイル）を信じる、という教訓。
+
+### 2. tool_use と tool_result の間に他のイベントが挟まる
+
+並列実行しているサブエージェントや、ユーザーメッセージ、アシスタントのテキスト応答などが間に入り乱れて来ます。単純な「次に来るのが対応する result」とは限らないので、必ず `tool_use_id` マッチで紐づけること。
+
+### 3. セッションを途中から読み始める問題
+
+ccmux は起動時に既存の JSONL を最初から読み直さず、**末尾に近い位置から読み始める**場合があります。すると `tool_use` を見逃して `tool_result` だけ受け取るケースが出る。
+
+この場合 `active_task_ids.remove(tool_use_id)` が `None` を返すだけで特に害はありません。HashMap に存在しない key の remove は no-op なので、安全にスキップできます。
+
+### 4. 親セッションがクラッシュした時
+
+Claude Code のセッションが強制終了すると、`tool_result` が書かれないまま `tool_use` だけが JSONL に残ります。`active_task_ids` は永遠に埋まったまま、ステータスバーに `🤖 evaluator` と残り続けます。
+
+対策として、ccmux は**別セッションの JSONL が現れたらリセット**します:
+
+```rust
+if new_jsonl_path != monitor.jsonl_path {
+    monitor.active_task_ids.clear();
+    monitor.state = ClaudeState::default();
+    monitor.jsonl_path = new_jsonl_path;
+    monitor.file_position = 0;
+}
+```
+
+## 結果として得られる表示
+
+```
+claude [1] 🤖 evaluator, reviewer 🔧 Bash  ✓ ▓▓▓░░ 3/8 ▶ 45.2k tokens
+```
+
+- `evaluator, reviewer` が同時実行中のサブエージェント
+- `🔧 Bash` が現在メインで走っているツール
+- `3/8` が TodoList の完了数
+- `45.2k tokens` が累積トークン使用量
+
+すべて**同じ JSONL を一度舐める 1 パスの処理**で出しています。Claude Code が親切にイベントを書き出してくれているおかげで、ポーリング側は愚直でよい、という良い例でした。
+
+---
+
+次回は Bracketed Paste モードの話か、vt100 スクリーンバッファを ratatui にマッピングする話か、どちらか書こうと思います。

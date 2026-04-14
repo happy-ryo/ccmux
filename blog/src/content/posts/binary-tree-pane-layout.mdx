@@ -1,0 +1,216 @@
+---
+title: '二分木でペイン分割を作る'
+description: 'tmux・Zellij・VS Code のターミナル分割、みんな中身は二分木。ccmux の実装を例に、再帰レイアウトとマウスドラッグリサイズを解剖する。'
+pubDate: 2026-04-11
+tags: ['rust', 'ratatui', 'architecture']
+---
+
+ターミナルマルチプレクサの「ペイン分割」は見た目こそシンプルですが、データ構造としては**二分木**です。tmux も Zellij も VS Code のターミナル分割も、内部はどれも二分木。ccmux も同じです。
+
+この記事では「なぜ二分木なのか」「どう描画するか」「境界ドラッグでのリサイズ」「ペインを閉じた時の兄弟昇格」を順に見ていきます。
+
+## データ構造
+
+```rust
+pub enum LayoutNode {
+    Leaf {
+        pane_id: usize,
+    },
+    Split {
+        direction: SplitDirection,
+        ratio: f32, // 0.0..1.0 で first が占める比率
+        first: Box<LayoutNode>,
+        second: Box<LayoutNode>,
+    },
+}
+
+pub enum SplitDirection {
+    Horizontal, // 左右に分割（縦の境界線）
+    Vertical,   // 上下に分割（横の境界線）
+}
+```
+
+リーフがペイン、分岐ノードが分割。ratio は「先頭の子が占める割合」。
+
+`Ctrl+D`（縦分割）を押した時にやることは単純で、**フォーカスされているリーフを `Split` ノードに置き換える**だけ:
+
+```rust
+fn split_focused(root: &mut LayoutNode, focused_id: usize, dir: SplitDirection, new_id: usize) {
+    replace_leaf(root, focused_id, |leaf| LayoutNode::Split {
+        direction: dir,
+        ratio: 0.5,
+        first: Box::new(leaf),           // 既存ペインが左/上
+        second: Box::new(LayoutNode::Leaf { pane_id: new_id }),
+    });
+}
+```
+
+入れ子の分割も自然にできるので、「左ペインを上下に分けつつ、右ペインはそのまま」という複雑な状態も同じデータ構造で表現できます。
+
+## 描画: 再帰的に Rect を分ける
+
+ratatui の `Rect` を再帰で分解するだけ:
+
+```rust
+pub fn compute_layout(
+    node: &LayoutNode,
+    area: Rect,
+    out: &mut Vec<(usize, Rect)>,
+) {
+    match node {
+        LayoutNode::Leaf { pane_id } => {
+            out.push((*pane_id, area));
+        }
+        LayoutNode::Split { direction, ratio, first, second } => {
+            let (a, b) = split_rect(area, *direction, *ratio);
+            compute_layout(first, a, out);
+            compute_layout(second, b, out);
+        }
+    }
+}
+
+fn split_rect(area: Rect, dir: SplitDirection, ratio: f32) -> (Rect, Rect) {
+    match dir {
+        SplitDirection::Horizontal => {
+            let w = (area.width as f32 * ratio).round() as u16;
+            (
+                Rect { x: area.x, y: area.y, width: w, height: area.height },
+                Rect { x: area.x + w, y: area.y, width: area.width - w, height: area.height },
+            )
+        }
+        SplitDirection::Vertical => {
+            let h = (area.height as f32 * ratio).round() as u16;
+            (
+                Rect { x: area.x, y: area.y, width: area.width, height: h },
+                Rect { x: area.x, y: area.y + h, width: area.width, height: area.height - h },
+            )
+        }
+    }
+}
+```
+
+`compute_layout` は毎フレーム呼ばれますが、全ペイン合わせても数十ノード程度。計測不要なほど軽いです。
+
+## 境界ドラッグでリサイズ
+
+ペイン境界をマウスでドラッグして比率を変えたい。肝は**クリックされた座標がどの `Split` ノードの境界なのかを特定する**こと。
+
+`compute_layout` を拡張して、境界情報も同時に出力します:
+
+```rust
+pub struct Border {
+    pub node_path: Vec<usize>, // ルートから Split への経路（0=first, 1=second）
+    pub direction: SplitDirection,
+    pub line_pos: u16,
+    pub line_start: u16,
+    pub line_end: u16,
+}
+
+// 描画時にボーダー情報を収集
+pub fn collect_borders(
+    node: &LayoutNode,
+    area: Rect,
+    path: Vec<usize>,
+    out: &mut Vec<Border>,
+) {
+    if let LayoutNode::Split { direction, ratio, first, second } = node {
+        let (a, b) = split_rect(area, *direction, *ratio);
+
+        let border = match direction {
+            SplitDirection::Horizontal => Border {
+                node_path: path.clone(),
+                direction: *direction,
+                line_pos: a.x + a.width, // 縦線の x 座標
+                line_start: area.y,
+                line_end: area.y + area.height,
+            },
+            SplitDirection::Vertical => Border {
+                node_path: path.clone(),
+                direction: *direction,
+                line_pos: a.y + a.height, // 横線の y 座標
+                line_start: area.x,
+                line_end: area.x + area.width,
+            },
+        };
+        out.push(border);
+
+        let mut p1 = path.clone(); p1.push(0);
+        let mut p2 = path.clone(); p2.push(1);
+        collect_borders(first, a, p1, out);
+        collect_borders(second, b, p2, out);
+    }
+}
+```
+
+マウスダウンで「座標からプラスマイナス 1 セルの範囲に境界があるか」を線形探索。ヒットしたら `node_path` を覚える。
+
+ドラッグ中はマウス座標から新しい ratio を計算して更新:
+
+```rust
+fn update_ratio_for_drag(root: &mut LayoutNode, path: &[usize], mouse_x: u16, mouse_y: u16, area: Rect) {
+    // path を辿って target の Split を取得、同時にその親 area を再計算
+    let (target_split, target_area) = resolve_split_at(root, path, area);
+    if let LayoutNode::Split { direction, ratio, .. } = target_split {
+        let new_ratio = match direction {
+            SplitDirection::Horizontal => {
+                (mouse_x.saturating_sub(target_area.x)) as f32 / target_area.width as f32
+            }
+            SplitDirection::Vertical => {
+                (mouse_y.saturating_sub(target_area.y)) as f32 / target_area.height as f32
+            }
+        };
+        *ratio = new_ratio.clamp(0.15, 0.85);
+    }
+}
+```
+
+`clamp(0.15, 0.85)` で極端に細いペインを防ぎます。これを入れないと、ユーザーが端までドラッグしたペインが実質見えなくなって困ります。
+
+## 閉じる: 兄弟を昇格させる
+
+`Ctrl+W` でフォーカスペインを閉じる時、単に葉を消すと**空いた Split ノード**が残ってしまいます。代わりに**親の Split 自体を、残った兄弟に置き換え**ます:
+
+```rust
+fn remove_pane(root: &mut LayoutNode, target_id: usize) -> bool {
+    // ルート自身がターゲットなら閉じられない（最後のペイン）
+    if let LayoutNode::Leaf { pane_id } = root {
+        return *pane_id != target_id;
+    }
+    // 親の Split を見つけて、残った兄弟で自分を置き換える
+    remove_from_split(root, target_id)
+}
+
+fn remove_from_split(node: &mut LayoutNode, target_id: usize) -> bool {
+    if let LayoutNode::Split { first, second, .. } = node {
+        // first が対象の葉 → second を親の位置に昇格
+        if matches!(first.as_ref(), LayoutNode::Leaf { pane_id } if *pane_id == target_id) {
+            let sibling = std::mem::replace(second.as_mut(), LayoutNode::Leaf { pane_id: 0 });
+            *node = sibling;
+            return true;
+        }
+        if matches!(second.as_ref(), LayoutNode::Leaf { pane_id } if *pane_id == target_id) {
+            let sibling = std::mem::replace(first.as_mut(), LayoutNode::Leaf { pane_id: 0 });
+            *node = sibling;
+            return true;
+        }
+        // 再帰で深いレベルを探す
+        remove_from_split(first, target_id) || remove_from_split(second, target_id)
+    } else {
+        false
+    }
+}
+```
+
+この「残った兄弟で親を置き換える」が二分木レイアウトのキモです。これが綺麗に動くから、「左を 3 分割 → その中の 1 つを閉じる → 自動で 2 分割に戻る」が自然に実現できます。
+
+## なぜ N 分木ではなく二分木か
+
+「3 ペインを均等に並べたい時、二分木だと `(A|B)|C` のような非対称になるのでは？」
+
+そうです。でも実用上はほぼ問題にならないし、`ratio` を `1/3` にすれば**見た目は 3 等分**になります。データ構造上の非対称は、描画時の比率で吸収できる。
+
+一方で N 分木にすると、挿入・削除・リサイズの実装が一気に複雑になります。ペイン操作の UX を「分割 / 閉じる」に絞るなら、二分木が明らかに勝ちです。
+
+---
+
+ペイン分割 UI は見た目ほど派手な問題ではなく、**二分木の再帰操作が書ければ誰でも作れます**。マルチプレクサを自作したい人は、ぜひ試してみてください。

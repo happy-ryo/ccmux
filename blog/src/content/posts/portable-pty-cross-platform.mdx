@@ -1,0 +1,181 @@
+---
+title: 'portable-pty で Windows と Unix を同じコードで扱う'
+description: 'macOS は forkpty、Linux は openpty、Windows は ConPTY。全部違う API を portable-pty が呑み込んでくれる話。'
+pubDate: 2026-04-09
+tags: ['rust', 'pty', 'cross-platform']
+---
+
+ccmux は単一バイナリで Windows / macOS / Linux のどれでも動きます。PTY を扱う以上は OS ごとに API が違うので、普通に書くと `#[cfg(...)]` だらけになりそうなものですが、実際はほとんど分岐なしで書けています。
+
+理由は [**portable-pty**](https://crates.io/crates/portable-pty) という抽象レイヤ。Wezterm の作者が作っている、Rust の PTY ライブラリです。
+
+## PTY って何？
+
+「シェルに TTY だと錯覚させる」ための仕組みです。`bash` は標準入出力が TTY でないと:
+
+- プロンプトを出さない
+- カラーを出力しない
+- 行バッファではなく全バッファに切り替わる（パイプ相手と同じ挙動）
+
+ということをします。ccmux のようなマルチプレクサは、親プロセスがシェルに対して**仮想ターミナル**を提供して、TTY として振る舞わせる必要があります。それが PTY。
+
+## 各 OS の実態
+
+| OS | 実装 |
+|---|---|
+| Linux | `openpty(3)` + `fork()` + `setsid()` |
+| macOS | 同上 |
+| Windows 10+ | ConPTY (`CreatePseudoConsole` API) |
+
+Windows の ConPTY は 2018 年の Windows 10 1809 で追加された比較的新しい仕組みで、それ以前は WinPty というサードパーティ実装が必要でした。ConPTY のおかげで Windows でも tmux 的な物が書けるようになった経緯があります。
+
+## portable-pty の API
+
+どの OS でも**完全に同じ呼び出し**で済みます:
+
+```rust
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use std::path::PathBuf;
+
+fn spawn_shell(rows: u16, cols: u16) -> anyhow::Result<PaneHandles> {
+    let pty = native_pty_system();
+
+    let pair = pty.openpty(PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    })?;
+
+    let shell = detect_shell();
+    let mut cmd = CommandBuilder::new(&shell);
+
+    // ログインシェル相当で起動して PATH を含んだ環境を作る
+    if shell_name(&shell).contains("bash") || shell_name(&shell).contains("zsh") {
+        cmd.arg("--login");
+    }
+
+    cmd.cwd(std::env::current_dir()?);
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("CCMUX", "1"); // ネストした ccmux 起動検出用
+
+    let child = pair.slave.spawn_command(cmd)?;
+    drop(pair.slave); // slave は子プロセス側が持つので親では閉じる
+
+    let writer = pair.master.take_writer()?;
+    let reader = pair.master.try_clone_reader()?;
+
+    Ok(PaneHandles { master: pair.master, writer, reader, child })
+}
+```
+
+`#[cfg(windows)]` もなし。`native_pty_system()` が OS を判断して実装を切り替えてくれます。
+
+## リサイズも同じ
+
+ターミナルウィンドウをリサイズしたら、PTY 側も追従させる必要があります:
+
+```rust
+fn resize(master: &mut Box<dyn MasterPty>, rows: u16, cols: u16) -> anyhow::Result<()> {
+    master.resize(PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    })?;
+    Ok(())
+}
+```
+
+Unix では `ioctl(TIOCSWINSZ)`、Windows では `ResizePseudoConsole` が呼ばれますが、使う側は意識しなくていい。
+
+## シェル検出
+
+ccmux は OS ごとにシェルの検索順を変えます:
+
+```rust
+pub fn detect_shell() -> PathBuf {
+    #[cfg(windows)]
+    { detect_shell_windows() }
+    #[cfg(not(windows))]
+    { detect_shell_unix() }
+}
+
+#[cfg(windows)]
+fn detect_shell_windows() -> PathBuf {
+    // 1. Git Bash を優先
+    for p in &[
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+    ] {
+        let path = PathBuf::from(p);
+        if path.exists() { return path; }
+    }
+
+    // 2. PATH 上の bash
+    if let Ok(output) = std::process::Command::new("where").arg("bash").output() {
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout);
+            if let Some(line) = s.lines().next() {
+                let path = PathBuf::from(line.trim());
+                if path.exists() { return path; }
+            }
+        }
+    }
+
+    // 3. 最終フォールバック
+    PathBuf::from("powershell.exe")
+}
+
+#[cfg(not(windows))]
+fn detect_shell_unix() -> PathBuf {
+    if let Ok(shell) = std::env::var("SHELL") {
+        let p = PathBuf::from(&shell);
+        if p.exists() { return p; }
+    }
+    PathBuf::from("/bin/sh")
+}
+```
+
+Windows で Git Bash を優先するのは、Claude Code を含む多くの Unix 系 CLI が bash を前提にしているため。PowerShell だけだと `ls -la` や `grep` がそのままでは通らない。
+
+## OSC 7 の注入で cwd を追跡
+
+シェルの `cd` は ccmux から直接見えないので、プロンプトのたびにシェル自身に**現在のパスを放送**させます。bash なら `PROMPT_COMMAND` に仕込む:
+
+```rust
+if shell_name.contains("bash") {
+    let setup = concat!(
+        " __ccmux_osc7() { printf '\\033]7;file://%s%s\\007' \"$HOSTNAME\" \"$PWD\"; };",
+        " PROMPT_COMMAND=\"__ccmux_osc7;${PROMPT_COMMAND}\";",
+        " clear\n",
+    );
+    writer.write_all(setup.as_bytes())?;
+}
+```
+
+- 行頭のスペース `" __ccmux..."` がポイント。bash の `HISTCONTROL=ignorespace` が効いていると、先頭スペースのコマンドが履歴に残らない。ユーザーの `Ctrl+R` を汚さない小さな工夫
+- OSC 7 は `ESC ] 7 ; file://HOST/PATH BEL` という形のエスケープ。ターミナルエミュレータ側で読み取ると cwd を通知できる
+- ccmux の vt100 パーサが OSC を検知して、ペインごとの cwd 追跡に使っています
+
+zsh は `precmd_functions` 配列で同じことをします。
+
+## ネストした ccmux 検出
+
+ccmux を ccmux の中で起動すると、PTY の中で PTY を走らせることになって、入力が二重に PTY を通過して壊れます。これを防ぐため、子シェルに `CCMUX=1` を注入しておき、メインの `main.rs` 先頭で:
+
+```rust
+if std::env::var("CCMUX").is_ok() {
+    eprintln!("ccmux: already running inside a ccmux pane (nested instance not allowed).");
+    eprintln!("       Open a new tab with Ctrl+T or split with Ctrl+D / Ctrl+E instead.");
+    std::process::exit(1);
+}
+```
+
+小さいチェックですが、あるとないとで「なぜか動かない」系の事故が激減します。
+
+## まとめ
+
+PTY は OS ごとに実装がまちまちなのに、portable-pty のおかげで**OS 分岐を一度も書かずに**ccmux の PTY まわりは書けています。クロスプラットフォーム Rust TUI の強い味方です。
+
+次に書こうとしているのは、この PTY を経由して入ってくるバイトストリームを vt100 パーサに食わせ、ratatui に描画する部分の最適化（アイドル時 0% CPU を狙う話）です。
