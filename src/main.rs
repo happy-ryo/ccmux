@@ -1,8 +1,10 @@
 mod app;
+mod claude_monitor;
 mod filetree;
 mod pane;
 mod preview;
 mod ui;
+mod version_check;
 
 use std::io;
 use std::panic;
@@ -18,6 +20,13 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 fn main() -> Result<()> {
+    // Detect if running inside another ccmux instance
+    if std::env::var("CCMUX").is_ok() {
+        eprintln!("ccmux: already running inside a ccmux pane (nested instance not allowed).");
+        eprintln!("       Open a new tab with Ctrl+T or split with Ctrl+D / Ctrl+E instead.");
+        std::process::exit(1);
+    }
+
     // If a directory is passed as argument, cd into it first
     if let Some(dir) = std::env::args().nth(1) {
         let path = std::path::Path::new(&dir);

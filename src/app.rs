@@ -330,6 +330,12 @@ pub struct App {
     pub last_new_tab_rect: Option<Rect>,
     // Text selection
     pub selection: Option<TextSelection>,
+    // Version check (background)
+    pub version_info: crate::version_check::VersionInfo,
+    // Claude Code JSONL monitoring
+    pub claude_monitor: crate::claude_monitor::ClaudeMonitor,
+    // Reusable clipboard handle (lazy-initialized)
+    clipboard: Option<arboard::Clipboard>,
 }
 
 impl App {
@@ -361,7 +367,24 @@ impl App {
             last_tab_rects: Vec::new(),
             last_new_tab_rect: None,
             selection: None,
+            version_info: {
+                let info = crate::version_check::VersionInfo::new();
+                crate::version_check::spawn_check(info.clone());
+                info
+            },
+            claude_monitor: crate::claude_monitor::ClaudeMonitor::new(),
+            clipboard: None,
         })
+    }
+
+    /// Copy text to clipboard, reusing the handle if available.
+    fn copy_to_clipboard(&mut self, text: &str) {
+        if self.clipboard.is_none() {
+            self.clipboard = arboard::Clipboard::new().ok();
+        }
+        if let Some(ref mut cb) = self.clipboard {
+            let _ = cb.set_text(text);
+        }
     }
 
     /// Get the active workspace.
@@ -383,10 +406,63 @@ impl App {
             return Ok(true);
         }
 
+        // Ctrl+C — if text is selected, copy to clipboard instead of sending SIGINT
+        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
+            if let Some(ref sel) = self.selection.clone() {
+                let (sr, sc, er, ec) = sel.normalized();
+                if sr != er || sc != ec {
+                    let text = self
+                        .ws()
+                        .panes
+                        .get(&sel.pane_id)
+                        .map(|p| extract_selected_text(p, sr, sc, er, ec))
+                        .unwrap_or_default();
+                    if !text.is_empty() {
+                        self.copy_to_clipboard(&text);
+                    }
+                    self.selection = None;
+                    return Ok(true);
+                }
+            }
+            // No selection — fall through to forward Ctrl+C to PTY
+        }
+
         // Ctrl+T — new tab
         if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('t') {
             self.new_tab()?;
             return Ok(true);
+        }
+
+        // Ctrl+PageDown — next tab
+        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::PageDown {
+            if !self.workspaces.is_empty() {
+                self.active_tab = (self.active_tab + 1) % self.workspaces.len();
+            }
+            return Ok(true);
+        }
+
+        // Ctrl+PageUp — previous tab
+        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::PageUp {
+            if !self.workspaces.is_empty() {
+                self.active_tab = if self.active_tab == 0 {
+                    self.workspaces.len() - 1
+                } else {
+                    self.active_tab - 1
+                };
+            }
+            return Ok(true);
+        }
+
+        // Alt+1 .. Alt+9 — jump to tab N
+        if key.modifiers == KeyModifiers::ALT {
+            if let KeyCode::Char(c) = key.code {
+                if let Some(digit) = c.to_digit(10) {
+                    if digit >= 1 && (digit as usize) <= self.workspaces.len() {
+                        self.active_tab = (digit as usize) - 1;
+                        return Ok(true);
+                    }
+                }
+            }
         }
 
         // Ctrl+Right — next pane
@@ -554,6 +630,11 @@ impl App {
         if self.workspaces.len() <= 1 {
             return;
         }
+        // Clean up claude monitor state for all panes in this tab
+        let pane_ids: Vec<usize> = self.workspaces[index].panes.keys().copied().collect();
+        for pane_id in pane_ids {
+            self.claude_monitor.remove(pane_id);
+        }
         self.workspaces[index].shutdown();
         self.workspaces.remove(index);
         if self.active_tab >= self.workspaces.len() {
@@ -622,20 +703,24 @@ impl App {
     }
 
     fn close_focused_pane(&mut self) {
+        let focused = self.ws().focused_pane_id;
         let ws = self.ws_mut();
         if ws.layout.pane_count() <= 1 {
             return;
         }
 
         let pane_ids = ws.layout.collect_pane_ids();
-        let current_idx = pane_ids.iter().position(|&id| id == ws.focused_pane_id);
+        let current_idx = pane_ids.iter().position(|&id| id == focused);
 
-        let focused = ws.focused_pane_id;
         ws.layout.remove_pane(focused);
 
         if let Some(mut pane) = ws.panes.remove(&focused) {
             pane.kill();
         }
+
+        // Clean up claude monitor state for this pane
+        self.claude_monitor.remove(focused);
+        let ws = self.ws_mut();
 
         let remaining_ids = ws.layout.collect_pane_ids();
         if let Some(idx) = current_idx {
@@ -968,17 +1053,17 @@ impl App {
                 self.dragging = None;
 
                 // Copy selected text to clipboard
-                if let Some(ref sel) = self.selection {
+                if let Some(sel) = self.selection.clone() {
                     let (sr, sc, er, ec) = sel.normalized();
-                    // Only copy if there's an actual selection (not just a click)
                     if sr != er || sc != ec {
-                        if let Some(pane) = self.ws().panes.get(&sel.pane_id) {
-                            let text = extract_selected_text(pane, sr, sc, er, ec);
-                            if !text.is_empty() {
-                                if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                                    let _ = clipboard.set_text(&text);
-                                }
-                            }
+                        let text = self
+                            .ws()
+                            .panes
+                            .get(&sel.pane_id)
+                            .map(|p| extract_selected_text(p, sr, sc, er, ec))
+                            .unwrap_or_default();
+                        if !text.is_empty() {
+                            self.copy_to_clipboard(&text);
                         }
                     }
                     // Keep selection visible until next click

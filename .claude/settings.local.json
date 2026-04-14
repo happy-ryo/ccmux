@@ -26,7 +26,20 @@
       "Bash(npm -v)",
       "Bash(mkdir -p \"C:/Users/じゅぶ/Desktop/dev/my-own-project/ccmux/docs\")",
       "Bash(npm init:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Read(//c/Program Files/Git/bin/**)",
+      "Read(//c/Program Files/Git/**)",
+      "WebFetch(domain:docs.claude.com)",
+      "Bash(taskkill.exe:*)",
+      "Bash(ls -t *.jsonl)",
+      "Bash(xargs -I{} grep '\"subagent_type\":\"evaluator\"' \"{}\")",
+      "Bash(python -c ':*)",
+      "Bash(python -m http.server 4411)",
+      "mcp__playwright__browser_resize",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_console_messages",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_close"
     ]
   }
 }

@@ -60,6 +60,7 @@ impl Pane {
         let work_dir = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         cmd.cwd(&work_dir);
         cmd.env("TERM", "xterm-256color");
+        cmd.env("CCMUX", "1"); // marker to detect nested ccmux
 
         let child = pair
             .slave
@@ -163,6 +164,10 @@ impl Pane {
 
         let mut parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
         parser.screen_mut().set_size(rows, cols);
+        // Clear the screen buffer to avoid rendering stale content at the new size.
+        // The TUI app (e.g. Claude Code) receives SIGWINCH and will redraw.
+        // A brief blank frame is preferable to overlapping garbled output.
+        parser.process(b"\x1b[2J\x1b[H");
 
         Ok(())
     }

@@ -320,6 +320,21 @@ fn render_panes(app: &mut App, frame: &mut Frame, area: Rect) {
         }
     }
 
+    // Update Claude monitor for each pane using the pane's own cwd
+    // (may differ from workspace cwd if user cd'd inside the pane)
+    let pane_cwds: Vec<(usize, std::path::PathBuf)> = rects
+        .iter()
+        .filter_map(|&(pane_id, _)| {
+            app.ws()
+                .panes
+                .get(&pane_id)
+                .map(|p| (pane_id, p.cwd.clone()))
+        })
+        .collect();
+    for (pane_id, cwd) in pane_cwds {
+        app.claude_monitor.update(pane_id, &cwd);
+    }
+
     let focused_id = app.ws().focused_pane_id;
     let focus_target = app.ws().focus_target;
     let selection = app.selection.clone();
@@ -327,12 +342,20 @@ fn render_panes(app: &mut App, frame: &mut Frame, area: Rect) {
         if let Some(pane) = app.ws().panes.get(&pane_id) {
             let is_focused = pane_id == focused_id && focus_target == FocusTarget::Pane;
             let pane_sel = selection.as_ref().filter(|s| s.pane_id == pane_id);
-            render_single_pane(pane, is_focused, pane_sel, frame, rect);
+            let claude_state = app.claude_monitor.state(pane_id);
+            render_single_pane(pane, is_focused, pane_sel, &claude_state, frame, rect);
         }
     }
 }
 
-fn render_single_pane(pane: &crate::pane::Pane, is_focused: bool, selection: Option<&crate::app::TextSelection>, frame: &mut Frame, area: Rect) {
+fn render_single_pane(
+    pane: &crate::pane::Pane,
+    is_focused: bool,
+    selection: Option<&crate::app::TextSelection>,
+    claude_state: &crate::claude_monitor::ClaudeState,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let is_claude = pane.is_claude_running();
     let border_color = if is_focused && is_claude {
         ACCENT_CLAUDE
@@ -344,10 +367,37 @@ fn render_single_pane(pane: &crate::pane::Pane, is_focused: bool, selection: Opt
 
     let is_scrolled = pane.is_scrolled_back();
     let label = if is_claude { "claude" } else { "shell" };
-    let pane_title = if is_focused {
-        format!(" \u{25cf} {} [{}] ", label, pane.id)
+
+    // Build claude status suffix
+    let claude_suffix = if is_claude {
+        let mut parts = Vec::new();
+        if claude_state.subagent_count > 0 {
+            // Show agent type names if available, else just count
+            if !claude_state.subagent_types.is_empty() {
+                parts.push(format!(
+                    "\u{1f916} {}",
+                    claude_state.subagent_types.join(", ")
+                ));
+            } else {
+                parts.push(format!("\u{1f916}\u{00d7}{}", claude_state.subagent_count));
+            }
+        }
+        if let Some(ref tool) = claude_state.current_tool {
+            parts.push(format!("\u{1f527} {}", tool));
+        }
+        if parts.is_empty() {
+            String::new()
+        } else {
+            format!(" {} ", parts.join(" "))
+        }
     } else {
-        format!("   {} [{}] ", label, pane.id)
+        String::new()
+    };
+
+    let pane_title = if is_focused {
+        format!(" \u{25cf} {} [{}]{} ", label, pane.id, claude_suffix)
+    } else {
+        format!("   {} [{}]{} ", label, pane.id, claude_suffix)
     };
 
     let title_style = if is_focused && is_claude {
@@ -358,14 +408,49 @@ fn render_single_pane(pane: &crate::pane::Pane, is_focused: bool, selection: Opt
         Style::default().fg(TEXT_DIM)
     };
 
-    // Scroll indicator as right-side title
-    let scroll_title = if is_scrolled {
-        Span::styled(
+    // Bottom title: scroll indicator OR claude stats
+    let bottom_title = if is_scrolled {
+        Line::from(Span::styled(
             " \u{2191} SCROLL ",
             Style::default().fg(ACCENT_CLAUDE).bg(SCROLL_BG).add_modifier(Modifier::BOLD),
-        )
+        ))
+    } else if is_claude {
+        let mut spans = Vec::new();
+
+        // Todo progress bar
+        let (completed, total) = claude_state.todo_progress();
+        if total > 0 {
+            let bar = make_progress_bar(completed, total, 10);
+            spans.push(Span::styled(
+                format!(" \u{2713} {} {}/{} ", bar, completed, total),
+                Style::default().fg(ACCENT_GREEN),
+            ));
+            // Show current in-progress task
+            if let Some(current) = claude_state
+                .todos
+                .iter()
+                .find(|t| t.status == "in_progress")
+            {
+                let short = truncate_to_width(&current.content, 30);
+                spans.push(Span::styled(
+                    format!("\u{25b6} {} ", short),
+                    Style::default().fg(ACCENT_BLUE),
+                ));
+            }
+        }
+
+        // Total tokens used this session
+        let total_tokens = claude_state.total_tokens();
+        if total_tokens > 0 {
+            spans.push(Span::styled(
+                format!(" {} tokens ", format_tokens(total_tokens)),
+                Style::default().fg(TEXT_DIM),
+            ));
+        }
+
+        Line::from(spans)
     } else {
-        Span::default()
+        Line::from("")
     };
 
     let block = Block::default()
@@ -373,7 +458,7 @@ fn render_single_pane(pane: &crate::pane::Pane, is_focused: bool, selection: Opt
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color))
         .title(Span::styled(pane_title, title_style))
-        .title_bottom(scroll_title)
+        .title_bottom(bottom_title)
         .style(Style::default().bg(BG));
 
     let inner = block.inner(area);
@@ -448,11 +533,20 @@ fn render_terminal_content(
         }
     }
 
-    // Show cursor when pane is focused
+    // Show cursor when focused.
+    // For non-Claude panes, respect the PTY's hide_cursor request.
+    // For Claude Code, always show because Claude relies on the terminal cursor.
     let show_cursor = is_focused && (!screen.hide_cursor() || pane.is_claude_running());
     if show_cursor {
         let cursor = screen.cursor_position();
-        let cursor_x = area.x + cursor.1;
+        // For Claude Code, shift cursor 1 column left because Claude draws its own
+        // block character at the cursor position, and the PTY cursor would otherwise
+        // appear one column after with a visible gap.
+        let cursor_x = if pane.is_claude_running() {
+            area.x + cursor.1.saturating_sub(1)
+        } else {
+            area.x + cursor.1
+        };
         let cursor_y = area.y + cursor.0;
         if cursor_x < area.x + area.width && cursor_y < area.y + area.height {
             frame.set_cursor_position((cursor_x, cursor_y));
@@ -636,9 +730,117 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
 
     let status = Paragraph::new(hints).style(Style::default().bg(HEADER_BG));
     frame.render_widget(status, area);
+
+    // Right-side info: Claude state of focused pane
+    let focused_id = app.ws().focused_pane_id;
+    let claude_state = app.claude_monitor.state(focused_id);
+    let has_claude = app
+        .ws()
+        .panes
+        .get(&focused_id)
+        .map_or(false, |p| p.is_claude_running());
+
+    let mut right_spans = Vec::new();
+
+    if has_claude {
+        // Model
+        if let Some(model) = claude_state.short_model() {
+            right_spans.push(Span::styled(
+                format!(" \u{1f9e0} {} ", model),
+                Style::default().fg(ACCENT_CLAUDE),
+            ));
+        }
+
+        // Context usage
+        if claude_state.context_tokens > 0 {
+            let ratio = claude_state.context_usage();
+            let bar = make_progress_bar(
+                (ratio * 10.0) as usize,
+                10,
+                6,
+            );
+            let color = if ratio > 0.9 {
+                Color::Rgb(0xf8, 0x51, 0x49) // red
+            } else if ratio > 0.7 {
+                Color::Rgb(0xd2, 0x99, 0x22) // yellow
+            } else {
+                ACCENT_GREEN
+            };
+            right_spans.push(Span::styled(
+                format!(
+                    " {} {}/{} ",
+                    bar,
+                    format_tokens(claude_state.context_tokens),
+                    format_tokens(claude_state.context_limit())
+                ),
+                Style::default().fg(color),
+            ));
+        }
+    }
+
+    // Git branch (even without claude)
+    if let Some(ref branch) = claude_state.git_branch {
+        let short = truncate_to_width(branch, 20);
+        right_spans.push(Span::styled(
+            format!(" \u{2387} {} ", short),
+            Style::default().fg(ACCENT_BLUE),
+        ));
+    }
+
+    // Update notice (highest priority — overrides above if present)
+    if let Some(new_version) = app.version_info.update_available() {
+        right_spans.push(Span::styled(
+            format!(" \u{2191} v{} ", new_version),
+            Style::default()
+                .fg(ACCENT_CLAUDE)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    if !right_spans.is_empty() {
+        let total_width: u16 = right_spans
+            .iter()
+            .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()) as u16)
+            .sum();
+        if area.width > total_width {
+            let right_rect =
+                Rect::new(area.x + area.width - total_width, area.y, total_width, 1);
+            let widget =
+                Paragraph::new(Line::from(right_spans)).style(Style::default().bg(HEADER_BG));
+            frame.render_widget(widget, right_rect);
+        }
+    }
 }
 
 // ─── Helpers ──────────────────────────────────────────────
+
+/// Build a progress bar string like `▓▓▓▓░░░░░░`.
+fn make_progress_bar(current: usize, total: usize, width: usize) -> String {
+    if total == 0 {
+        return String::new();
+    }
+    let filled = ((current as f32 / total as f32) * width as f32).round() as usize;
+    let filled = filled.min(width);
+    let mut s = String::with_capacity(width * 3);
+    for _ in 0..filled {
+        s.push('\u{2593}'); // ▓
+    }
+    for _ in filled..width {
+        s.push('\u{2591}'); // ░
+    }
+    s
+}
+
+/// Format token count: 1234 → "1.2k", 1234567 → "1.2M"
+fn format_tokens(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
 
 fn truncate_to_width(s: &str, max_width: usize) -> String {
     let mut result = String::new();
