@@ -1,0 +1,86 @@
+---
+title: 'なぜ ANSI ストリップではなく vt100 を使うのか'
+description: 'Claude Code はスピナー・プログレスバー・画面クリアを駆使する。エスケープを捨てる実装では破綻する理由。'
+pubDate: 2026-04-12
+tags: ['terminal', 'rust', 'architecture']
+---
+
+ccmux を作り始めた最初の頃、「PTY の出力から ANSI エスケープシーケンスを剥がしてそのまま ratatui に流す」方針を検討しました。実装が軽そうだったからです。
+
+結論から言うと**この方針では Claude Code を描画できませんでした**。
+
+## 何が起きるか
+
+Claude Code は CLI TUI なので、次のようなエスケープを日常的に送ってきます:
+
+- **カーソル移動**: `\x1b[H`（左上へ）、`\x1b[10;5H`（10 行 5 列へ）
+- **行クリア**: `\x1b[2K`
+- **画面クリア**: `\x1b[2J`
+- **カラー**: `\x1b[38;5;214m`（256 色 214）
+- **スクロール領域**: `\x1b[2;24r`
+- **代替スクリーンバッファ**: `\x1b[?1049h`
+
+これを単純にストリップすると、スピナーのアニメーションフレームが**縦に延々と積まれていきます**（`\r` で行頭に戻ってから上書きする、という意図が消える）。プログレスバーも同じで、画面下部で更新されるはずのものが履歴に垂れ流されます。
+
+## vt100 は何をしてくれるか
+
+`vt100` クレートは、バイトストリームを食わせると**スクリーンバッファ（行 × 列のセル配列）**を内部で再構成してくれます:
+
+```rust
+use vt100::Parser;
+
+let mut parser = Parser::new(rows, cols, scrollback_lines);
+parser.process(b"hello\r\n\x1b[31mred\x1b[0m\n");
+
+let screen = parser.screen();
+for row in 0..rows {
+    for col in 0..cols {
+        let cell = screen.cell(row, col).unwrap();
+        println!("{} fg={:?}", cell.contents(), cell.fgcolor());
+    }
+}
+```
+
+カーソル位置、前景色・背景色、太字・下線などの属性が**セル単位で正しい状態**になっています。あとはこれを ratatui の `Cell` にマッピングして描くだけ。
+
+## ratatui への変換
+
+ccmux では毎フレーム こう変換しています（概念コード）:
+
+```rust
+fn render_pane(screen: &vt100::Screen, area: Rect, buf: &mut Buffer) {
+    for y in 0..area.height {
+        for x in 0..area.width {
+            if let Some(cell) = screen.cell(y, x) {
+                let style = Style::default()
+                    .fg(convert_color(cell.fgcolor()))
+                    .bg(convert_color(cell.bgcolor()))
+                    .add_modifier(convert_modifiers(cell));
+                buf.get_mut(area.x + x, area.y + y)
+                    .set_symbol(cell.contents())
+                    .set_style(style);
+            }
+        }
+    }
+}
+```
+
+これで Claude Code の:
+
+- スピナーがちゃんと 1 箇所で回転する
+- プログレスバーが画面下部で更新される
+- `@file` 候補補完のオーバーレイが正しい位置に出る
+- テキストの選択ハイライトが効く
+
+## スクロールバック
+
+`vt100::Parser::new(rows, cols, 10_000)` の第 3 引数は**スクロールバック行数**。画面からあふれた行はここに溜まります。`screen.set_scrollback(n)` で n 行さかのぼって表示できます。ccmux の Shift+PageUp はこれです。
+
+## トレードオフ
+
+- **利点**: Claude Code・vim・htop のようなフルスクリーン TUI が全部動く。カーソルもカラーも正しい。
+- **欠点**: 1 フレームごとに全セルを再描画するので CPU がわずかに重い。ratatui の dirty フラグ + PTY 出力イベントのバッチングで 30fps 程度に抑えると、アイドル時 0% に収まる。
+
+---
+
+「**ターミナルをラップする TUI は、ターミナルエミュレータを内側に持たなければならない**」というのが一番の学びでした。PTY の出力はテキストではなくコマンドストリームなので、コマンドを解釈せずに表示することはできません。

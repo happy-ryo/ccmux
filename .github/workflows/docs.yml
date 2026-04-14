@@ -1,4 +1,4 @@
-name: Deploy Docs + LP
+name: Deploy Docs + LP + Blog
 
 on:
   push:
@@ -7,6 +7,7 @@ on:
     paths:
       - 'docs/**'
       - 'lp/**'
+      - 'blog/**'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -29,8 +30,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: docs/package-lock.json
 
       - name: Install docs dependencies
         working-directory: docs
@@ -40,6 +39,16 @@ jobs:
         working-directory: docs
         run: npx next build
 
+      - name: Install blog dependencies
+        working-directory: blog
+        run: npm ci
+
+      - name: Build Astro blog
+        working-directory: blog
+        run: npx astro build
+        env:
+          NODE_ENV: production
+
       - name: Stage Pages artifact
         run: |
           mkdir -p _site
@@ -48,6 +57,9 @@ jobs:
           # Nextra docs at /docs/
           mkdir -p _site/docs
           cp -R docs/out/. _site/docs/
+          # Astro blog at /blog/
+          mkdir -p _site/blog
+          cp -R blog/dist/. _site/blog/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
