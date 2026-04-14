@@ -1,6 +1,6 @@
 {
   "name": "@shincode/ccmux",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Claude Code Multiplexer — manage multiple Claude Code instances in TUI split panes",
   "bin": {
     "ccmux": "bin/cli.js"
