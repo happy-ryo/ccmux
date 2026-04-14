@@ -1,0 +1,150 @@
+---
+title: '30fps で描いているのに、触らないと CPU が 0% になる話'
+description: 'ccmux は 6 ペインで Claude Code と vim と htop を同時に動かしても、何もしていない間の CPU はほぼ 0%。種は "何も変わってないなら描かない" という単純なルール。'
+pubDate: 2026-04-06
+tags: ['rust', 'ratatui', 'performance']
+---
+
+ccmux はそこそこ派手な TUI で、30fps を上限に画面を更新します。なのに、
+
+- 6 ペイン開いて
+- Claude Code を起動して
+- vim でファイル編集中で
+- 別のペインで htop が動いてる
+
+この状態で**ユーザーが何も触っていない**と、`top` で見た CPU 使用率はほぼ 0% です。
+
+派手な TUI = CPU を食う、という先入観がある人向けに、**なぜ食わないのか**の話。
+
+## 「30fps」は上限であって、ノルマではない
+
+まず、30fps は「1 秒に 30 回描かなければならない」という意味ではありません。**「1 秒に最大 30 回まで描ける」** です。
+
+描く必要がないなら、描かない。ccmux のメインループを単純化すると、こうなってます:
+
+```rust title="src/main.rs"
+loop {
+    // PTY からのイベントを拾う
+    app.drain_pty_events();
+
+    // 何かが変わっていたら描画
+    if app.dirty {
+        app.dirty = false;
+        terminal.draw(|frame| ui::render(app, frame))?;
+    }
+
+    if app.should_quit { break; }
+
+    // 最大 33ms 待つ。その間に入力があれば早く戻る
+    if event::poll(Duration::from_millis(33))? {
+        // キー入力・マウス・リサイズを処理
+        // 何か起きたら app.dirty = true を立てる
+    }
+}
+```
+
+ポイントは 2 つだけ:
+
+1. **`dirty` フラグが立ってない時は描画しない**
+2. **`event::poll(33ms)` で 33ms はスレッドが寝る**
+
+これだけで、「待ってる間は CPU をほぼ使わない」ようになります。
+
+## dirty フラグパターン
+
+「何かが変わった」をフラグ 1 枚で表現するだけ:
+
+```rust
+pub struct App {
+    pub dirty: bool,
+    // ...
+}
+```
+
+イベントを処理する箇所では、必要に応じてフラグを立てます:
+
+```rust title="src/main.rs"
+Event::Key(key) => {
+    app.handle_key_event(key)?;
+    app.dirty = true; // ← 入力があったので描き直す
+}
+Event::Mouse(mouse) => {
+    app.handle_mouse_event(mouse);
+    app.dirty = true;
+}
+Event::Resize(_, _) => {
+    app.dirty = true;
+}
+```
+
+PTY 出力（Claude の応答やコマンド結果）も同様:
+
+```rust
+pub fn drain_pty_events(&mut self) {
+    while let Ok(event) = self.event_rx.try_recv() {
+        match event {
+            AppEvent::PtyOutput(_pane_id) => {
+                self.dirty = true;
+            }
+            // ...
+        }
+    }
+}
+```
+
+フラグが立った次のループで一度だけ描いて、すぐクリア。次のイベントが来るまでは、ループは `event::poll` の中で寝ています。
+
+## event::poll がスレッドを寝かせる
+
+`event::poll(Duration)` は crossterm が提供する API で、**OS レベルでスレッドをブロック**します。CPU を使わずに最大 `Duration` だけ待機する。
+
+- 33ms 待っても入力がなければ `false` を返して戻ってくる
+- 途中でキー入力やリサイズがあれば、即座に `true` を返して戻ってくる
+
+これが「30fps 上限」の正体。33ms は ≒ 1/30 秒 です。
+
+## PTY 出力の合体
+
+「Claude Code が大量にテキストを吐いてる間、毎バイトで再描画したら描画が追いつかないのでは？」
+
+ここは別のトリックが効いています。PTY 読み取りスレッドが `AppEvent::PtyOutput(id)` を送るたびに `dirty = true` になりますが、**メインループ 1 回につき描画は 1 回だけ**。
+
+```rust
+// drain_pty_events で 100 個 AppEvent を取っても、
+// dirty = true が 100 回立つだけ。
+// 結局 1 回しか描かない。
+```
+
+30fps 上限下では、100 個の PTY 出力イベントが来ても、画面は**最大 33ms ごとに 1 回**しか更新されません。「描画イベントを合体させる」仕組みが、無意識のうちに効いています。
+
+## ネタ: PtyOutput が積もってループが固まらないの？
+
+`drain_pty_events` は、チャネルに溜まっているイベントを**全部空にしてから**ループを進めます。だから PTY 出力が毎ループで 1000 件溜まっていても、`while let Ok(_) = rx.try_recv()` で一瞬で空に。処理自体は `dirty = true` を立てるだけなので重くない。
+
+## 効果
+
+手元でザっと計測すると:
+
+| 状態 | CPU 使用率 |
+|---|---|
+| ccmux 起動直後（何もしない） | 0.0 〜 0.1% |
+| Claude Code を 4 ペインで起動、応答待ち | 0.1 〜 0.3% |
+| vim でタイピング中 | 0.5 〜 1.5% |
+| ペインリサイズのドラッグ中 | 2 〜 5%（30fps 出てる）|
+| `yes` コマンドを流して大量出力 | 10 〜 20%（ここは素直に負ける） |
+
+触ってない時が 0% なのは、**描いてないから**に尽きます。
+
+## まとめ: 「描かない」が最速
+
+TUI のパフォーマンスは、レンダリングを速くするより、**レンダリング回数を減らす**ほうが効きます。
+
+- dirty フラグで "本当に必要な時だけ描く"
+- `event::poll(タイムアウト)` で "イベントが来るまで寝る"
+- イベントを合体して "1 ループで 1 描画"
+
+この 3 点セットで、派手な TUI も省電力になります。ccmux はこの原則を徹底しているだけで、特別な最適化は入れていません。
+
+---
+
+「TUI は軽いからどう書いても速い」と思われがちですが、**雑に書くと意外と CPU を食う**。Linux の `htop` や `bottom` が 0% に見えるのは、この種のサボり方を丁寧にやっているから。裏には地味な美学があります。

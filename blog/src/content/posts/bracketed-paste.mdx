@@ -1,0 +1,158 @@
+---
+title: 'ペーストした瞬間にコマンドが走る、の謎'
+description: '複数行のテキストをターミナルに貼り付けたら、Enter のところで勝手に実行されて焦った経験ありませんか。あれを直す "Bracketed Paste" の話。'
+pubDate: 2026-04-07
+tags: ['terminal', 'rust', 'ux']
+---
+
+こういう複数行のシェルコマンドを、ドキュメントやチャットからターミナルに貼り付けたい場面、よくありますよね:
+
+```bash
+cd ~/projects
+git pull
+cargo build --release
+./target/release/app --config prod.toml
+```
+
+で、素朴なターミナルで貼り付けると:
+
+```
+$ cd ~/projects
+$ git pull
+Already up to date.
+$ cargo build --release
+   Compiling ...
+```
+
+**Enter ごとに勝手にコマンドが実行される**。`rm -rf` とか貼っちゃった日には事故です。
+
+これ、どうして起きるのか。そしてどう防ぐか。
+
+## そもそもペーストって何
+
+ターミナルには本来「ペースト」という概念がありません。あるのは**キー入力のストリーム**だけ。
+
+ブラウザやエディタから文字列を貼り付けると、OS は**その文字列を 1 文字ずつキー入力としてターミナルに送り込み**ます。ターミナルから見れば、人間が超高速でタイピングしているのと区別がつかない。
+
+だから改行文字 (`\n` = Enter キー) も律儀に 1 つずつ送られてきて、シェルはそのたびに「あ、入力完了ね」とコマンドを実行してしまう。
+
+## Bracketed Paste: 「これは貼り付けだよ」と教える
+
+この問題を解決するために、ターミナルには **Bracketed Paste Mode** という仕組みがあります。
+
+有効にしておくと、ターミナルは貼り付けられたテキストの**前後に印を付けて**シェルに渡します:
+
+```
+\x1b[200~ cd ~/projects
+git pull
+cargo build --release \x1b[201~
+```
+
+- `\x1b[200~` = ペースト開始の目印
+- `\x1b[201~` = ペースト終了の目印
+
+シェル（bash, zsh, fish）はこの印を見たら、「間にある改行は Enter じゃなくて**ただの改行文字**」と解釈して、全部受け取ってから一度だけ待機します。
+
+```
+$ cd ~/projects
+git pull
+cargo build --release
+./target/release/app --config prod.toml▮  ← カーソルはここ。まだ Enter 待ち
+```
+
+ユーザーが内容を確認してから自分で Enter を押す。**事故らない。**
+
+## ccmux での実装
+
+ccmux はターミナルの上に乗っているので、
+
+1. **ccmux 自身が crossterm にペーストを有効化させる**
+2. **受け取ったペーストを、中の PTY に正しく転送する**
+
+の 2 段階が必要です。
+
+### 1. crossterm で有効化
+
+```rust title="src/main.rs"
+execute!(stdout, EnterAlternateScreen)?;
+execute!(stdout, crossterm::event::EnableMouseCapture)?;
+execute!(stdout, crossterm::event::EnableBracketedPaste)?;
+```
+
+これで crossterm が「ペースト検知モード」に入って、貼り付けられた文字列を `Event::Paste(text)` という 1 つのイベントにまとめてくれます。
+
+### 2. PTY へ転送
+
+ccmux が受け取ったペーストは、**そのまま ペースト印付きで内側の PTY に渡す**:
+
+```rust title="src/main.rs"
+Event::Paste(text) => {
+    app.forward_paste_to_pty(&text)?;
+    // ...
+}
+```
+
+転送側の実装:
+
+```rust title="src/app.rs"
+pub fn forward_paste_to_pty(&mut self, text: &str) -> Result<()> {
+    let pane = self.ws_mut().focused_pane_mut();
+    let mut data = Vec::new();
+    data.extend_from_slice(b"\x1b[200~"); // ← 開始印
+    data.extend_from_slice(text.as_bytes());
+    data.extend_from_slice(b"\x1b[201~"); // ← 終了印
+    pane.write_input(&data)?;
+    Ok(())
+}
+```
+
+これで、ccmux のペインで動いているシェルが「これは貼り付けだな」と理解してくれます。
+
+## フォールバック: 連打バースト検出
+
+古い OS や、`EnableBracketedPaste` が効かない環境だと `Event::Paste` が発火しないことがあります。その場合、crossterm からは**普通の Key イベントが超高速で連続**して届く。
+
+ccmux はこのパターンも一応救済するため、**メインループで「短時間に集まったキーイベント」を検出**しています:
+
+```rust title="src/main.rs"
+if let Some(bytes) = key_event_to_bytes_pub(&key) {
+    paste_buffer.extend_from_slice(&bytes);
+    // 次の 1ms 以内に続く Key イベントも全部吸収
+    while event::poll(Duration::from_millis(1))? {
+        if let Event::Key(k) = event::read()? {
+            if let Some(b) = key_event_to_bytes_pub(&k) {
+                paste_buffer.extend_from_slice(&b);
+            }
+        } else {
+            break;
+        }
+    }
+    flush_paste_buffer(app, &mut paste_buffer)?;
+}
+```
+
+そして、バッファが **6 バイト以上溜まっていたら「ペースト」判定**:
+
+```rust
+if buffer.len() > 6 {
+    let mut data = Vec::new();
+    data.extend_from_slice(b"\x1b[200~");
+    data.extend_from_slice(buffer);
+    data.extend_from_slice(b"\x1b[201~");
+    pane.write_input(&data)?;
+} else {
+    pane.write_input(buffer)?; // 通常のタイピング
+}
+```
+
+人間のタイピングは、どんなに速くても 10〜50ms ごと。**1ms 以内に 6 文字以上集まるのは貼り付けだけ**。この経験則を使います。
+
+## 落とし穴
+
+- **ネストしたマルチプレクサ**: ccmux の中で tmux を動かすと、bracketed paste が二重にエスケープされて壊れることがあります（だから ccmux はネスト起動を拒否している）
+- **crossterm の version 差**: `EnableBracketedPaste` は crossterm 0.27+ で追加。古いプロジェクトは要アップデート
+- **古いシェル**: Bracketed Paste は bash 4.0 / zsh 5.0 くらいから。最近の環境ならまず問題ない
+
+---
+
+「ペーストで事故る」というよくある地味ストレスは、**ターミナルの規格側が先に解決してくれていた**話でした。ccmux はそれを有効化して、ペインに流し込んでいるだけ。小さな規格をちゃんと使うだけで、UX は良くなります。

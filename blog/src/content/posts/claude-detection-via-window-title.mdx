@@ -1,0 +1,113 @@
+---
+title: '「Claude が動いてる」って、どうやって気付いてるの？'
+description: 'ccmux のペインは、Claude Code を起動すると枠がオレンジになります。でも Claude Code 側には一切手を入れてない。タネは、ターミナルの古い習慣の中にあります。'
+pubDate: 2026-04-08
+tags: ['claude-code', 'terminal', 'rust']
+---
+
+ccmux のペインで `claude` と打つと、しばらくして**枠がオレンジ色に変わります**:
+
+```
+┌─ ● claude [1] ─────────────────┐  ← オレンジ枠
+│  Claude Code v2.1.104          │
+│  Opus 4.6 (1M context)         │
+│                                │
+│  What can I help with?         │
+└────────────────────────────────┘
+```
+
+これ、Claude Code にプラグインを入れたわけでも、設定ファイルに何か書いたわけでもありません。ccmux が**「あ、このペインで Claude Code が動いてるな」と自動で気付いている**だけ。
+
+タネは意外とシンプルで、**ターミナルのウィンドウタイトル**を見ているんです。
+
+## ターミナルには「タイトル」があった
+
+今や VS Code 内蔵ターミナルや Warp の時代、あまり意識しませんが、昔のターミナル（xterm や gnome-terminal）には**ウィンドウのタイトルバー**があって、そこに現在のディレクトリや起動中のコマンド名が表示される文化がありました。
+
+プログラムは「このタイトルにしてくれ」とターミナルに伝えるために、特殊なエスケープシーケンスを使います:
+
+```
+\x1b]0;タイトル文字列\x07
+```
+
+`\x1b]0;` で始まって、`\x07`（ベル文字）で終わる。これが **OSC 0**（Operating System Command 0）と呼ばれる「ウィンドウタイトル設定」の命令です。OSC 2 も同じ意味で使われます。
+
+Claude Code は起動時に、自分の名前をこの OSC に流しているんです:
+
+```
+\x1b]0;Claude Code v2.1.104\x07
+```
+
+普通のターミナルならタイトルバーに「Claude Code v2.1.104」と表示されるだけですが、**ccmux はこの流れを盗み見ています**。
+
+## OSC を拾う
+
+ccmux は各 PTY から流れてくるバイトを、[以前の記事で書いた](/why-vt100/) `vt100` パーサに通しています。そのついでに、**OSC 0/2 だけ横取り**して保存する関数を足しました:
+
+```rust title="src/pane.rs"
+fn extract_osc_title(data: &[u8]) -> Option<String> {
+    let s = std::str::from_utf8(data).ok()?;
+    for marker in &["\x1b]0;", "\x1b]2;"] {
+        if let Some(start) = s.find(marker) {
+            let rest = &s[start + marker.len()..];
+            let end = rest.find('\x07').or_else(|| rest.find("\x1b\\"))?;
+            return Some(rest[..end].to_string());
+        }
+    }
+    None
+}
+```
+
+見つけた文字列をペインごとに `Arc<Mutex<String>>` で保持しておくだけ。
+
+## 「claude が入ってるか」で判定
+
+そのタイトルを使って、Claude Code が動いてるかを当てる:
+
+```rust title="src/pane.rs"
+pub fn is_claude_running(&self) -> bool {
+    if let Ok(t) = self.title.lock() {
+        t.to_lowercase().contains("claude")
+    } else {
+        false
+    }
+}
+```
+
+**本当にこれだけ**。`title` の文字列に `claude` が含まれていれば、そのペインは Claude Code が動いてる、と判定。
+
+## 枠の色に反映
+
+UI 側はこの判定を見て、枠の色を変えるだけ:
+
+```rust title="src/ui.rs"
+let border_color = if is_focused {
+    Color::Rgb(245, 78, 0)   // フォーカスあり: オレンジ
+} else if pane.is_claude_running() {
+    Color::Rgb(245, 78, 0)   // Claude 動いてる: オレンジ（同色）
+} else {
+    Color::Rgb(139, 138, 130) // 通常: グレー
+};
+```
+
+実際の実装はもう少し色のバリエーションがありますが、原理はこれ。
+
+## なぜこの方法が美しいか
+
+この仕組みの気持ちいいところは:
+
+- **Claude Code 側に一切手を入れていない** — 普通に動かしてるだけ
+- **プラグインも設定ファイルも不要** — ユーザーが何もしなくても動く
+- **他のツールでも同じ仕組みが使える** — `node`, `python -m http.server` なども自分の名前を OSC で流しているので、同じ原理で検出できる
+
+「**ターミナルの古い習慣**」の上にちょこっと乗るだけで、モダンな UX が作れる。こういうのが好きなんです。
+
+## 落とし穴
+
+- **タイトルを頻繁に変えるアプリ** だと判定がブレます（`vim` は編集中のファイル名を流すので `vim src/pane.rs` → タイトル `pane.rs` になる）。Claude Code は起動時に一度流すだけなので安定
+- **bash のプロンプトで `\033]0;\w\007` を仕込んでる人** の場合、cwd がタイトルになって `claude` を含まないことがある。ただし claude コマンドが走っている間は Claude Code がタイトルを上書きするので問題なし
+- **Windows の PowerShell ネイティブ** は OSC 0 を直接は流さない（Git Bash 経由なら流れる）
+
+---
+
+「Claude Code が動いている」の判定は、**一次情報（Claude Code 自身が送っているシグナル）を素直に使うのが一番**。API も plugin もいらない、むしろ何もいらない、というのが今回の結論です。
