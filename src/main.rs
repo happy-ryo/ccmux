@@ -183,7 +183,9 @@ fn run_event_loop(
 }
 
 /// Flush accumulated key buffer to PTY. If multiple characters were collected
-/// (indicating a paste), wrap in bracketed paste sequences.
+/// (indicating a paste), wrap in bracketed paste sequences only when the PTY
+/// application has enabled the mode. Unconditional wrapping causes shells that
+/// haven't opted in to display the escape sequences as literal text (issue #2).
 fn flush_paste_buffer(app: &mut app::App, buffer: &mut Vec<u8>) -> Result<()> {
     if buffer.is_empty() {
         return Ok(());
@@ -193,12 +195,15 @@ fn flush_paste_buffer(app: &mut app::App, buffer: &mut Vec<u8>) -> Result<()> {
     if let Some(pane) = app.ws_mut().panes.get_mut(&focused_id) {
         pane.scroll_reset();
         if buffer.len() > 6 {
-            // Likely a paste — wrap in bracketed paste
-            let mut data = Vec::with_capacity(buffer.len() + 12);
-            data.extend_from_slice(b"\x1b[200~");
-            data.extend_from_slice(buffer);
-            data.extend_from_slice(b"\x1b[201~");
-            pane.write_input(&data)?;
+            if pane.is_bracketed_paste_enabled() {
+                let mut data = Vec::with_capacity(buffer.len() + 12);
+                data.extend_from_slice(b"\x1b[200~");
+                data.extend_from_slice(buffer);
+                data.extend_from_slice(b"\x1b[201~");
+                pane.write_input(&data)?;
+            } else {
+                pane.write_input(buffer)?;
+            }
             app.paste_cooldown = 5;
         } else {
             // Normal typing — send directly

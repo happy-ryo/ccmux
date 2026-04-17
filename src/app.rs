@@ -1574,17 +1574,23 @@ impl App {
 
     // ─── PTY forwarding ───────────────────────────────────
 
-    /// Forward pasted text to PTY wrapped in bracketed paste sequences.
+    /// Forward pasted text to PTY, wrapping in bracketed paste only if
+    /// the PTY application has enabled the mode (e.g. Claude Code, modern
+    /// readline). Sending bracketed paste to a shell that hasn't opted in
+    /// causes the escape sequences to appear as literal text (issue #2).
     pub fn forward_paste_to_pty(&mut self, text: &str) -> Result<()> {
         let focused_id = self.ws().focused_pane_id;
         if let Some(pane) = self.ws_mut().panes.get_mut(&focused_id) {
             pane.scroll_reset();
-            // Wrap in bracketed paste: \x1b[200~ ... \x1b[201~
-            let mut data = Vec::new();
-            data.extend_from_slice(b"\x1b[200~");
-            data.extend_from_slice(text.as_bytes());
-            data.extend_from_slice(b"\x1b[201~");
-            pane.write_input(&data)?;
+            if pane.is_bracketed_paste_enabled() {
+                let mut data = Vec::with_capacity(text.len() + 12);
+                data.extend_from_slice(b"\x1b[200~");
+                data.extend_from_slice(text.as_bytes());
+                data.extend_from_slice(b"\x1b[201~");
+                pane.write_input(&data)?;
+            } else {
+                pane.write_input(text.as_bytes())?;
+            }
         }
         Ok(())
     }

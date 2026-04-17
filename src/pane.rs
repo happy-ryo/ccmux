@@ -213,6 +213,12 @@ impl Pane {
         parser.screen().scrollback() > 0
     }
 
+    /// Check if the PTY application has enabled bracketed paste mode.
+    pub fn is_bracketed_paste_enabled(&self) -> bool {
+        let parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
+        parser.screen().bracketed_paste()
+    }
+
     /// Check if Claude Code is running in this pane (by window title).
     pub fn is_claude_running(&self) -> bool {
         if let Ok(t) = self.title.lock() {
