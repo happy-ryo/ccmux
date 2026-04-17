@@ -32,5 +32,15 @@ cargo run            # Run the app
 - Windows: Git Bash → PowerShell
 - Unix: $SHELL → /bin/sh
 
+## Release Process
+1. `Cargo.toml` と `npm/package.json` のバージョンを同じ値に揃えて上げる
+2. コミット & `git push origin master`
+3. `git tag vX.Y.Z && git push origin vX.Y.Z`
+4. CI (`.github/workflows/release.yml`) が自動で実行:
+   - 4プラットフォーム (Windows x64, macOS x64/arm64, Linux x64) のリリースビルド
+   - GitHub Release 作成 + checksums.txt 生成
+   - npm publish (Trusted Publishing)
+- **手動で `npm publish` や `gh release create` しないこと** — バージョン衝突の原因になる
+
 ## Workflow Rules
 - **Every implementation must be reviewed by the evaluator agent** before reporting done. This is a Rust TUI app, so Playwright MCP is not available — the evaluator should perform static review (diff analysis, edge cases, logic correctness, key conflict checks, layout math consistency).
