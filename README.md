@@ -71,7 +71,11 @@ Launch from any directory. The file tree shows the current working directory.
 | `Ctrl+D` | Split vertically |
 | `Ctrl+E` | Split horizontally |
 | `Ctrl+W` | Close pane / tab |
-| `Ctrl+T` | New tab |
+| `Alt+T` / `Ctrl+T` | New tab |
+| `Alt+1..9` | Jump to tab N |
+| `Alt+Left/Right` | Previous / next tab |
+| `Alt+R` | Rename tab (session only) |
+| `Alt+S` | Toggle status bar |
 | `Ctrl+F` | Toggle file tree |
 | `Ctrl+P` | Swap preview/terminal layout |
 | `Ctrl+Right/Left` | Cycle focus (sidebar, preview, panes) |
@@ -90,7 +94,8 @@ Launch from any directory. The file tree shows the current working directory.
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` | Scroll |
+| `j` / `k` | Scroll vertically |
+| `h` / `l` | Scroll horizontally |
 | `Ctrl+W` | Close preview |
 | `Esc` | Return to pane |
 
@@ -100,6 +105,7 @@ Launch from any directory. The file tree shows the current working directory.
 |--------|--------|
 | Click pane | Focus pane |
 | Click tab | Switch tab |
+| Double-click tab | Rename tab |
 | Click `+` | New tab |
 | Drag border | Resize panels |
 | Scroll wheel | Scroll file tree / preview / terminal history |

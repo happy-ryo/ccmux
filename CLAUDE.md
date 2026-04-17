@@ -31,3 +31,6 @@ cargo run            # Run the app
 ## Shell Detection Priority
 - Windows: Git Bash → PowerShell
 - Unix: $SHELL → /bin/sh
+
+## Workflow Rules
+- **Every implementation must be reviewed by the evaluator agent** before reporting done. This is a Rust TUI app, so Playwright MCP is not available — the evaluator should perform static review (diff analysis, edge cases, logic correctness, key conflict checks, layout math consistency).

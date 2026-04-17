@@ -21,11 +21,19 @@ import { Callout } from 'nextra/components'
 
 Each tab is an independent workspace with its own panes, file tree, and preview.
 
-- `Ctrl+T` — New tab
+- `Alt+T` / `Ctrl+T` — New tab
 - **Click a tab** to switch
+- **Double-click a tab** to rename
+- `Alt+R` — Rename tab (session only; submit empty to reset to auto name)
 - `Ctrl+W` — Close tab (when only one pane in the tab)
 
-The tab name automatically updates when you `cd` to a different directory.
+The tab name automatically updates when you `cd` to a different directory. A custom name takes precedence over the auto-derived name.
+
+## Status Bar
+
+The status bar at the bottom shows available shortcuts for the current mode. The right side displays Claude Code model name, context usage, and other session info.
+
+- `Alt+S` — Toggle status bar visibility (reclaims 1 row for panes)
 
 ## File Tree
 
@@ -59,7 +67,8 @@ Select a file in the file tree to see its contents with syntax highlighting.
 
 - Powered by [syntect](https://github.com/trishume/syntect) (base16-eighties theme)
 - Line numbers with separator
-- Scroll with mouse wheel, `j`/`k`, or `PageUp`/`PageDown`
+- Scroll vertically with mouse wheel, `j`/`k`, or `PageUp`/`PageDown`
+- Scroll horizontally with `h`/`l`, `Left`/`Right`, or `Home` (for long lines)
 - Line position indicator at the bottom (`42/156`)
 - `Ctrl+W` to close preview (when preview is focused)
 - `Ctrl+P` to swap preview and terminal positions

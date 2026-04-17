@@ -4,9 +4,25 @@ import { getPageMap } from 'nextra/page-map'
 import 'nextra-theme-docs/style.css'
 import './globals.css'
 
+const siteUrl = 'https://shin-sibainu.github.io/ccmux/docs'
+
 export const metadata = {
   title: 'ccmux — Claude Code Multiplexer',
   description: 'Manage multiple Claude Code instances in TUI split panes',
+  openGraph: {
+    title: 'ccmux — Claude Code Multiplexer',
+    description: 'Manage multiple Claude Code instances in TUI split panes. Rust-powered terminal multiplexer with tabs, file tree, and syntax-highlighted preview.',
+    url: siteUrl,
+    siteName: 'ccmux',
+    images: [{ url: `${siteUrl}/og.png`, width: 1200, height: 630, alt: 'ccmux — Claude Code Multiplexer' }],
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'ccmux — Claude Code Multiplexer',
+    description: 'Manage multiple Claude Code instances in TUI split panes.',
+    images: [`${siteUrl}/og.png`],
+  },
 }
 
 export const viewport = {

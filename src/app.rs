@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::Instant;
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -218,13 +219,22 @@ pub enum SelectionTarget {
 /// Text selection state. Works for both terminal panes and the file
 /// preview panel — `target` tells rendering and extraction which
 /// source to read.
+///
+/// Coordinate semantics differ by target:
+/// - **Pane**: start/end rows+cols are screen-relative to
+///   `content_rect` (the inner area of the pane border).
+/// - **Preview**: rows are **absolute line indices** into
+///   `preview.lines`; cols are **char offsets** within the line.
+///   This lets the selection survive vertical and horizontal
+///   scrolling — overlay rendering subtracts the current scroll
+///   to turn source coords back into screen coords.
 #[derive(Debug, Clone)]
 pub struct TextSelection {
     pub target: SelectionTarget,
-    pub start_row: u16,
-    pub start_col: u16,
-    pub end_row: u16,
-    pub end_col: u16,
+    pub start_row: u32,
+    pub start_col: u32,
+    pub end_row: u32,
+    pub end_col: u32,
     /// Content area used for coordinate mapping — the inside of the
     /// pane border, or (for previews) the area excluding the line
     /// number gutter.
@@ -233,7 +243,7 @@ pub struct TextSelection {
 
 impl TextSelection {
     /// Get normalized (top-left to bottom-right) selection range.
-    pub fn normalized(&self) -> (u16, u16, u16, u16) {
+    pub fn normalized(&self) -> (u32, u32, u32, u32) {
         if self.start_row < self.end_row
             || (self.start_row == self.end_row && self.start_col <= self.end_col)
         {
@@ -244,7 +254,7 @@ impl TextSelection {
     }
 
     /// Check if a cell is within the selection.
-    pub fn contains(&self, row: u16, col: u16) -> bool {
+    pub fn contains(&self, row: u32, col: u32) -> bool {
         let (sr, sc, er, ec) = self.normalized();
         if row < sr || row > er {
             return false;
@@ -268,6 +278,9 @@ impl TextSelection {
 #[allow(dead_code)]
 pub struct Workspace {
     pub name: String,
+    /// Session-only rename; when Some, takes precedence over `name` for
+    /// display. Not persisted; `cd` does not touch this.
+    pub custom_name: Option<String>,
     pub cwd: PathBuf,
     pub panes: HashMap<usize, Pane>,
     pub layout: LayoutNode,
@@ -297,6 +310,7 @@ impl Workspace {
 
         Ok(Self {
             name,
+            custom_name: None,
             file_tree: FileTree::new(cwd.clone()),
             cwd,
             panes,
@@ -315,6 +329,12 @@ impl Workspace {
         for pane in self.panes.values_mut() {
             pane.kill();
         }
+    }
+
+    /// Tab label to show in the UI: custom rename wins over the
+    /// cwd-derived name.
+    pub fn display_name(&self) -> &str {
+        self.custom_name.as_deref().unwrap_or(&self.name)
     }
 }
 
@@ -344,12 +364,21 @@ pub struct App {
     pub preview_width: u16,
     // Layout: swap preview and terminal positions
     pub layout_swapped: bool,
+    // Toggle status bar visibility (Alt+S)
+    pub status_bar_visible: bool,
     // Drag/hover state
     pub dragging: Option<DragTarget>,
     pub hover_border: Option<DragTarget>,
     // Tab bar rects for mouse click
     pub last_tab_rects: Vec<(usize, Rect)>,
     pub last_new_tab_rect: Option<Rect>,
+    /// Active tab rename input buffer. When `Some`, key input is
+    /// routed to this buffer instead of the focused PTY; Enter commits
+    /// to the active workspace's `custom_name`, Esc cancels.
+    pub rename_input: Option<String>,
+    /// (tab index, timestamp) of the last left-click on a tab label.
+    /// Used to detect a double-click → enter rename mode.
+    last_tab_click: Option<(usize, Instant)>,
     // Text selection
     pub selection: Option<TextSelection>,
     // Version check (background)
@@ -386,10 +415,13 @@ impl App {
             file_tree_width: 20,
             preview_width: 40,
             layout_swapped: true,
+            status_bar_visible: true,
             dragging: None,
             hover_border: None,
             last_tab_rects: Vec::new(),
             last_new_tab_rect: None,
+            rename_input: None,
+            last_tab_click: None,
             selection: None,
             version_info: {
                 let info = crate::version_check::VersionInfo::new();
@@ -441,7 +473,7 @@ impl App {
         // PTY size drift from the actually-painted pane size.
         const MIN_PANE_AREA_WIDTH: u16 = 20;
         let tab_h = 1u16;
-        let status_h = 1u16;
+        let status_h: u16 = if self.status_bar_visible || self.rename_input.is_some() { 1 } else { 0 };
         let main_h = rows.saturating_sub(tab_h + status_h);
 
         let mut has_tree = self.ws().file_tree_visible;
@@ -524,9 +556,25 @@ impl App {
     // ─── Key handling ─────────────────────────────────────
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<bool> {
+        // Rename mode — swallow all input until Enter/Esc.
+        if self.rename_input.is_some() {
+            return Ok(self.handle_rename_key(key));
+        }
+
         // Ctrl+Q — quit
         if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('q') {
             self.should_quit = true;
+            return Ok(true);
+        }
+
+        // Alt+R — rename active tab (session only)
+        if key.modifiers == KeyModifiers::ALT
+            && matches!(key.code, KeyCode::Char('r') | KeyCode::Char('R'))
+        {
+            self.rename_input = Some(String::new());
+            if !self.status_bar_visible {
+                self.mark_layout_change();
+            }
             return Ok(true);
         }
 
@@ -560,8 +608,10 @@ impl App {
             // No selection — fall through to forward Ctrl+C to PTY
         }
 
-        // Ctrl+T — new tab
-        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('t') {
+        // Ctrl+T / Alt+T — new tab (Alt+T groups with Alt-based tab nav)
+        if (key.modifiers == KeyModifiers::CONTROL || key.modifiers == KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Char('t') | KeyCode::Char('T'))
+        {
             self.new_tab()?;
             return Ok(true);
         }
@@ -583,6 +633,15 @@ impl App {
                     self.active_tab - 1
                 };
             }
+            return Ok(true);
+        }
+
+        // Alt+S — toggle status bar
+        if key.modifiers == KeyModifiers::ALT
+            && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
+        {
+            self.status_bar_visible = !self.status_bar_visible;
+            self.mark_layout_change();
             return Ok(true);
         }
 
@@ -668,6 +727,43 @@ impl App {
         }
     }
 
+    fn handle_rename_key(&mut self, key: KeyEvent) -> bool {
+        let Some(buf) = self.rename_input.as_mut() else {
+            return false;
+        };
+        let needs_relayout = !self.status_bar_visible;
+        match key.code {
+            KeyCode::Esc => {
+                self.rename_input = None;
+                if needs_relayout { self.mark_layout_change(); }
+            }
+            KeyCode::Enter => {
+                let trimmed = buf.trim().to_string();
+                self.ws_mut().custom_name = if trimmed.is_empty() { None } else { Some(trimmed) };
+                self.rename_input = None;
+                if needs_relayout { self.mark_layout_change(); }
+            }
+            KeyCode::Backspace => {
+                buf.pop();
+            }
+            KeyCode::Char(c) => {
+                // Ignore chars combined with Ctrl/Alt so shortcuts like
+                // Ctrl+C don't leak into the buffer as literal letters.
+                // Shift is fine — that's just uppercase.
+                if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
+                    return true;
+                }
+                // Cap at something sane so a stuck key can't grow the tab bar forever.
+                if buf.chars().count() < 32 {
+                    buf.push(c);
+                }
+            }
+            _ => return true,
+        }
+        self.dirty = true;
+        true
+    }
+
     fn handle_file_tree_key(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
@@ -712,23 +808,37 @@ impl App {
                 Ok(true)
             }
             (_, KeyCode::Char('j')) | (_, KeyCode::Down) => {
-                self.clear_selection_if_preview();
                 self.ws_mut().preview.scroll_down(1);
                 Ok(true)
             }
             (_, KeyCode::Char('k')) | (_, KeyCode::Up) => {
-                self.clear_selection_if_preview();
                 self.ws_mut().preview.scroll_up(1);
                 Ok(true)
             }
             (_, KeyCode::PageDown) => {
-                self.clear_selection_if_preview();
                 self.ws_mut().preview.scroll_down(20);
                 Ok(true)
             }
             (_, KeyCode::PageUp) => {
-                self.clear_selection_if_preview();
                 self.ws_mut().preview.scroll_up(20);
+                Ok(true)
+            }
+            // Horizontal scroll — unmodified arrow keys and vim-style h/l.
+            // Ctrl+Left/Right remain focus navigation (matched below).
+            (KeyModifiers::NONE, KeyCode::Right)
+            | (KeyModifiers::NONE, KeyCode::Char('l'))
+            | (KeyModifiers::SHIFT, KeyCode::Right) => {
+                self.ws_mut().preview.scroll_right(4);
+                Ok(true)
+            }
+            (KeyModifiers::NONE, KeyCode::Left)
+            | (KeyModifiers::NONE, KeyCode::Char('h'))
+            | (KeyModifiers::SHIFT, KeyCode::Left) => {
+                self.ws_mut().preview.scroll_left(4);
+                Ok(true)
+            }
+            (KeyModifiers::NONE, KeyCode::Home) => {
+                self.ws_mut().preview.h_scroll_offset = 0;
                 Ok(true)
             }
             (_, KeyCode::Esc) => {
@@ -788,9 +898,15 @@ impl App {
         let was_visible = ws.file_tree_visible;
         let will_be_visible;
         if ws.file_tree_visible && ws.focus_target == FocusTarget::FileTree {
+            // Closing the tree — keep the preview open so the user can
+            // continue reading the file they just opened. Focus moves
+            // to the preview if it's active, otherwise back to the pane.
             ws.file_tree_visible = false;
-            ws.focus_target = FocusTarget::Pane;
-            ws.preview.close();
+            ws.focus_target = if ws.preview.is_active() {
+                FocusTarget::Preview
+            } else {
+                FocusTarget::Pane
+            };
             will_be_visible = false;
         } else if ws.file_tree_visible {
             ws.focus_target = FocusTarget::FileTree;
@@ -1014,6 +1130,15 @@ impl App {
     }
 
     pub fn handle_mouse_event(&mut self, mouse: MouseEvent) {
+        // Cancel any in-progress rename on mouse click so
+        // the buffer can't silently migrate to another tab.
+        if matches!(mouse.kind, MouseEventKind::Down(_)) && self.rename_input.is_some() {
+            let needs_relayout = !self.status_bar_visible;
+            self.rename_input = None;
+            self.dirty = true;
+            if needs_relayout { self.mark_layout_change(); }
+        }
+
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 let col = mouse.column;
@@ -1027,10 +1152,26 @@ impl App {
                     if col >= rect.x && col < rect.x + rect.width
                         && row >= rect.y && row < rect.y + rect.height
                     {
+                        let now = Instant::now();
+                        let is_double = matches!(
+                            self.last_tab_click,
+                            Some((prev_idx, prev_t))
+                                if prev_idx == tab_idx
+                                    && now.duration_since(prev_t).as_millis() < 500
+                        );
                         self.active_tab = tab_idx;
+                        if is_double {
+                            self.rename_input = Some(String::new());
+                            self.last_tab_click = None;
+                        } else {
+                            self.last_tab_click = Some((tab_idx, now));
+                        }
+                        self.dirty = true;
                         return;
                     }
                 }
+                // Click missed the tab bar — reset double-click tracker.
+                self.last_tab_click = None;
 
                 // Check [+] new tab button
                 if let Some(rect) = self.last_new_tab_rect {
@@ -1176,8 +1317,61 @@ impl App {
                 // Text selection: extend if active, or start new
                 if let Some(ref mut sel) = self.selection {
                     let inner = sel.content_rect;
-                    sel.end_col = col.saturating_sub(inner.x).min(inner.width.saturating_sub(1));
-                    sel.end_row = row.saturating_sub(inner.y).min(inner.height.saturating_sub(1));
+                    match sel.target {
+                        SelectionTarget::Pane(_) => {
+                            // Pane: screen-relative coords inside inner.
+                            sel.end_col = col
+                                .saturating_sub(inner.x)
+                                .min(inner.width.saturating_sub(1)) as u32;
+                            sel.end_row = row
+                                .saturating_sub(inner.y)
+                                .min(inner.height.saturating_sub(1)) as u32;
+                        }
+                        SelectionTarget::Preview => {
+                            // Preview: translate screen coords to
+                            // source (absolute line + char offset)
+                            // using the current scroll state.
+                            let scroll_v = self.ws().preview.scroll_offset;
+                            let h_scroll = self.ws().preview.h_scroll_offset;
+
+                            let mut screen_col = col.saturating_sub(inner.x);
+                            let mut screen_row = row.saturating_sub(inner.y);
+
+                            // Auto-scroll when drag reaches an edge.
+                            // Move the underlying scroll by one step
+                            // so the cursor can "pull" more content
+                            // into view. Clamp screen position so the
+                            // computed source coord tracks the new edge.
+                            if col < inner.x {
+                                self.ws_mut().preview.scroll_left(2);
+                                screen_col = 0;
+                            } else if col >= inner.x + inner.width {
+                                self.ws_mut().preview.scroll_right(2);
+                                screen_col = inner.width.saturating_sub(1);
+                            }
+                            if row < inner.y {
+                                self.ws_mut().preview.scroll_up(1);
+                                screen_row = 0;
+                            } else if row >= inner.y + inner.height {
+                                self.ws_mut().preview.scroll_down(1);
+                                screen_row = inner.height.saturating_sub(1);
+                            }
+
+                            // Re-read scroll state in case we changed it above.
+                            let scroll_v = self.ws().preview.scroll_offset.max(scroll_v);
+                            let h_scroll = self.ws().preview.h_scroll_offset.max(h_scroll);
+                            // Clamp end_row to a valid absolute line index.
+                            let lines_len = self.ws().preview.lines.len();
+                            let abs_row = (scroll_v + screen_row as usize)
+                                .min(lines_len.saturating_sub(1));
+                            let abs_col = screen_col as usize + h_scroll;
+                            // Update the selection endpoint (source coords).
+                            if let Some(sel) = self.selection.as_mut() {
+                                sel.end_row = abs_row as u32;
+                                sel.end_col = abs_col as u32;
+                            }
+                        }
+                    }
                 } else {
                     // Start new selection — try pane areas first, then preview
                     let pane_rects = self.ws().last_pane_rects.clone();
@@ -1191,8 +1385,8 @@ impl App {
                                 rect.width.saturating_sub(2),
                                 rect.height.saturating_sub(2),
                             );
-                            let cell_col = col.saturating_sub(inner.x);
-                            let cell_row = row.saturating_sub(inner.y);
+                            let cell_col = col.saturating_sub(inner.x) as u32;
+                            let cell_row = row.saturating_sub(inner.y) as u32;
                             self.selection = Some(TextSelection {
                                 target: SelectionTarget::Pane(pane_id),
                                 start_row: cell_row,
@@ -1207,7 +1401,9 @@ impl App {
                     }
                     // Preview drag selection. Content area is the inside
                     // of the preview border minus the 5-column line-number
-                    // gutter (format "{:>4}│").
+                    // gutter (format "{:>4}│"). Selection stores source
+                    // coords (abs line index, char offset) so it can
+                    // survive scrolling.
                     if !started {
                         if let Some(rect) = self.ws().last_preview_rect {
                             if col >= rect.x && col < rect.x + rect.width
@@ -1221,14 +1417,20 @@ impl App {
                                 );
                                 // Ignore drags that start inside the gutter
                                 if col >= inner.x && row >= inner.y {
-                                    let cell_col = col.saturating_sub(inner.x);
-                                    let cell_row = row.saturating_sub(inner.y);
+                                    let screen_col = col.saturating_sub(inner.x);
+                                    let screen_row = row.saturating_sub(inner.y);
+                                    let scroll_v = self.ws().preview.scroll_offset;
+                                    let h_scroll = self.ws().preview.h_scroll_offset;
+                                    let lines_len = self.ws().preview.lines.len();
+                                    let abs_row = (scroll_v + screen_row as usize)
+                                        .min(lines_len.saturating_sub(1));
+                                    let abs_col = screen_col as usize + h_scroll;
                                     self.selection = Some(TextSelection {
                                         target: SelectionTarget::Preview,
-                                        start_row: cell_row,
-                                        start_col: cell_col,
-                                        end_row: cell_row,
-                                        end_col: cell_col,
+                                        start_row: abs_row as u32,
+                                        start_col: abs_col as u32,
+                                        end_row: abs_row as u32,
+                                        end_col: abs_col as u32,
                                         content_rect: inner,
                                     });
                                 }
@@ -1282,7 +1484,6 @@ impl App {
                     if col >= rect.x && col < rect.x + rect.width
                         && row >= rect.y && row < rect.y + rect.height
                     {
-                        self.clear_selection_if_preview();
                         self.ws_mut().preview.scroll_up(3);
                         return;
                     }
@@ -1315,7 +1516,6 @@ impl App {
                     if col >= rect.x && col < rect.x + rect.width
                         && row >= rect.y && row < rect.y + rect.height
                     {
-                        self.clear_selection_if_preview();
                         self.ws_mut().preview.scroll_down(3);
                         return;
                     }
@@ -1329,6 +1529,28 @@ impl App {
                             pane.scroll_down(3);
                         }
                         return;
+                    }
+                }
+            }
+            MouseEventKind::ScrollLeft => {
+                let col = mouse.column;
+                let row = mouse.row;
+                if let Some(rect) = self.ws().last_preview_rect {
+                    if col >= rect.x && col < rect.x + rect.width
+                        && row >= rect.y && row < rect.y + rect.height
+                    {
+                        self.ws_mut().preview.scroll_left(4);
+                    }
+                }
+            }
+            MouseEventKind::ScrollRight => {
+                let col = mouse.column;
+                let row = mouse.row;
+                if let Some(rect) = self.ws().last_preview_rect {
+                    if col >= rect.x && col < rect.x + rect.width
+                        && row >= rect.y && row < rect.y + rect.height
+                    {
+                        self.ws_mut().preview.scroll_right(4);
                     }
                 }
             }
@@ -1439,7 +1661,7 @@ fn dir_name(path: &std::path::Path) -> String {
 }
 
 /// Extract text from a pane's vt100 screen within a selection range.
-fn extract_selected_text(pane: &Pane, sr: u16, sc: u16, er: u16, ec: u16) -> String {
+fn extract_selected_text(pane: &Pane, sr: u32, sc: u32, er: u32, ec: u32) -> String {
     let parser = pane.parser.lock().unwrap_or_else(|e| e.into_inner());
     let screen = parser.screen();
     let mut lines = Vec::new();
@@ -1450,7 +1672,7 @@ fn extract_selected_text(pane: &Pane, sr: u16, sc: u16, er: u16, ec: u16) -> Str
         let col_end = if row == er { ec } else { 999 };
 
         for col in col_start..=col_end {
-            if let Some(cell) = screen.cell(row, col) {
+            if let Some(cell) = screen.cell(row as u16, col as u16) {
                 let contents = cell.contents();
                 if contents.is_empty() {
                     line.push(' ');
@@ -1471,30 +1693,33 @@ fn extract_selected_text(pane: &Pane, sr: u16, sc: u16, er: u16, ec: u16) -> Str
 }
 
 /// Extract text from the file preview within a selection range.
-/// Rows are screen-relative (0 = top visible line); we translate
-/// them to absolute line indices through `scroll_offset`. Columns
-/// are character offsets into the source line; trailing whitespace
-/// is preserved in interior rows but stripped from the final line.
-fn extract_preview_selected_text(preview: &crate::preview::Preview, sr: u16, sc: u16, er: u16, ec: u16) -> String {
-    let scroll = preview.scroll_offset;
+/// `sr`/`er` are absolute line indices; `sc`/`ec` are char offsets
+/// within the line (selection is stored in source coordinates so it
+/// survives scrolling). Trailing empty lines are stripped.
+fn extract_preview_selected_text(preview: &crate::preview::Preview, sr: u32, sc: u32, er: u32, ec: u32) -> String {
     let lines = &preview.lines;
     let mut out: Vec<String> = Vec::new();
 
-    for screen_row in sr..=er {
-        let abs = scroll + screen_row as usize;
-        if abs >= lines.len() {
+    for abs_row in sr..=er {
+        let idx = abs_row as usize;
+        if idx >= lines.len() {
             break;
         }
-        let line = &lines[abs];
-
-        let col_start = if screen_row == sr { sc as usize } else { 0 };
-        let col_end = if screen_row == er { ec as usize } else { usize::MAX };
-
-        // Char-based slicing (so multi-byte UTF-8 doesn't split mid-codepoint).
+        let line = &lines[idx];
         let chars: Vec<char> = line.chars().collect();
+
+        let col_start = if abs_row == sr { sc as usize } else { 0 };
+        let col_end_inclusive = if abs_row == er { ec as usize } else {
+            chars.len().saturating_sub(1)
+        };
+
         let start = col_start.min(chars.len());
-        let end = (col_end.saturating_add(1)).min(chars.len());
-        let slice: String = chars[start..end].iter().collect();
+        let end = (col_end_inclusive.saturating_add(1)).min(chars.len());
+        let slice: String = if start < end {
+            chars[start..end].iter().collect()
+        } else {
+            String::new()
+        };
         out.push(slice);
     }
 

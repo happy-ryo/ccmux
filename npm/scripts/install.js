@@ -59,7 +59,20 @@ async function main() {
       fs.chmodSync(dest, 0o755);
     }
 
-    console.log('ccmux installed successfully!');
+    const BLUE = '\x1b[38;2;88;166;255m';
+    const DIM = '\x1b[38;2;110;118;129m';
+    const RESET = '\x1b[0m';
+    console.log('');
+    console.log(`${BLUE} ██████╗ ██████╗███╗   ███╗██╗   ██╗██╗  ██╗${RESET}`);
+    console.log(`${BLUE}██╔════╝██╔════╝████╗ ████║██║   ██║╚██╗██╔╝${RESET}`);
+    console.log(`${BLUE}██║     ██║     ██╔████╔██║██║   ██║ ╚███╔╝${RESET}`);
+    console.log(`${BLUE}██║     ██║     ██║╚██╔╝██║██║   ██║ ██╔██╗${RESET}`);
+    console.log(`${BLUE}╚██████╗╚██████╗██║ ╚═╝ ██║╚██████╔╝██╔╝ ██╗${RESET}`);
+    console.log(`${BLUE} ╚═════╝ ╚═════╝╚═╝     ╚═╝ ╚═════╝╚═╝  ╚═╝${RESET}`);
+    console.log('');
+    console.log(`${DIM}  Claude Code Multiplexer v${VERSION}${RESET}`);
+    console.log(`${DIM}  Run 'ccmux' to start.${RESET}`);
+    console.log('');
   } catch (err) {
     console.error(`Failed to download ccmux: ${err.message}`);
     console.error(`URL: ${url}`);

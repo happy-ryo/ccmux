@@ -65,18 +65,22 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     let bg_block = Block::default().style(Style::default().bg(BG));
     frame.render_widget(bg_block, area);
 
+    let show_status = app.status_bar_visible || app.rename_input.is_some();
+    let status_h = if show_status { 1 } else { 0 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // tab bar
-            Constraint::Min(1),   // main area
-            Constraint::Length(1), // status bar
+            Constraint::Length(1),        // tab bar
+            Constraint::Min(1),           // main area
+            Constraint::Length(status_h), // status bar
         ])
         .split(area);
 
     render_tab_bar(app, frame, chunks[0]);
     render_main_area(app, frame, chunks[1]);
-    render_status_bar(app, frame, chunks[2]);
+    if show_status {
+        render_status_bar(app, frame, chunks[2]);
+    }
 }
 
 // ─── Tab bar ──────────────────────────────────────────────
@@ -95,10 +99,26 @@ fn render_tab_bar(app: &mut App, frame: &mut Frame, area: Rect) {
 
     for (i, ws) in app.workspaces.iter().enumerate() {
         let is_active = i == app.active_tab;
-        let label = format!(" {} ", ws.name);
-        let label_width = label.len() as u16;
+        let renaming = is_active && app.rename_input.is_some();
 
-        if is_active {
+        let label = if renaming {
+            let buf = app.rename_input.as_deref().unwrap_or("");
+            // Block cursor at end; placeholder when empty keeps the tab visible.
+            format!(" {}\u{2588} ", buf)
+        } else {
+            format!(" {} ", ws.display_name())
+        };
+        let label_width = unicode_width::UnicodeWidthStr::width(label.as_str()) as u16;
+
+        if renaming {
+            spans.push(Span::styled(
+                label.clone(),
+                Style::default()
+                    .fg(TEXT)
+                    .bg(ACTIVE_TAB_BG)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else if is_active {
             // Active tab: underline bar ▔ effect via bold + brighter bg
             spans.push(Span::styled(
                 label.clone(),
@@ -518,7 +538,7 @@ fn render_terminal_content(
                 // Apply selection highlight (only if dragged, not single click)
                 let has_selection = selection.map_or(false, |s| {
                     let (sr, sc, er, ec) = s.normalized();
-                    (sr != er || sc != ec) && s.contains(row as u16, col as u16)
+                    (sr != er || sc != ec) && s.contains(row as u32, col as u32)
                 });
                 let final_style = if has_selection {
                     Style::default()
@@ -646,6 +666,7 @@ fn render_preview(app: &App, frame: &mut Frame, area: Rect) {
 
     let visible_height = inner.height as usize;
     let scroll = ws.preview.scroll_offset;
+    let h_scroll = ws.preview.h_scroll_offset;
     let has_highlights = !ws.preview.highlighted_lines.is_empty();
 
     for i in 0..visible_height {
@@ -662,19 +683,48 @@ fn render_preview(app: &App, frame: &mut Frame, area: Rect) {
         let mut spans = vec![Span::styled(num_str, Style::default().fg(LINE_NUM_COLOR))];
 
         if has_highlights && line_idx < ws.preview.highlighted_lines.len() {
-            let mut used_width = 0;
+            // Drop `h_scroll` chars from the start of the line, walking
+            // spans so syntax highlighting is preserved.
+            let mut chars_skipped = 0usize;
+            let mut used_width = 0usize;
             for styled_span in &ws.preview.highlighted_lines[line_idx] {
                 if used_width >= max_content {
                     break;
                 }
+
+                let span_chars = styled_span.text.chars().count();
+                let visible_text: std::borrow::Cow<'_, str> =
+                    if chars_skipped + span_chars <= h_scroll {
+                        // Entire span is off-screen to the left.
+                        chars_skipped += span_chars;
+                        continue;
+                    } else if chars_skipped >= h_scroll {
+                        std::borrow::Cow::Borrowed(styled_span.text.as_str())
+                    } else {
+                        // Partially skip into this span.
+                        let skip_in_span = h_scroll - chars_skipped;
+                        chars_skipped = h_scroll;
+                        let remainder: String = styled_span
+                            .text
+                            .chars()
+                            .skip(skip_in_span)
+                            .collect();
+                        std::borrow::Cow::Owned(remainder)
+                    };
+
+                if visible_text.is_empty() {
+                    continue;
+                }
                 let remaining = max_content - used_width;
-                let text = truncate_to_width(&styled_span.text, remaining);
+                let text = truncate_to_width(&visible_text, remaining);
                 used_width += unicode_width::UnicodeWidthStr::width(text.as_str());
                 let (r, g, b) = styled_span.fg;
                 spans.push(Span::styled(text, Style::default().fg(Color::Rgb(r, g, b))));
             }
         } else {
-            let content = truncate_to_width(&ws.preview.lines[line_idx], max_content);
+            let plain = &ws.preview.lines[line_idx];
+            let dropped: String = plain.chars().skip(h_scroll).collect();
+            let content = truncate_to_width(&dropped, max_content);
             spans.push(Span::styled(content, Style::default().fg(TEXT)));
         }
 
@@ -682,63 +732,63 @@ fn render_preview(app: &App, frame: &mut Frame, area: Rect) {
         frame.render_widget(paragraph, Rect::new(inner.x, y, inner.width, 1));
     }
 
-    // Selection highlight overlay. Painted after the text so it
-    // inverts colors of cells already in the buffer, matching the
-    // pane selection style. The right edge of each row's highlight
-    // is clamped to the actual line width (not the content area
-    // width) so the painted band never extends past the text that
-    // extract_preview_selected_text will actually copy.
+    // Selection highlight overlay. The selection is stored in SOURCE
+    // coordinates (absolute line index + char offset into the line),
+    // so we subtract the current scroll + h_scroll to produce screen
+    // positions. Cells outside the visible window are skipped. The
+    // highlighted band is also clamped to the actual line length so
+    // it never paints past the text that would actually be copied.
     if let Some(sel) = app.selection.as_ref() {
         if matches!(sel.target, crate::app::SelectionTarget::Preview) {
             let (sr, sc, er, ec) = sel.normalized();
             if sr != er || sc != ec {
                 let content = sel.content_rect;
-                let scroll = ws.preview.scroll_offset;
-                let lines_len = ws.preview.lines.len();
+                let scroll_v = ws.preview.scroll_offset as i64;
+                let h_scroll = ws.preview.h_scroll_offset as i64;
                 let buf = frame.buffer_mut();
-                for screen_row in sr..=er {
-                    let y = content.y + screen_row;
-                    if y >= content.y + content.height {
+
+                for abs_row in sr..=er {
+                    let screen_row_i = abs_row as i64 - scroll_v;
+                    if screen_row_i < 0 {
+                        continue;
+                    }
+                    if screen_row_i >= content.height as i64 {
                         break;
                     }
-                    // Resolve the absolute line index this screen row
-                    // maps to under the current scroll. If it's past
-                    // EOF, skip (selection was made on a longer file
-                    // or we've scrolled past).
-                    let abs = scroll + screen_row as usize;
-                    if abs >= lines_len {
-                        break;
-                    }
-                    let line_width = ws
+                    let y = content.y + screen_row_i as u16;
+
+                    // Line's actual character count (sets the right
+                    // clamp for the highlight band).
+                    let line_chars = ws
                         .preview
                         .lines
-                        .get(abs)
-                        .map(|s| unicode_width::UnicodeWidthStr::width(s.as_str()) as u16)
+                        .get(abs_row as usize)
+                        .map(|s| s.chars().count())
                         .unwrap_or(0);
-                    // No content on this line → nothing to highlight.
-                    if line_width == 0 {
+                    if line_chars == 0 {
                         continue;
                     }
 
-                    let col_start = if screen_row == sr { sc } else { 0 };
-                    let row_col_end = if screen_row == er { ec } else {
-                        line_width.saturating_sub(1)
+                    let src_col_start = if abs_row == sr { sc as usize } else { 0 };
+                    let src_col_end_inclusive = if abs_row == er {
+                        ec as usize
+                    } else {
+                        line_chars.saturating_sub(1)
                     };
-                    // Clamp to both the content area and the actual
-                    // line width so trailing blank cells don't get
-                    // painted.
-                    let col_end = row_col_end
-                        .min(content.width.saturating_sub(1))
-                        .min(line_width.saturating_sub(1));
-                    if col_start > col_end {
+                    let src_col_end_clamped = src_col_end_inclusive.min(line_chars.saturating_sub(1));
+                    if src_col_start > src_col_end_clamped {
                         continue;
                     }
 
-                    for screen_col in col_start..=col_end {
-                        let x = content.x + screen_col;
-                        if x >= content.x + content.width {
+                    for src_col in src_col_start..=src_col_end_clamped {
+                        let screen_col_i = src_col as i64 - h_scroll;
+                        if screen_col_i < 0 {
+                            continue;
+                        }
+                        if screen_col_i >= content.width as i64 {
                             break;
                         }
+                        let x = content.x + screen_col_i as u16;
                         if let Some(cell) = buf.cell_mut((x, y)) {
                             cell.set_style(
                                 Style::default()
@@ -758,7 +808,18 @@ fn render_preview(app: &App, frame: &mut Frame, area: Rect) {
 fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
     let focus = app.ws().focus_target;
 
-    let hints = match focus {
+    // Rename mode overrides focus-specific hints — key input is being
+    // captured by the buffer regardless of which pane/panel is focused.
+    let hints = if app.rename_input.is_some() {
+        Line::from(vec![
+            Span::styled(" Enter", Style::default().fg(ACCENT_BLUE)),
+            Span::styled(" 決定  ", Style::default().fg(TEXT_DIM)),
+            Span::styled("Esc", Style::default().fg(ACCENT_BLUE)),
+            Span::styled(" 取消  ", Style::default().fg(TEXT_DIM)),
+            Span::styled("空Enter", Style::default().fg(ACCENT_BLUE)),
+            Span::styled(" 元に戻す", Style::default().fg(TEXT_DIM)),
+        ])
+    } else { match focus {
         FocusTarget::Preview => Line::from(vec![
             Span::styled(" Scroll", Style::default().fg(ACCENT_BLUE)),
             Span::styled(" スクロール  ", Style::default().fg(TEXT_DIM)),
@@ -790,8 +851,10 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
             Span::styled(" 横分割  ", Style::default().fg(TEXT_DIM)),
             Span::styled("^W", Style::default().fg(ACCENT_BLUE)),
             Span::styled(" 閉じる  ", Style::default().fg(TEXT_DIM)),
-            Span::styled("^T", Style::default().fg(ACCENT_BLUE)),
+            Span::styled("A-T", Style::default().fg(ACCENT_BLUE)),
             Span::styled(" 新タブ  ", Style::default().fg(TEXT_DIM)),
+            Span::styled("A-R", Style::default().fg(ACCENT_BLUE)),
+            Span::styled(" タブ名  ", Style::default().fg(TEXT_DIM)),
             Span::styled("^F", Style::default().fg(ACCENT_BLUE)),
             Span::styled(" ツリー  ", Style::default().fg(TEXT_DIM)),
             Span::styled("^P", Style::default().fg(ACCENT_BLUE)),
@@ -799,7 +862,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
             Span::styled("^Q", Style::default().fg(ACCENT_BLUE)),
             Span::styled(" 終了", Style::default().fg(TEXT_DIM)),
         ]),
-    };
+    }};
 
     let status = Paragraph::new(hints).style(Style::default().bg(HEADER_BG));
     frame.render_widget(status, area);

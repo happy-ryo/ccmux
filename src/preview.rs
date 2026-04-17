@@ -22,7 +22,12 @@ pub struct Preview {
     pub file_path: Option<PathBuf>,
     pub lines: Vec<String>,
     pub highlighted_lines: Vec<Vec<StyledSpan>>,
+    /// Vertical scroll position (line index of the top visible line).
     pub scroll_offset: usize,
+    /// Horizontal scroll position (char count dropped from the left of
+    /// each rendered line). Enables viewing long lines that exceed the
+    /// preview panel width.
+    pub h_scroll_offset: usize,
     pub is_binary: bool,
     syntax_set: SyntaxSet,
     theme_set: ThemeSet,
@@ -35,6 +40,7 @@ impl Preview {
             lines: Vec::new(),
             highlighted_lines: Vec::new(),
             scroll_offset: 0,
+            h_scroll_offset: 0,
             is_binary: false,
             syntax_set: SyntaxSet::load_defaults_newlines(),
             theme_set: ThemeSet::load_defaults(),
@@ -49,6 +55,7 @@ impl Preview {
 
         self.file_path = Some(path.to_path_buf());
         self.scroll_offset = 0;
+        self.h_scroll_offset = 0;
         self.lines.clear();
         self.highlighted_lines.clear();
         self.is_binary = false;
@@ -148,6 +155,7 @@ impl Preview {
         self.lines.clear();
         self.highlighted_lines.clear();
         self.scroll_offset = 0;
+        self.h_scroll_offset = 0;
         self.is_binary = false;
     }
 
@@ -174,6 +182,26 @@ impl Preview {
     pub fn scroll_down(&mut self, amount: usize) {
         let max_offset = self.lines.len().saturating_sub(1);
         self.scroll_offset = (self.scroll_offset + amount).min(max_offset);
+    }
+
+    /// Scroll left by N chars. Clamps at column 0.
+    pub fn scroll_left(&mut self, amount: usize) {
+        self.h_scroll_offset = self.h_scroll_offset.saturating_sub(amount);
+    }
+
+    /// Scroll right by N chars. Clamped so there's always at least
+    /// a bit of text visible (we stop when h_scroll equals the widest
+    /// line minus 10 chars — keeps the user from scrolling off into
+    /// blank territory).
+    pub fn scroll_right(&mut self, amount: usize) {
+        let widest = self
+            .lines
+            .iter()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0);
+        let max_h = widest.saturating_sub(10);
+        self.h_scroll_offset = (self.h_scroll_offset + amount).min(max_h);
     }
 }
 

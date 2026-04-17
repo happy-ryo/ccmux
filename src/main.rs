@@ -23,7 +23,7 @@ fn main() -> Result<()> {
     // Detect if running inside another ccmux instance
     if std::env::var("CCMUX").is_ok() {
         eprintln!("ccmux: already running inside a ccmux pane (nested instance not allowed).");
-        eprintln!("       Open a new tab with Ctrl+T or split with Ctrl+D / Ctrl+E instead.");
+        eprintln!("       Open a new tab with Alt+T (or Ctrl+T) or split with Ctrl+D / Ctrl+E instead.");
         std::process::exit(1);
     }
 
