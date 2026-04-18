@@ -1,20 +1,22 @@
 # ccmux
 
-**Claude Code Multiplexer** — 複数の Claude Code インスタンスを TUI 分割ペインで管理。
+**Claude Code Multiplexer** — 複数の Claude Code インスタンスを TUI 分割ペインで管理する Rust 製 TUI ツール。
+
+> これは [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) のフォーク ([happy-ryo/ccmux](https://github.com/happy-ryo/ccmux)) です。上流の変更を取り込みつつ独自機能を先行して開発しており、npm では `ccmux-fork` として配布しています。ブランチ運用方針は [`BRANCHING.md`](https://github.com/happy-ryo/ccmux/blob/main/BRANCHING.md) を参照してください。
 
 ![ccmux スクリーンショット](/screenshot.png)
 
-## ccmux とは？
+## 概要
 
-ccmux は、複数の [Claude Code](https://docs.anthropic.com/en/docs/claude-code) セッションを並べて実行するための軽量ターミナルマルチプレクサです。tmux の Claude Code 特化版と考えてください。
+ccmux は [Claude Code](https://docs.anthropic.com/en/docs/claude-code) セッションを複数並列で動かすことに特化した軽量ターミナルマルチプレクサです。PTY の上に vt100 エミュレータを挟んだ薄いレイヤーで、分割ペイン・タブ・ファイルツリーを提供します。tmux の Claude Code ワークフローに寄せた版、と考えるとイメージしやすいかもしれません。
 
-## なぜ ccmux？
+## 特徴
 
-- **複数の Claude Code エージェントを同時実行** — 分割ペインで並列作業
-- **プロジェクトファイルを確認** — シンタックスハイライト付きプレビュー
-- **ターミナルだけで完結** — エディタ不要、シェルと Claude だけ
-- **爆速・軽量** — 単一バイナリ約 2MB、起動 0.5 秒、アイドル時 CPU ほぼ 0%
-- **Rust 製** — ゼロアロケーション描画、dirty フラグ差分更新、PTY リサイズキャッシュで最適化
+- 複数の Claude Code セッションを分割ペインで並列実行
+- ファイルツリーとシンタックスハイライト付きプレビュー
+- タブごとに独立したワークスペース
+- 単一バイナリ (約 2MB)、追加ランタイム不要
+- Windows / macOS / Linux 対応
 
 ## クイックスタート
 
@@ -33,9 +35,3 @@ ccmux
 - [**Claude 検出**](/ja/features#claude-検出) — Claude Code 実行中はペイン枠がオレンジに変化
 - [**テキスト選択**](/ja/features#テキスト選択とコピー) — ドラッグで選択、自動クリップボードコピー
 - [**スクロールバック**](/ja/features#ターミナルスクロールバック) — ペインごと 10,000 行の履歴
-
----
-
-## Claude Code を学ぶ
-
-Claude Code の使い方を体系的に学びたい方は [**Claude Code Academy**](https://claude-code-academy.dev) をご覧ください。
