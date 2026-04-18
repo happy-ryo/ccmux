@@ -76,7 +76,12 @@ pub struct EndpointName {
     kind: EndpointKind,
 }
 
+/// Both variants exist on every platform so `kind()` / pattern matches
+/// compile everywhere, but only one is actually constructed per target
+/// (Pipe on Windows, Socket on Unix). Allow dead_code so the idle side
+/// doesn't fail clippy.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 pub enum EndpointKind {
     Pipe,
     Socket,
