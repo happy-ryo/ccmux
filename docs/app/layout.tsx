@@ -41,11 +41,11 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           navbar={
             <Navbar
               logo={logo}
-              projectLink="https://github.com/Shin-sibainu/ccmux"
+              projectLink="https://github.com/happy-ryo/ccmux"
             />
           }
           pageMap={await getPageMap()}
-          docsRepositoryBase="https://github.com/Shin-sibainu/ccmux/tree/master/docs"
+          docsRepositoryBase="https://github.com/happy-ryo/ccmux/tree/main/docs"
           footer={<Footer>MIT License © ccmux — <a href="https://claude-code-academy.dev" target="_blank" rel="noopener" style={{color: '#d97757'}}>Claude Code Academy</a></Footer>}
         >
           {children}

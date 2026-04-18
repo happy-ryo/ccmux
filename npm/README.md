@@ -1,11 +1,19 @@
-# ccmux
+# ccmux-fork
 
-Claude Code Multiplexer — manage multiple Claude Code instances in TUI split panes.
+Claude Code Multiplexer (fork) — manage multiple Claude Code instances in TUI split panes.
+
+> This is a fork of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) published as `ccmux-fork`. It develops independent features while periodically syncing upstream.
 
 ## Install
 
 ```bash
-npm install -g ccmux-cli
+npm install -g ccmux-fork
+```
+
+Migrating from the upstream `ccmux-cli`:
+
+```bash
+npm uninstall -g ccmux-cli && npm install -g ccmux-fork
 ```
 
 ## Usage
@@ -25,10 +33,10 @@ ccmux /path/to/project   # Launch in specified directory
 - Terminal scrollback (10,000 lines)
 - Cross-platform (Windows, macOS, Linux)
 
-## Documentation
+## Links
 
-- [Docs](https://shin-sibainu.github.io/ccmux/)
-- [GitHub](https://github.com/Shin-sibainu/ccmux)
+- [GitHub (this fork)](https://github.com/happy-ryo/ccmux)
+- [Upstream](https://github.com/Shin-sibainu/ccmux)
 
 ## License
 

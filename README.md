@@ -1,8 +1,10 @@
-# ccmux
+# ccmux (fork)
 
 Claude Code Multiplexer — manage multiple Claude Code instances in TUI split panes.
 
 A lightweight terminal multiplexer built specifically for running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions side-by-side.
+
+> **This is a fork** of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) that develops independent features while periodically syncing upstream. Installs as the separate npm package `ccmux-fork`. See [`BRANCHING.md`](./BRANCHING.md) for the fork policy.
 
 ![ccmux screenshot](screenshot.png)
 
@@ -25,12 +27,14 @@ A lightweight terminal multiplexer built specifically for running multiple [Clau
 ### Via npm (recommended)
 
 ```bash
-npm install -g ccmux-cli
+npm install -g ccmux-fork
 ```
+
+> Previously installed the upstream `ccmux-cli`? Migrate with: `npm uninstall -g ccmux-cli && npm install -g ccmux-fork`
 
 ### Download binary
 
-Download the latest binary from [Releases](https://github.com/Shin-sibainu/ccmux/releases):
+Download the latest binary from [Releases](https://github.com/happy-ryo/ccmux/releases):
 
 | Platform | File |
 |----------|------|
@@ -46,7 +50,7 @@ Download the latest binary from [Releases](https://github.com/Shin-sibainu/ccmux
 ### From source
 
 ```bash
-git clone https://github.com/Shin-sibainu/ccmux.git
+git clone https://github.com/happy-ryo/ccmux.git
 cd ccmux
 cargo build --release
 # Binary at target/release/ccmux (or ccmux.exe on Windows)
