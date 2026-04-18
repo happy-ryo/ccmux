@@ -37,10 +37,9 @@ impl VersionInfo {
 /// Spawn a background thread to check npm for a newer version.
 pub fn spawn_check(info: VersionInfo) {
     thread::spawn(move || {
-        let _ = thread::sleep(Duration::from_secs(1)); // delay so it doesn't compete with startup
-        match fetch_latest() {
-            Ok(version) => info.set(version),
-            Err(_) => {}
+        thread::sleep(Duration::from_secs(1)); // delay so it doesn't compete with startup
+        if let Ok(version) = fetch_latest() {
+            info.set(version);
         }
     });
 }

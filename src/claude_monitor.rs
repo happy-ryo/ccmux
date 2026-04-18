@@ -199,7 +199,7 @@ impl ClaudeMonitor {
             // Locate or re-locate the JSONL file.
             // Full directory scan every 5s or when our path disappears,
             // to detect new sessions (new JSONL files).
-            let path_missing = monitor.jsonl_path.as_ref().map_or(true, |p| !p.exists());
+            let path_missing = monitor.jsonl_path.as_ref().is_none_or(|p| !p.exists());
             let stale_scan = monitor.last_rescan.elapsed() > Duration::from_secs(5);
             if path_missing || stale_scan {
                 monitor.last_rescan = Instant::now();
@@ -489,7 +489,7 @@ fn find_jsonl_path(cwd: &Path) -> Option<PathBuf> {
     let entries = std::fs::read_dir(&project_dir).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().map_or(false, |e| e == "jsonl") {
+        if path.extension().is_some_and(|e| e == "jsonl") {
             if let Ok(meta) = entry.metadata() {
                 if let Ok(mtime) = meta.modified() {
                     match &latest {
@@ -604,8 +604,10 @@ mod tests {
     fn test_context_limit_opus_4_6_is_1m() {
         // Claude Code logs the plain model id without the [1m] suffix
         // even though Opus 4.6 ships with 1M context by default.
-        let mut state = ClaudeState::default();
-        state.model = Some("claude-opus-4-6".to_string());
+        let mut state = ClaudeState {
+            model: Some("claude-opus-4-6".to_string()),
+            ..Default::default()
+        };
         assert_eq!(state.context_limit(), 1_000_000);
 
         // Explicit 1m variant suffix still works.

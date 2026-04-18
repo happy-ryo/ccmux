@@ -6,7 +6,10 @@
 //! environment variable so in-pane clients (the secretary, etc.) can
 //! find the right server.
 
-use anyhow::{anyhow, Context, Result};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::{anyhow, Result};
+#[cfg(unix)]
 use std::path::PathBuf;
 
 pub const ENV_SOCKET: &str = "CCMUX_SOCKET";
@@ -80,12 +83,14 @@ pub enum EndpointKind {
 }
 
 impl EndpointName {
+    #[cfg(windows)]
     pub fn pipe(name: impl Into<String>) -> Self {
         Self {
             repr: name.into(),
             kind: EndpointKind::Pipe,
         }
     }
+    #[cfg(unix)]
     pub fn socket(path: PathBuf) -> Self {
         Self {
             repr: path.display().to_string(),
