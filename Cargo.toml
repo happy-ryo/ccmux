@@ -21,3 +21,4 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 interprocess = "2"
 oneshot = "0.1"
+subtle = "2"

@@ -18,7 +18,9 @@
 //!   indefinitely.
 
 use std::io::{BufRead, BufReader, Write};
-use std::sync::mpsc::Sender;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -26,30 +28,65 @@ use anyhow::{Context, Result};
 use interprocess::local_socket::{prelude::*, ListenerOptions, Stream};
 
 use super::endpoint::{EndpointKind, EndpointName};
-use super::{Request, Response};
+use super::{Request, Response, APP_REPLY_TIMEOUT};
 use crate::app::AppCommand;
 
-/// How long a worker waits for the App's event loop to process one
-/// command before giving up. The App drains commands every frame
-/// (~30Hz), so 5s is orders of magnitude more than the expected latency
-/// — a timeout here means the App is genuinely wedged.
-const APP_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
+/// Upper bound for waiting on the accept thread during shutdown.
+/// `Drop` must not hang on an uncooperative accept thread — if the
+/// self-connect wakeup somehow fails and the thread stays blocked in
+/// `listener.incoming()`, we'd rather leak the thread (the OS reaps
+/// it on process exit) than stall the whole process from teardown.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct IpcServer {
     pub endpoint: EndpointName,
-    // We intentionally don't hold a JoinHandle. The accept thread lives
-    // until the process exits, at which point the OS reclaims the pipe
-    // or socket. Orderly shutdown is not needed in v1.
+    stop: Arc<AtomicBool>,
+    /// Signaled once the accept thread returns. Using a channel rather
+    /// than `JoinHandle::join` so Drop can wait with a timeout.
+    done_rx: Option<mpsc::Receiver<()>>,
 }
 
 impl Drop for IpcServer {
     fn drop(&mut self) {
-        // Unix socket files are filesystem entries and would otherwise
-        // accumulate in /tmp on abnormal exit. Named Pipes on Windows
-        // are reclaimed by the OS when the owning process exits.
+        // Orderly shutdown so the accept thread exits before we remove
+        // the socket file, avoiding the "stale listener, new path"
+        // rebinding race: (1) flip the stop flag, (2) self-connect to
+        // unblock the blocked `accept()` call, (3) wait for the thread
+        // to signal completion (bounded), then (4) unlink on Unix.
+        self.stop.store(true, Ordering::Release);
+        unblock_accept(&self.endpoint);
+        if let Some(rx) = self.done_rx.take() {
+            let _ = rx.recv_timeout(SHUTDOWN_TIMEOUT);
+        }
         if self.endpoint.kind() == EndpointKind::Socket {
             let _ = std::fs::remove_file(self.endpoint.as_str());
         }
+    }
+}
+
+/// Open and immediately drop a client connection to the server's own
+/// endpoint. This wakes the blocked `Listener::incoming()` call so the
+/// accept thread can observe the stop flag and exit. Any error is
+/// ignored — the endpoint may already be torn down from an earlier
+/// Drop pass.
+fn unblock_accept(endpoint: &EndpointName) {
+    let name = match endpoint_to_name(endpoint) {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+    let _ = Stream::connect(name);
+}
+
+fn endpoint_to_name(endpoint: &EndpointName) -> Result<interprocess::local_socket::Name<'_>> {
+    #[cfg(windows)]
+    {
+        use interprocess::os::windows::local_socket::NamedPipe;
+        Ok(endpoint.as_str().to_fs_name::<NamedPipe>()?)
+    }
+    #[cfg(unix)]
+    {
+        use interprocess::local_socket::GenericFilePath;
+        Ok(endpoint.as_str().to_fs_name::<GenericFilePath>()?)
     }
 }
 
@@ -63,19 +100,37 @@ impl IpcServer {
         let listener = bind_listener(&endpoint)
             .with_context(|| format!("bind IPC endpoint {}", endpoint.as_str()))?;
 
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_thread = stop.clone();
         let token_for_thread = session_token.clone();
         let endpoint_for_log = endpoint.as_str().to_string();
+        let (done_tx, done_rx) = mpsc::channel();
         thread::Builder::new()
             .name("ccmux-ipc-accept".into())
             .spawn(move || {
-                accept_loop(listener, command_tx, token_for_thread, endpoint_for_log);
+                accept_loop(
+                    listener,
+                    command_tx,
+                    token_for_thread,
+                    endpoint_for_log,
+                    stop_for_thread,
+                );
+                // Signal Drop that the accept loop has returned. If the
+                // receiver is already gone (Drop finished first because
+                // of the timeout) the send errors out silently; we
+                // don't care.
+                let _ = done_tx.send(());
             })
             .context("spawn IPC accept thread")?;
 
         // Token is consumed by the accept thread via `token_for_thread`;
         // we don't need to keep a copy on the struct.
         drop(session_token);
-        Ok(Self { endpoint })
+        Ok(Self {
+            endpoint,
+            stop,
+            done_rx: Some(done_rx),
+        })
     }
 }
 
@@ -108,13 +163,24 @@ fn accept_loop(
     command_tx: Sender<AppCommand>,
     session_token: String,
     endpoint_for_log: String,
+    stop: Arc<AtomicBool>,
 ) {
     for conn in listener.incoming() {
+        // The self-connect triggered by IpcServer::drop returns here;
+        // observing the stop flag before handle_connection lets us
+        // exit cleanly instead of serving one last spurious request.
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
         let conn = match conn {
             Ok(c) => c,
             Err(e) => {
-                // A single failed accept shouldn't kill the server —
-                // the OS can recover from transient conditions.
+                // Accept failures on a shutdown path are expected (the
+                // listener got unlinked under us); on a normal path
+                // they're transient and shouldn't kill the server.
+                if stop.load(Ordering::Acquire) {
+                    return;
+                }
                 eprintln!("ccmux IPC: accept failed on {endpoint_for_log}: {e}");
                 continue;
             }

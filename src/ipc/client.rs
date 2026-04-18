@@ -8,19 +8,13 @@
 use std::io::{BufRead, BufReader, Write};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use interprocess::local_socket::{prelude::*, Stream};
+use subtle::ConstantTimeEq;
 
 use super::endpoint::{EndpointName, ENV_TOKEN};
-use super::{Request, Response};
-
-/// How long we wait for a response before giving up. The server replies
-/// within milliseconds unless the App is genuinely wedged; this value
-/// is a belt-and-braces safety net so a misbehaving server can't hang
-/// a shell script that invokes `ccmux send`.
-const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+use super::{Request, Response, RESPONSE_TIMEOUT};
 
 /// Send a single request to the endpoint and return the response.
 ///
@@ -114,13 +108,24 @@ fn write_request_line<W: Write>(w: &mut W, req: &Request) -> Result<()> {
 /// to a ccmux instance that doesn't own the current shell — most likely
 /// the PID got re-used and a stale socket path was inherited. Refuse
 /// rather than silently deliver the command to the wrong process.
+///
+/// Uses a constant-time comparison; same-user tokens are not a secrecy
+/// boundary (see the crate-level threat model), but comparing byte-by-
+/// byte in constant time is the cheap hardening default.
 fn verify_session_token(server_token: &str, expected: Option<&str>) -> Result<()> {
     match expected {
-        Some(e) if e == server_token => Ok(()),
-        Some(_) => Err(anyhow!(
-            "session token mismatch; {ENV_SOCKET} likely points to a different ccmux instance",
-            ENV_SOCKET = super::endpoint::ENV_SOCKET
-        )),
+        Some(e) => {
+            let a = server_token.as_bytes();
+            let b = e.as_bytes();
+            if a.len() == b.len() && bool::from(a.ct_eq(b)) {
+                Ok(())
+            } else {
+                Err(anyhow!(
+                    "session token mismatch; {ENV_SOCKET} likely points to a different ccmux instance",
+                    ENV_SOCKET = super::endpoint::ENV_SOCKET
+                ))
+            }
+        }
         None => Err(anyhow!(
             "{ENV_TOKEN} not set; are you running inside ccmux?"
         )),
@@ -180,6 +185,30 @@ mod tests {
     fn verify_session_token_rejects_missing_env() {
         let err = verify_session_token("abc-123", None).unwrap_err();
         assert!(err.to_string().contains("CCMUX_TOKEN"), "got: {err}");
+    }
+
+    #[test]
+    fn verify_session_token_rejects_length_mismatch() {
+        let err = verify_session_token("short", Some("much-longer-token")).unwrap_err();
+        assert!(err.to_string().contains("mismatch"), "got: {err}");
+    }
+
+    #[test]
+    fn verify_session_token_rejects_whitespace_wrap() {
+        // Whitespace is not trimmed; comparison is exact.
+        assert!(verify_session_token("abc", Some(" abc")).is_err());
+        assert!(verify_session_token("abc", Some("abc\n")).is_err());
+    }
+
+    #[test]
+    fn verify_session_token_unicode_roundtrip() {
+        assert!(verify_session_token("トークン", Some("トークン")).is_ok());
+        assert!(verify_session_token("トークン", Some("トーケン")).is_err());
+    }
+
+    #[test]
+    fn verify_session_token_rejects_empty_server_token() {
+        assert!(verify_session_token("", Some("nonempty")).is_err());
     }
 
     #[test]

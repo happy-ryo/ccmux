@@ -27,6 +27,23 @@
 //! trust model that's already inside the boundary.
 
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+/// Server-side budget for waking the App event loop with a single
+/// command. The App drains commands every frame (~30Hz), so 5s is
+/// orders of magnitude more than the expected latency — a timeout
+/// here means the App is genuinely wedged.
+pub(crate) const APP_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Client margin for connect + JSON write/read + scheduling on top of
+/// the server's [`APP_REPLY_TIMEOUT`]. Kept small so `ccmux send` in
+/// a shell script aborts within a few seconds if something is wrong.
+pub(crate) const CLIENT_MARGIN: Duration = Duration::from_secs(5);
+
+/// Total time the client waits for a full response before erroring out.
+/// Derived so the two timeouts stay in sync if one is tuned later.
+pub(crate) const RESPONSE_TIMEOUT: Duration =
+    Duration::from_secs(APP_REPLY_TIMEOUT.as_secs() + CLIENT_MARGIN.as_secs());
 
 pub mod client;
 pub mod endpoint;
