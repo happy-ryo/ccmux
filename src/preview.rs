@@ -2,9 +2,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
+use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
-use syntect::easy::HighlightLines;
 
 const MAX_PREVIEW_LINES: usize = 500;
 const BINARY_CHECK_BYTES: usize = 8192;

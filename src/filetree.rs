@@ -47,7 +47,12 @@ impl FileEntry {
 /// Maximum entries per directory to prevent DoS from huge directories.
 const MAX_ENTRIES_PER_DIR: usize = 500;
 
-fn scan_directory_filtered(path: &Path, depth: usize, max_depth: usize, show_hidden: bool) -> Vec<FileEntry> {
+fn scan_directory_filtered(
+    path: &Path,
+    depth: usize,
+    max_depth: usize,
+    show_hidden: bool,
+) -> Vec<FileEntry> {
     let entries = match fs::read_dir(path) {
         Ok(entries) => entries,
         Err(_) => return Vec::new(),
@@ -63,10 +68,7 @@ fn scan_directory_filtered(path: &Path, depth: usize, max_depth: usize, show_hid
         }
 
         let entry_path = entry.path();
-        let name = entry
-            .file_name()
-            .to_string_lossy()
-            .to_string();
+        let name = entry.file_name().to_string_lossy().to_string();
 
         // Always skip .git (too large and noisy)
         if name == ".git" {
@@ -234,7 +236,12 @@ impl FileTree {
         if entry.path == path && entry.is_dir {
             entry.is_expanded = !entry.is_expanded;
             if entry.is_expanded && entry.children.is_empty() {
-                entry.children = scan_directory_filtered(&entry.path, entry.depth + 1, entry.depth + 2, show_hidden);
+                entry.children = scan_directory_filtered(
+                    &entry.path,
+                    entry.depth + 1,
+                    entry.depth + 2,
+                    show_hidden,
+                );
             }
             return true;
         }
@@ -291,10 +298,7 @@ mod tests {
     fn test_scan_directory_skips_git() {
         let entries = scan_directory_filtered(Path::new("."), 0, 1, true);
         for entry in &entries {
-            assert!(
-                entry.name != ".git",
-                ".git should always be skipped"
-            );
+            assert!(entry.name != ".git", ".git should always be skipped");
         }
     }
 

@@ -64,7 +64,11 @@ impl ClaudeState {
 
     /// Todo completion stats: (completed, total).
     pub fn todo_progress(&self) -> (usize, usize) {
-        let completed = self.todos.iter().filter(|t| t.status == "completed").count();
+        let completed = self
+            .todos
+            .iter()
+            .filter(|t| t.status == "completed")
+            .count();
         (completed, self.todos.len())
     }
 
@@ -195,10 +199,7 @@ impl ClaudeMonitor {
             // Locate or re-locate the JSONL file.
             // Full directory scan every 5s or when our path disappears,
             // to detect new sessions (new JSONL files).
-            let path_missing = monitor
-                .jsonl_path
-                .as_ref()
-                .map_or(true, |p| !p.exists());
+            let path_missing = monitor.jsonl_path.as_ref().map_or(true, |p| !p.exists());
             let stale_scan = monitor.last_rescan.elapsed() > Duration::from_secs(5);
             if path_missing || stale_scan {
                 monitor.last_rescan = Instant::now();
@@ -317,7 +318,10 @@ fn process_event(monitor: &mut PaneMonitor, line: &str) {
             }
 
             // Model name
-            if let Some(model) = message.and_then(|m| m.get("model")).and_then(|v| v.as_str()) {
+            if let Some(model) = message
+                .and_then(|m| m.get("model"))
+                .and_then(|v| v.as_str())
+            {
                 monitor.state.model = Some(model.to_string());
             }
 
@@ -342,8 +346,14 @@ fn process_event(monitor: &mut PaneMonitor, line: &str) {
 
             if should_count {
                 if let Some(usage) = message.and_then(|m| m.get("usage")) {
-                    let input = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let output = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let input = usage
+                        .get("input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let output = usage
+                        .get("output_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
                     let cache_read = usage
                         .get("cache_read_input_tokens")
                         .and_then(|v| v.as_u64())
@@ -385,9 +395,7 @@ fn process_event(monitor: &mut PaneMonitor, line: &str) {
 
                             // Sub-agent tools (real name in JSONL is "Agent", "Task" was old name)
                             if name == "Agent" || name == "Task" {
-                                if let Some(task_id) =
-                                    block.get("id").and_then(|v| v.as_str())
-                                {
+                                if let Some(task_id) = block.get("id").and_then(|v| v.as_str()) {
                                     let subagent_type = block
                                         .get("input")
                                         .and_then(|i| i.get("subagent_type"))
@@ -397,8 +405,7 @@ fn process_event(monitor: &mut PaneMonitor, line: &str) {
                                     monitor
                                         .active_task_ids
                                         .insert(task_id.to_string(), subagent_type);
-                                    monitor.state.subagent_count =
-                                        monitor.active_task_ids.len();
+                                    monitor.state.subagent_count = monitor.active_task_ids.len();
                                     monitor.state.subagent_types =
                                         monitor.active_task_ids.values().cloned().collect();
                                 }
@@ -415,14 +422,8 @@ fn process_event(monitor: &mut PaneMonitor, line: &str) {
                                         .iter()
                                         .filter_map(|t| {
                                             Some(TodoItem {
-                                                content: t
-                                                    .get("content")?
-                                                    .as_str()?
-                                                    .to_string(),
-                                                status: t
-                                                    .get("status")?
-                                                    .as_str()?
-                                                    .to_string(),
+                                                content: t.get("content")?.as_str()?.to_string(),
+                                                status: t.get("status")?.as_str()?.to_string(),
                                             })
                                         })
                                         .collect();
@@ -446,8 +447,7 @@ fn process_event(monitor: &mut PaneMonitor, line: &str) {
                     if block.get("type").and_then(|v| v.as_str()) == Some("tool_result") {
                         has_tool_result = true;
                         // If this tool_result is for a Task, decrement the active set
-                        if let Some(tool_use_id) =
-                            block.get("tool_use_id").and_then(|v| v.as_str())
+                        if let Some(tool_use_id) = block.get("tool_use_id").and_then(|v| v.as_str())
                         {
                             if monitor.active_task_ids.remove(tool_use_id).is_some() {
                                 monitor.state.subagent_count = monitor.active_task_ids.len();
