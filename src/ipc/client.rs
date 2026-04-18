@@ -6,12 +6,14 @@
 //! request per connection, closed by the client dropping the stream.
 
 use std::io::{BufRead, BufReader, Write};
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use interprocess::local_socket::{prelude::*, Stream};
 
-use super::endpoint::EndpointName;
+use super::endpoint::{EndpointName, ENV_TOKEN};
 use super::{Request, Response};
 
 /// How long we wait for a response before giving up. The server replies
@@ -21,16 +23,42 @@ use super::{Request, Response};
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Send a single request to the endpoint and return the response.
+///
+/// The blocking read on `interprocess::Stream` has no portable timeout
+/// API in 2.x, so we run `converse` on a helper thread and wait on a
+/// channel with [`RESPONSE_TIMEOUT`]. If the server deadlocks, the main
+/// thread unblocks and returns an error instead of hanging forever —
+/// the helper thread is detached and cleaned up by the OS when the
+/// client process exits.
 pub fn send_request(endpoint: &EndpointName, request: &Request) -> Result<Response> {
-    let name = make_connection_name(endpoint)?;
-    let conn =
-        Stream::connect(name).with_context(|| format!("connect to {}", endpoint.as_str()))?;
-    // interprocess 2.4 exposes read/write timeouts through the
-    // platform-specific wrappers; at the portable surface we rely on
-    // the blocking default. Blocking is fine here because the server's
-    // per-connection timeout already bounds our wait.
-    let _ = RESPONSE_TIMEOUT; // reserved for a future timeout hookup
-    converse(conn, request)
+    let name_string = endpoint.as_str().to_string();
+    let endpoint_clone = endpoint.clone();
+    let request_clone = request.clone();
+    let (tx, rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("ccmux-ipc-client".into())
+        .spawn(move || {
+            let result = (|| -> Result<Response> {
+                let name = make_connection_name(&endpoint_clone)?;
+                let conn = Stream::connect(name)
+                    .with_context(|| format!("connect to {}", endpoint_clone.as_str()))?;
+                converse(conn, &request_clone)
+            })();
+            let _ = tx.send(result);
+        })
+        .context("spawn IPC client thread")?;
+
+    match rx.recv_timeout(RESPONSE_TIMEOUT) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(anyhow!(
+            "no response from ccmux within {:?} (endpoint: {})",
+            RESPONSE_TIMEOUT,
+            name_string
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(anyhow!("IPC client thread panicked"))
+        }
+    }
 }
 
 fn make_connection_name(endpoint: &EndpointName) -> Result<interprocess::local_socket::Name<'_>> {
@@ -56,7 +84,9 @@ fn converse(conn: Stream, request: &Request) -> Result<Response> {
     write_request_line(reader.get_mut(), &hello)?;
     let hello_resp = read_response_line(&mut reader)?;
     match hello_resp {
-        Response::Hello { .. } => {}
+        Response::Hello { session_token, .. } => {
+            verify_session_token(&session_token, std::env::var(ENV_TOKEN).ok().as_deref())?;
+        }
         Response::Err { message } => {
             return Err(anyhow!("server refused hello: {message}"));
         }
@@ -77,6 +107,26 @@ fn write_request_line<W: Write>(w: &mut W, req: &Request) -> Result<()> {
     w.write_all(json.as_bytes())?;
     w.flush()?;
     Ok(())
+}
+
+/// Compare the server-provided session token with the expected one
+/// that the parent ccmux published to `CCMUX_TOKEN`.
+///
+/// A mismatch means the `CCMUX_SOCKET` path we connected through points
+/// to a ccmux instance that doesn't own the current shell — most likely
+/// the PID got re-used and a stale socket path was inherited. Refuse
+/// rather than silently deliver the command to the wrong process.
+fn verify_session_token(server_token: &str, expected: Option<&str>) -> Result<()> {
+    match expected {
+        Some(e) if e == server_token => Ok(()),
+        Some(_) => Err(anyhow!(
+            "session token mismatch; {ENV_SOCKET} likely points to a different ccmux instance",
+            ENV_SOCKET = super::endpoint::ENV_SOCKET
+        )),
+        None => Err(anyhow!(
+            "{ENV_TOKEN} not set; are you running inside ccmux?"
+        )),
+    }
 }
 
 fn read_response_line<R: BufRead>(r: &mut R) -> Result<Response> {
@@ -115,6 +165,23 @@ mod tests {
         let mut reader = std::io::BufReader::new(input);
         let resp = read_response_line(&mut reader).unwrap();
         assert!(matches!(resp, Response::Ok { .. }));
+    }
+
+    #[test]
+    fn verify_session_token_matches() {
+        assert!(verify_session_token("abc-123", Some("abc-123")).is_ok());
+    }
+
+    #[test]
+    fn verify_session_token_rejects_mismatch() {
+        let err = verify_session_token("abc-123", Some("xyz-999")).unwrap_err();
+        assert!(err.to_string().contains("mismatch"), "got: {err}");
+    }
+
+    #[test]
+    fn verify_session_token_rejects_missing_env() {
+        let err = verify_session_token("abc-123", None).unwrap_err();
+        assert!(err.to_string().contains("CCMUX_TOKEN"), "got: {err}");
     }
 
     #[test]

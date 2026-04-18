@@ -91,13 +91,10 @@ fn main() -> Result<()> {
     std::env::set_var(ipc::endpoint::ENV_SOCKET, ipc_endpoint.as_str());
     std::env::set_var("CCMUX", "1");
 
-    // Create app (spawns the initial pane, which captures the env above).
-    let mut app = app::App::new(size.height, size.width)?;
-
     // Session token derived from the process's start nanoseconds so a
     // client connecting through a stale socket file whose PID got
     // re-used cannot be silently fooled — the server echoes this token
-    // back on hello, and the client verifies it against its own expect.
+    // on hello, and the client verifies it against `CCMUX_TOKEN`.
     let session_token = format!(
         "{}-{}",
         our_pid,
@@ -106,16 +103,28 @@ fn main() -> Result<()> {
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     );
-    if let Err(e) = ipc::server::IpcServer::spawn(
+    // Publish the token before spawning panes so children inherit it.
+    std::env::set_var(ipc::endpoint::ENV_TOKEN, &session_token);
+
+    // Create app (spawns the initial pane, which captures the env above).
+    let mut app = app::App::new(size.height, size.width)?;
+
+    // Keep the server handle alive for the process lifetime; its Drop
+    // impl cleans up the Unix socket file on exit.
+    let _ipc_server = match ipc::server::IpcServer::spawn(
         ipc_endpoint.clone(),
         app.command_tx.clone(),
         session_token.clone(),
     ) {
-        // IPC is non-essential for the TUI itself — fail soft so users
-        // without the required socket permissions can still use ccmux
-        // as a plain multiplexer.
-        eprintln!("ccmux: IPC server failed to start ({e}); external commands disabled.");
-    }
+        Ok(server) => Some(server),
+        Err(e) => {
+            // IPC is non-essential for the TUI itself — fail soft so users
+            // without the required socket permissions can still use ccmux
+            // as a plain multiplexer.
+            eprintln!("ccmux: IPC server failed to start ({e}); external commands disabled.");
+            None
+        }
+    };
 
     // Phase 1 (--exec): queue the requested command on the initial focused
     // pane. The command will be flushed into the PTY by the main event

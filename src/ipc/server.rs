@@ -25,7 +25,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use interprocess::local_socket::{prelude::*, ListenerOptions, Stream};
 
-use super::endpoint::EndpointName;
+use super::endpoint::{EndpointKind, EndpointName};
 use super::{Direction, PaneRef, Request, Response};
 use crate::app::AppCommand;
 
@@ -37,10 +37,20 @@ const APP_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct IpcServer {
     pub endpoint: EndpointName,
-    pub session_token: String,
     // We intentionally don't hold a JoinHandle. The accept thread lives
     // until the process exits, at which point the OS reclaims the pipe
     // or socket. Orderly shutdown is not needed in v1.
+}
+
+impl Drop for IpcServer {
+    fn drop(&mut self) {
+        // Unix socket files are filesystem entries and would otherwise
+        // accumulate in /tmp on abnormal exit. Named Pipes on Windows
+        // are reclaimed by the OS when the owning process exits.
+        if self.endpoint.kind() == EndpointKind::Socket {
+            let _ = std::fs::remove_file(self.endpoint.as_str());
+        }
+    }
 }
 
 impl IpcServer {
@@ -62,10 +72,10 @@ impl IpcServer {
             })
             .context("spawn IPC accept thread")?;
 
-        Ok(Self {
-            endpoint,
-            session_token,
-        })
+        // Token is consumed by the accept thread via `token_for_thread`;
+        // we don't need to keep a copy on the struct.
+        drop(session_token);
+        Ok(Self { endpoint })
     }
 }
 
@@ -457,5 +467,37 @@ mod tests {
             Response::Err { message } => assert!(message.contains("hello")),
             other => panic!("expected Err, got {other:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn drop_removes_unix_socket_file() {
+        use std::path::PathBuf;
+
+        // Bind on a unique temp path so the test doesn't race with a
+        // real ccmux instance or other tests.
+        let dir = std::env::temp_dir().join(format!(
+            "ccmux-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock_path: PathBuf = dir.join("ccmux-test.sock");
+        let endpoint = EndpointName::socket(sock_path.clone());
+
+        let (tx, _rx) = mpsc::channel::<AppCommand>();
+        let server = IpcServer::spawn(endpoint, tx, "test-token".into()).unwrap();
+
+        // Socket file should exist after binding.
+        assert!(sock_path.exists(), "socket file not created");
+
+        // Dropping IpcServer should remove it.
+        drop(server);
+        assert!(!sock_path.exists(), "socket file not removed on drop");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
