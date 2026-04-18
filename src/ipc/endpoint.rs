@@ -10,6 +10,7 @@ use anyhow::{anyhow, Context, Result};
 use std::path::PathBuf;
 
 pub const ENV_SOCKET: &str = "CCMUX_SOCKET";
+pub const ENV_TOKEN: &str = "CCMUX_TOKEN";
 
 /// Compute the IPC endpoint name for a ccmux instance with the given PID.
 ///

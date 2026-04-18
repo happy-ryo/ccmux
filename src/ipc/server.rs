@@ -25,7 +25,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use interprocess::local_socket::{prelude::*, ListenerOptions, Stream};
 
-use super::endpoint::EndpointName;
+use super::endpoint::{EndpointKind, EndpointName};
 use super::{Direction, PaneRef, Request, Response};
 use crate::app::AppCommand;
 
@@ -37,10 +37,20 @@ const APP_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct IpcServer {
     pub endpoint: EndpointName,
-    pub session_token: String,
     // We intentionally don't hold a JoinHandle. The accept thread lives
     // until the process exits, at which point the OS reclaims the pipe
     // or socket. Orderly shutdown is not needed in v1.
+}
+
+impl Drop for IpcServer {
+    fn drop(&mut self) {
+        // Unix socket files are filesystem entries and would otherwise
+        // accumulate in /tmp on abnormal exit. Named Pipes on Windows
+        // are reclaimed by the OS when the owning process exits.
+        if self.endpoint.kind() == EndpointKind::Socket {
+            let _ = std::fs::remove_file(self.endpoint.as_str());
+        }
+    }
 }
 
 impl IpcServer {
@@ -62,10 +72,10 @@ impl IpcServer {
             })
             .context("spawn IPC accept thread")?;
 
-        Ok(Self {
-            endpoint,
-            session_token,
-        })
+        // Token is consumed by the accept thread via `token_for_thread`;
+        // we don't need to keep a copy on the struct.
+        drop(session_token);
+        Ok(Self { endpoint })
     }
 }
 
