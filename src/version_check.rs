@@ -59,9 +59,14 @@ fn fetch_latest() -> Result<String, Box<dyn std::error::Error>> {
 }
 
 /// Compare semver-like versions (simple major.minor.patch).
+/// Prerelease suffix (e.g. "-fork.1") is stripped before comparison, matching
+/// what the npm `latest` tag tracks — we never surface a prerelease as an update.
 fn is_newer(latest: &str, current: &str) -> bool {
     let parse = |s: &str| -> Vec<u32> {
         s.trim_start_matches('v')
+            .split('-')
+            .next()
+            .unwrap_or("")
             .split('.')
             .filter_map(|p| p.parse().ok())
             .collect()
@@ -80,5 +85,14 @@ mod tests {
         assert!(is_newer("0.3.1", "0.3.0"));
         assert!(!is_newer("0.3.0", "0.3.0"));
         assert!(!is_newer("0.2.0", "0.3.0"));
+    }
+
+    #[test]
+    fn test_is_newer_with_prerelease() {
+        // Prerelease suffix is ignored; only major.minor.patch is compared.
+        assert!(!is_newer("0.5.5-fork.1", "0.5.5"));
+        assert!(!is_newer("0.5.5", "0.5.5-fork.1"));
+        assert!(is_newer("0.6.0-fork.1", "0.5.9"));
+        assert!(!is_newer("0.5.4-fork.1", "0.5.5"));
     }
 }

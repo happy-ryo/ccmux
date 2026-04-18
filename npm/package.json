@@ -1,6 +1,6 @@
 {
   "name": "ccmux-fork",
-  "version": "0.5.4",
+  "version": "0.5.5-fork.1",
   "description": "Claude Code Multiplexer (fork) — manage multiple Claude Code instances in TUI split panes",
   "bin": {
     "ccmux": "bin/cli.js"
