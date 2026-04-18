@@ -4,24 +4,22 @@ import { getPageMap } from 'nextra/page-map'
 import 'nextra-theme-docs/style.css'
 import './globals.css'
 
-const siteUrl = 'https://shin-sibainu.github.io/ccmux/docs'
+const siteUrl = 'https://happy-ryo.github.io/ccmux/docs'
 
 export const metadata = {
-  title: 'ccmux — Claude Code Multiplexer',
-  description: 'Manage multiple Claude Code instances in TUI split panes',
+  title: 'ccmux-fork — Claude Code Multiplexer (fork)',
+  description: 'Fork of ccmux with independent development. Manage multiple Claude Code instances in TUI split panes.',
   openGraph: {
-    title: 'ccmux — Claude Code Multiplexer',
-    description: 'Manage multiple Claude Code instances in TUI split panes. Rust-powered terminal multiplexer with tabs, file tree, and syntax-highlighted preview.',
+    title: 'ccmux-fork — Claude Code Multiplexer (fork)',
+    description: 'Fork of ccmux with independent development. Rust-powered terminal multiplexer with tabs, file tree, and syntax-highlighted preview.',
     url: siteUrl,
-    siteName: 'ccmux',
-    images: [{ url: `${siteUrl}/og.png`, width: 1200, height: 630, alt: 'ccmux — Claude Code Multiplexer' }],
+    siteName: 'ccmux-fork',
     type: 'website',
   },
   twitter: {
-    card: 'summary_large_image',
-    title: 'ccmux — Claude Code Multiplexer',
-    description: 'Manage multiple Claude Code instances in TUI split panes.',
-    images: [`${siteUrl}/og.png`],
+    card: 'summary',
+    title: 'ccmux-fork — Claude Code Multiplexer (fork)',
+    description: 'Fork of ccmux with independent development.',
   },
 }
 
@@ -41,12 +39,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           navbar={
             <Navbar
               logo={logo}
-              projectLink="https://github.com/Shin-sibainu/ccmux"
+              projectLink="https://github.com/happy-ryo/ccmux"
             />
           }
           pageMap={await getPageMap()}
-          docsRepositoryBase="https://github.com/Shin-sibainu/ccmux/tree/master/docs"
-          footer={<Footer>MIT License © ccmux — <a href="https://claude-code-academy.dev" target="_blank" rel="noopener" style={{color: '#d97757'}}>Claude Code Academy</a></Footer>}
+          docsRepositoryBase="https://github.com/happy-ryo/ccmux/tree/main/docs"
+          footer={<Footer>MIT License · <a href="https://github.com/happy-ryo/ccmux" target="_blank" rel="noopener" style={{color: '#d97757'}}>ccmux-fork</a>, a fork of <a href="https://github.com/Shin-sibainu/ccmux" target="_blank" rel="noopener" style={{color: '#d97757'}}>ccmux</a></Footer>}
         >
           {children}
         </Layout>

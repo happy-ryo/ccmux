@@ -1,4 +1,4 @@
-name: Deploy Docs + LP + Blog
+name: Deploy Docs + LP
 
 on:
   push:
@@ -7,7 +7,6 @@ on:
     paths:
       - 'docs/**'
       - 'lp/**'
-      - 'blog/**'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -39,27 +38,14 @@ jobs:
         working-directory: docs
         run: npx next build
 
-      - name: Install blog dependencies
-        working-directory: blog
-        run: npm ci
-
-      - name: Build Astro blog
-        working-directory: blog
-        run: npx astro build
-        env:
-          NODE_ENV: production
-
       - name: Stage Pages artifact
         run: |
           mkdir -p _site
-          # LP at site root
+          # Minimal landing page at site root
           cp -R lp/. _site/
           # Nextra docs at /docs/
           mkdir -p _site/docs
           cp -R docs/out/. _site/docs/
-          # Astro blog at /blog/
-          mkdir -p _site/blog
-          cp -R blog/dist/. _site/blog/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

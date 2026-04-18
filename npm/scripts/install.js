@@ -4,7 +4,7 @@ const https = require('https');
 const crypto = require('crypto');
 
 const VERSION = require('../package.json').version;
-const REPO = 'Shin-sibainu/ccmux';
+const REPO = 'happy-ryo/ccmux';
 const MAX_REDIRECTS = 5;
 
 function getPlatformBinary() {
@@ -137,7 +137,7 @@ async function main() {
   } catch (err) {
     console.error(`Failed to download ccmux: ${err.message}`);
     console.error(`URL: ${url}`);
-    console.error('You can download manually from: https://github.com/Shin-sibainu/ccmux/releases');
+    console.error('You can download manually from: https://github.com/happy-ryo/ccmux/releases');
     process.exit(1);
   }
 }
