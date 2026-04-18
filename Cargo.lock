@@ -223,6 +223,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "subtle",
  "syntect",
  "toml",
  "unicode-width",
