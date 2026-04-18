@@ -3,7 +3,7 @@ name: Deploy Docs + LP + Blog
 on:
   push:
     branches:
-      - master
+      - main
     paths:
       - 'docs/**'
       - 'lp/**'
