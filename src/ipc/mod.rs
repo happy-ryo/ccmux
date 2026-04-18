@@ -7,8 +7,10 @@
 //!
 //! # Threat model
 //!
-//! IPC is scoped to a **single local user** and is not a secrecy or
-//! authentication boundary against other users on the same host:
+//! IPC is a local-only control channel between processes running as
+//! the same user. OS-level isolation handles the cross-user boundary;
+//! IPC itself is **not** a secrecy or authentication boundary against
+//! other processes running as that same user.
 //!
 //! - On Unix, the socket lives under an owner-only directory
 //!   (`$XDG_RUNTIME_DIR/ccmux/` or `/tmp/ccmux-UID/` with mode `0700`).
