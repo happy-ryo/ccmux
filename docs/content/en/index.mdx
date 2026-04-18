@@ -1,20 +1,22 @@
-# ccmux
+# ccmux-fork
 
-**Claude Code Multiplexer** — manage multiple Claude Code instances in TUI split panes.
+**Claude Code Multiplexer (fork)** — a Rust TUI tool for managing multiple Claude Code instances in split panes.
+
+> This is a fork ([happy-ryo/ccmux](https://github.com/happy-ryo/ccmux)) of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux). It periodically syncs upstream while developing independent features, and is distributed on npm as `ccmux-fork`. See [`BRANCHING.md`](https://github.com/happy-ryo/ccmux/blob/main/BRANCHING.md) for the fork policy.
 
 ![ccmux screenshot](/screenshot.png)
 
-## What is ccmux?
+## Overview
 
-ccmux is a lightweight terminal multiplexer built specifically for running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions side-by-side. Think of it as tmux, but designed around the Claude Code workflow.
+ccmux is a lightweight terminal multiplexer focused on running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions in parallel. It's a thin layer on top of PTYs with a vt100 emulator, offering split panes, tabs, and a file tree.
 
-## Why ccmux?
+## Highlights
 
-- **Run multiple Claude Code agents simultaneously** in split panes
-- **See your project files** with syntax-highlighted preview while coding
-- **Stay in the terminal** — no editor needed, just your shell and Claude
-- **Blazingly fast & lightweight** — single ~2MB binary, 0.5s startup, ~0% idle CPU
-- **Built in Rust** — zero-allocation cell rendering, dirty-flag diff updates, PTY resize caching
+- Run multiple Claude Code sessions side-by-side in split panes
+- File tree with syntax-highlighted preview
+- Independent workspaces per tab
+- Single binary (~2 MB), no runtime dependencies
+- Windows / macOS / Linux
 
 ## Quick Start
 
@@ -33,9 +35,3 @@ Once running, type `claude` in the terminal pane to start Claude Code.
 - [**Claude detection**](/en/features#claude-detection) — Pane border turns orange when Claude is running
 - [**Text selection**](/en/features#text-selection--copy) — Drag to select, auto-copy to clipboard
 - [**Scrollback**](/en/features#terminal-scrollback) — 10,000 lines of history per pane
-
----
-
-## Learn Claude Code
-
-Want to learn Claude Code systematically? Check out [**Claude Code Academy**](https://claude-code-academy.dev).
