@@ -42,5 +42,8 @@ cargo run            # Run the app
    - npm publish (Trusted Publishing)
 - **手動で `npm publish` や `gh release create` しないこと** — バージョン衝突の原因になる
 
+## Fork & Branching
+このリポジトリは `Shin-sibainu/ccmux` のフォーク。ブランチ運用 (main = 独自本流 / master = 上流ミラー) と上流同期手順は `BRANCHING.md` を参照。上流取り込みや逆 PR の作業時は `.claude/skills/upstream-sync/` Skill が自動発動する。
+
 ## Workflow Rules
 - **Every implementation must be reviewed by the evaluator agent** before reporting done. This is a Rust TUI app, so Playwright MCP is not available — the evaluator should perform static review (diff analysis, edge cases, logic correctness, key conflict checks, layout math consistency).
