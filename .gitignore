@@ -8,3 +8,7 @@ image copy 2.png
 .vscode/
 .playwright-mcp/
 /lp-*.png
+
+# Platform-specific binaries fetched by npm postinstall
+/npm/bin/ccmux
+/npm/bin/ccmux.exe
