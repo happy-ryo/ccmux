@@ -468,4 +468,36 @@ mod tests {
             other => panic!("expected Err, got {other:?}"),
         }
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn drop_removes_unix_socket_file() {
+        use std::path::PathBuf;
+
+        // Bind on a unique temp path so the test doesn't race with a
+        // real ccmux instance or other tests.
+        let dir = std::env::temp_dir().join(format!(
+            "ccmux-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock_path: PathBuf = dir.join("ccmux-test.sock");
+        let endpoint = EndpointName::socket(sock_path.clone());
+
+        let (tx, _rx) = mpsc::channel::<AppCommand>();
+        let server = IpcServer::spawn(endpoint, tx, "test-token".into()).unwrap();
+
+        // Socket file should exist after binding.
+        assert!(sock_path.exists(), "socket file not created");
+
+        // Dropping IpcServer should remove it.
+        drop(server);
+        assert!(!sock_path.exists(), "socket file not removed on drop");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

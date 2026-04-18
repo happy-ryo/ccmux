@@ -4,6 +4,25 @@
 //! client to server, followed by exactly one [`Response`] from server to
 //! client. Connections are short-lived in the v1 protocol — clients open,
 //! send one request, read one response, close.
+//!
+//! # Threat model
+//!
+//! IPC is scoped to a **single local user** and is not a secrecy or
+//! authentication boundary against other users on the same host:
+//!
+//! - On Unix, the socket lives under an owner-only directory
+//!   (`$XDG_RUNTIME_DIR/ccmux/` or `/tmp/ccmux-UID/` with mode `0700`).
+//!   A different UID on the same host cannot reach it.
+//! - On Windows, the Named Pipe is named `\\.\pipe\ccmux-<pid>` and
+//!   inherits default session-scoped permissions from the OS.
+//!
+//! The `CCMUX_TOKEN` env var is **not** a secret. It exists only to
+//! detect PID re-use: if a child shell inherited a stale `CCMUX_SOCKET`
+//! whose PID now belongs to a different ccmux instance, the token on
+//! the wire won't match the child's `CCMUX_TOKEN` and the client
+//! refuses the command. Any same-user process that can read
+//! `/proc/<pid>/environ` can also read the token — on the same-user
+//! trust model that's already inside the boundary.
 
 use serde::{Deserialize, Serialize};
 
