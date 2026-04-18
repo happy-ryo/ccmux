@@ -253,39 +253,37 @@ fn run_event_loop(
         // Poll for crossterm events with a short timeout (~30fps)
         if event::poll(Duration::from_millis(33))? {
             match event::read()? {
-                Event::Key(key) => {
-                    if key.kind == KeyEventKind::Press {
-                        let consumed = app.handle_key_event(key)?;
-                        if !consumed {
-                            // Collect rapid key events as potential paste
-                            if let Some(bytes) = crate::app::key_event_to_bytes_pub(&key) {
-                                paste_buffer.extend_from_slice(&bytes);
-                                // Drain all immediately available key events (paste burst)
-                                while event::poll(Duration::from_millis(1))? {
-                                    if let Event::Key(k) = event::read()? {
-                                        if k.kind == KeyEventKind::Press {
-                                            if app.handle_key_event(k)? {
-                                                // Shortcut consumed — flush buffer first
-                                                if !paste_buffer.is_empty() {
-                                                    flush_paste_buffer(app, &mut paste_buffer)?;
-                                                }
-                                                break;
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    let consumed = app.handle_key_event(key)?;
+                    if !consumed {
+                        // Collect rapid key events as potential paste
+                        if let Some(bytes) = crate::app::key_event_to_bytes_pub(&key) {
+                            paste_buffer.extend_from_slice(&bytes);
+                            // Drain all immediately available key events (paste burst)
+                            while event::poll(Duration::from_millis(1))? {
+                                if let Event::Key(k) = event::read()? {
+                                    if k.kind == KeyEventKind::Press {
+                                        if app.handle_key_event(k)? {
+                                            // Shortcut consumed — flush buffer first
+                                            if !paste_buffer.is_empty() {
+                                                flush_paste_buffer(app, &mut paste_buffer)?;
                                             }
-                                            if let Some(b) = crate::app::key_event_to_bytes_pub(&k)
-                                            {
-                                                paste_buffer.extend_from_slice(&b);
-                                            }
+                                            break;
                                         }
-                                    } else {
-                                        break;
+                                        if let Some(b) = crate::app::key_event_to_bytes_pub(&k) {
+                                            paste_buffer.extend_from_slice(&b);
+                                        }
                                     }
+                                } else {
+                                    break;
                                 }
-                                flush_paste_buffer(app, &mut paste_buffer)?;
                             }
+                            flush_paste_buffer(app, &mut paste_buffer)?;
                         }
-                        app.dirty = true;
                     }
+                    app.dirty = true;
                 }
+                Event::Key(_) => {}
                 Event::Paste(text) => {
                     app.forward_paste_to_pty(&text)?;
                     app.paste_cooldown = 5;
