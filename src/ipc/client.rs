@@ -55,9 +55,7 @@ pub fn send_request(endpoint: &EndpointName, request: &Request) -> Result<Respon
             RESPONSE_TIMEOUT,
             name_string
         )),
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            Err(anyhow!("IPC client thread panicked"))
-        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(anyhow!("IPC client thread panicked")),
     }
 }
 
