@@ -34,7 +34,7 @@ cargo run            # Run the app
 
 ## Release Process
 1. `Cargo.toml` と `npm/package.json` のバージョンを同じ値に揃えて上げる
-2. コミット & `git push origin master`
+2. コミット & `git push origin main`
 3. `git tag vX.Y.Z && git push origin vX.Y.Z`
 4. CI (`.github/workflows/release.yml`) が自動で実行:
    - 4プラットフォーム (Windows x64, macOS x64/arm64, Linux x64) のリリースビルド
