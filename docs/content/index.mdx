@@ -1,6 +1,6 @@
-# ccmux-fork
+# ccmux
 
-**Claude Code Multiplexer (fork)** — 複数の Claude Code インスタンスを TUI 分割ペインで管理する Rust 製 TUI ツール。
+**Claude Code Multiplexer** — 複数の Claude Code インスタンスを TUI 分割ペインで管理する Rust 製 TUI ツール。
 
 > これは [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) のフォーク ([happy-ryo/ccmux](https://github.com/happy-ryo/ccmux)) です。上流の変更を取り込みつつ独自機能を先行して開発しており、npm では `ccmux-fork` として配布しています。ブランチ運用方針は [`BRANCHING.md`](https://github.com/happy-ryo/ccmux/blob/main/BRANCHING.md) を参照してください。
 
@@ -8,7 +8,7 @@
 
 ## 概要
 
-ccmux は [Claude Code](https://docs.anthropic.com/en/docs/claude-code) セッションを複数並列で動かすことに特化した軽量ターミナルマルチプレクサです。PTY の上に vt100 エミュレータを挟んだ薄いレイヤーで、分割ペイン・タブ・ファイルツリーを提供します。
+ccmux は [Claude Code](https://docs.anthropic.com/en/docs/claude-code) セッションを複数並列で動かすことに特化した軽量ターミナルマルチプレクサです。PTY の上に vt100 エミュレータを挟んだ薄いレイヤーで、分割ペイン・タブ・ファイルツリーを提供します。tmux の Claude Code ワークフローに寄せた版、と考えるとイメージしやすいかもしれません。
 
 ## 特徴
 
