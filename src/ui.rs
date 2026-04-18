@@ -561,7 +561,7 @@ fn render_terminal_content(
                 };
 
                 // Apply selection highlight (only if dragged, not single click)
-                let has_selection = selection.map_or(false, |s| {
+                let has_selection = selection.is_some_and(|s| {
                     let (sr, sc, er, ec) = s.normalized();
                     (sr != er || sc != ec) && s.contains(row as u32, col as u32)
                 });
@@ -907,7 +907,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
         .ws()
         .panes
         .get(&focused_id)
-        .map_or(false, |p| p.is_claude_running());
+        .is_some_and(|p| p.is_claude_running());
 
     let mut right_spans = Vec::new();
 

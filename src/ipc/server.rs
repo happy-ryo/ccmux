@@ -26,7 +26,7 @@ use anyhow::{Context, Result};
 use interprocess::local_socket::{prelude::*, ListenerOptions, Stream};
 
 use super::endpoint::{EndpointKind, EndpointName};
-use super::{Direction, PaneRef, Request, Response};
+use super::{Request, Response};
 use crate::app::AppCommand;
 
 /// How long a worker waits for the App's event loop to process one
@@ -313,7 +313,7 @@ fn forward_unit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ipc::Request;
+    use crate::ipc::{Direction, PaneRef, Request};
     use std::sync::mpsc;
 
     #[test]

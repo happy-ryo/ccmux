@@ -2094,7 +2094,7 @@ fn extract_selected_text(pane: &Pane, sr: u32, sc: u32, er: u32, ec: u32) -> Str
     }
 
     // Remove trailing empty lines
-    while lines.last().map_or(false, |l| l.is_empty()) {
+    while lines.last().is_some_and(|l| l.is_empty()) {
         lines.pop();
     }
 
@@ -2141,7 +2141,7 @@ fn extract_preview_selected_text(
     }
 
     // Strip trailing empty lines only.
-    while out.last().map_or(false, |l| l.is_empty()) {
+    while out.last().is_some_and(|l| l.is_empty()) {
         out.pop();
     }
 
@@ -2304,8 +2304,8 @@ mod tests {
 
     #[test]
     fn test_focus_cycling() {
-        let ids = vec![1, 2, 3];
-        assert_eq!((0 + 1) % ids.len(), 1);
+        let ids = [1, 2, 3];
+        assert_eq!(1 % ids.len(), 1);
         assert_eq!((2 + 1) % ids.len(), 0);
     }
 
