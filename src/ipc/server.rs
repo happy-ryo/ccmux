@@ -19,9 +19,10 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use interprocess::local_socket::{prelude::*, ListenerOptions, Stream};
@@ -30,10 +31,19 @@ use super::endpoint::{EndpointKind, EndpointName};
 use super::{Request, Response, APP_REPLY_TIMEOUT};
 use crate::app::AppCommand;
 
+/// Upper bound for waiting on the accept thread during shutdown.
+/// `Drop` must not hang on an uncooperative accept thread — if the
+/// self-connect wakeup somehow fails and the thread stays blocked in
+/// `listener.incoming()`, we'd rather leak the thread (the OS reaps
+/// it on process exit) than stall the whole process from teardown.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
 pub struct IpcServer {
     pub endpoint: EndpointName,
     stop: Arc<AtomicBool>,
-    accept_handle: Option<thread::JoinHandle<()>>,
+    /// Signaled once the accept thread returns. Using a channel rather
+    /// than `JoinHandle::join` so Drop can wait with a timeout.
+    done_rx: Option<mpsc::Receiver<()>>,
 }
 
 impl Drop for IpcServer {
@@ -41,12 +51,12 @@ impl Drop for IpcServer {
         // Orderly shutdown so the accept thread exits before we remove
         // the socket file, avoiding the "stale listener, new path"
         // rebinding race: (1) flip the stop flag, (2) self-connect to
-        // unblock the blocked `accept()` call, (3) join the thread, and
-        // finally (4) unlink the socket on Unix.
+        // unblock the blocked `accept()` call, (3) wait for the thread
+        // to signal completion (bounded), then (4) unlink on Unix.
         self.stop.store(true, Ordering::Release);
         unblock_accept(&self.endpoint);
-        if let Some(handle) = self.accept_handle.take() {
-            let _ = handle.join();
+        if let Some(rx) = self.done_rx.take() {
+            let _ = rx.recv_timeout(SHUTDOWN_TIMEOUT);
         }
         if self.endpoint.kind() == EndpointKind::Socket {
             let _ = std::fs::remove_file(self.endpoint.as_str());
@@ -94,7 +104,8 @@ impl IpcServer {
         let stop_for_thread = stop.clone();
         let token_for_thread = session_token.clone();
         let endpoint_for_log = endpoint.as_str().to_string();
-        let accept_handle = thread::Builder::new()
+        let (done_tx, done_rx) = mpsc::channel();
+        thread::Builder::new()
             .name("ccmux-ipc-accept".into())
             .spawn(move || {
                 accept_loop(
@@ -104,6 +115,11 @@ impl IpcServer {
                     endpoint_for_log,
                     stop_for_thread,
                 );
+                // Signal Drop that the accept loop has returned. If the
+                // receiver is already gone (Drop finished first because
+                // of the timeout) the send errors out silently; we
+                // don't care.
+                let _ = done_tx.send(());
             })
             .context("spawn IPC accept thread")?;
 
@@ -113,7 +129,7 @@ impl IpcServer {
         Ok(Self {
             endpoint,
             stop,
-            accept_handle: Some(accept_handle),
+            done_rx: Some(done_rx),
         })
     }
 }
