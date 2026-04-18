@@ -78,6 +78,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             artifacts/ccmux-windows-x64.exe/ccmux-windows-x64.exe
             artifacts/ccmux-macos-x64/ccmux-macos-x64
@@ -102,6 +103,15 @@ jobs:
       - name: Verify npm version
         run: npm --version
 
+      - name: Determine npm dist-tag
+        id: disttag
+        run: |
+          if [[ "${{ github.ref_name }}" == *-* ]]; then
+            echo "tag=next" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm via Trusted Publishing
         working-directory: npm
-        run: npm publish --access public
+        run: npm publish --access public --tag ${{ steps.disttag.outputs.tag }}
