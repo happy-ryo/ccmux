@@ -300,13 +300,25 @@ fn handle_connection(
 /// slot until the next pane lifecycle event — which may be hours
 /// away on a quiet session.
 fn stream_events(
-    mut conn: Stream,
+    conn: Stream,
     event_bus: EventBus,
     sub_id: super::events::SubId,
     rx: std::sync::mpsc::Receiver<super::Event>,
 ) -> Result<()> {
+    stream_events_inner(conn, rx, HEARTBEAT_INTERVAL);
+    event_bus.unsubscribe(sub_id);
+    Ok(())
+}
+
+/// Inner loop split out so tests can drive it with a `Vec<u8>` sink
+/// and a sub-second interval.
+fn stream_events_inner<W: Write>(
+    mut sink: W,
+    rx: std::sync::mpsc::Receiver<super::Event>,
+    heartbeat_interval: Duration,
+) {
     loop {
-        let event = match rx.recv_timeout(HEARTBEAT_INTERVAL) {
+        let event = match rx.recv_timeout(heartbeat_interval) {
             Ok(ev) => ev,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Event::Heartbeat {
                 ts_ms: now_ms_ipc(),
@@ -318,12 +330,10 @@ fn stream_events(
             Err(_) => continue,
         };
         json.push('\n');
-        if conn.write_all(json.as_bytes()).is_err() || conn.flush().is_err() {
+        if sink.write_all(json.as_bytes()).is_err() || sink.flush().is_err() {
             break;
         }
     }
-    event_bus.unsubscribe(sub_id);
-    Ok(())
 }
 
 /// How often the subscribe stream emits a keep-alive when idle.
@@ -491,12 +501,15 @@ fn forward_unit(
 ) -> Response {
     let (reply_tx, reply_rx) = oneshot::channel();
     if command_tx.send(build(reply_tx)).is_err() {
-        return Response::err("app shutting down");
+        return Response::err_coded(err_code::SHUTTING_DOWN, "app shutting down");
     }
     match reply_rx.recv_timeout(APP_REPLY_TIMEOUT) {
         Ok(Ok(_)) => Response::ok_unit(),
+        // App-originated error strings pass through uncoded for now —
+        // plumbing a stable code through AppCommand replies is a
+        // follow-up (see Issue #28 non-goals).
         Ok(Err(msg)) => Response::err(msg),
-        Err(e) => Response::err(format!("app did not respond: {e}")),
+        Err(e) => Response::err_coded(err_code::APP_TIMEOUT, format!("app did not respond: {e}")),
     }
 }
 
@@ -648,6 +661,48 @@ mod tests {
             }
             other => panic!("expected Ok, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn forward_unit_shutting_down_is_coded() {
+        // Drop the receiver to simulate the App having shut down; the
+        // send should fail and the error must carry the SHUTTING_DOWN
+        // code, not just a free-form message.
+        let (tx, rx) = mpsc::channel::<AppCommand>();
+        drop(rx);
+        let resp = dispatch_request(
+            Request::Focus {
+                target: PaneRef::Focused,
+            },
+            &tx,
+        );
+        match resp {
+            Response::Err { code, .. } => {
+                assert_eq!(code.as_deref(), Some(err_code::SHUTTING_DOWN))
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stream_events_emits_heartbeat_when_idle() {
+        use std::io::Cursor;
+        use std::sync::mpsc as m;
+        let (tx, rx) = m::channel::<Event>();
+        // Run the inner loop on a worker with a short heartbeat
+        // interval; after ~150 ms at 50 ms interval we expect at
+        // least one heartbeat line. Dropping the sender ends the
+        // loop so we can join and inspect the collected bytes.
+        let handle = thread::spawn(move || {
+            let mut sink = Cursor::new(Vec::<u8>::new());
+            stream_events_inner(&mut sink, rx, Duration::from_millis(50));
+            sink.into_inner()
+        });
+        thread::sleep(Duration::from_millis(150));
+        drop(tx);
+        let bytes = handle.join().unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("\"heartbeat\""), "no heartbeat in {text:?}");
     }
 
     #[test]

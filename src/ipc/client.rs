@@ -155,8 +155,16 @@ where
         if trimmed.is_empty() {
             continue;
         }
-        let event: Event = serde_json::from_str(trimmed)
-            .with_context(|| format!("parse event line: {trimmed:?}"))?;
+        // Forward-compat: skip events whose `type` tag this client
+        // doesn't know about. A future ccmux server may emit new
+        // Event variants, and older subscribers should tolerate them
+        // rather than abort the whole stream. Genuine parse errors on
+        // known variants still propagate to the caller on the next
+        // well-formed line.
+        let event: Event = match serde_json::from_str(trimmed) {
+            Ok(ev) => ev,
+            Err(_) => continue,
+        };
         if !on_event(event) {
             return Ok(());
         }

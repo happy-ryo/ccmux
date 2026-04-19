@@ -191,9 +191,28 @@ pub enum Response {
     },
 }
 
-/// Stable short identifiers for [`Response::Err::code`]. These are
-/// part of the IPC contract — rename with care; new ones can be added
-/// freely. Clients should treat unknown codes as generic errors.
+/// Stable short identifiers for [`Response::Err::code`].
+///
+/// # Stability
+///
+/// These string values are **wire ABI**, not internal symbols.
+/// Changing an existing constant's value is a breaking protocol
+/// change and requires a deprecation window:
+///
+/// 1. Introduce the new code alongside the old one (both servers emit
+///    the old value; old clients keep matching).
+/// 2. Flip servers to emit the new value in the next minor release,
+///    keeping the old constant exported so clients still build.
+/// 3. Remove the old constant only after external clients (including
+///    `aainc-ops`) have migrated.
+///
+/// Adding a new code is additive and safe — clients must treat
+/// unknown codes as generic errors (fall back to `message`).
+///
+/// Heartbeat events (`Event::Heartbeat`) follow the same rule: new
+/// event variants are additive, and clients skip unknown `type`
+/// tags instead of aborting the stream (see
+/// [`crate::ipc::client::subscribe_events`]).
 pub mod err_code {
     /// The server is shutting down and cannot accept new commands.
     pub const SHUTTING_DOWN: &str = "shutting_down";
