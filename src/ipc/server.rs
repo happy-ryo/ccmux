@@ -316,6 +316,7 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
             direction,
             command,
             id,
+            role,
         } => {
             let (reply_tx, reply_rx) = oneshot::channel();
             if command_tx
@@ -324,6 +325,7 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
                     direction,
                     command,
                     name: id,
+                    role,
                     reply: reply_tx,
                 })
                 .is_err()
@@ -336,13 +338,19 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
                 Err(e) => Response::err(format!("app did not respond: {e}")),
             }
         }
-        Request::NewTab { command, id, label } => {
+        Request::NewTab {
+            command,
+            id,
+            label,
+            role,
+        } => {
             let (reply_tx, reply_rx) = oneshot::channel();
             if command_tx
                 .send(AppCommand::NewTab {
                     command,
                     name: id,
                     label,
+                    role,
                     reply: reply_tx,
                 })
                 .is_err()
@@ -459,6 +467,7 @@ mod tests {
                 direction: Direction::Vertical,
                 command: None,
                 id: None,
+                role: None,
             },
             &tx,
         );
@@ -512,6 +521,7 @@ mod tests {
                 command: Some("cce".into()),
                 id: Some("engineering".into()),
                 label: None,
+                role: None,
             },
             &tx,
         );
@@ -533,6 +543,51 @@ mod tests {
             Response::Err { message } => assert!(message.contains("hello")),
             other => panic!("expected Err, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn dispatch_split_forwards_role() {
+        let (tx, rx) = mpsc::channel::<AppCommand>();
+        let handle = thread::spawn(move || {
+            if let Ok(AppCommand::Split { role, reply, .. }) = rx.recv() {
+                assert_eq!(role.as_deref(), Some("worker"));
+                reply.send(Ok(7)).unwrap();
+            }
+        });
+        let resp = dispatch_request(
+            Request::Split {
+                target: PaneRef::Focused,
+                direction: Direction::Vertical,
+                command: None,
+                id: None,
+                role: Some("worker".into()),
+            },
+            &tx,
+        );
+        handle.join().unwrap();
+        assert!(matches!(resp, Response::Ok { .. }));
+    }
+
+    #[test]
+    fn dispatch_new_tab_forwards_role() {
+        let (tx, rx) = mpsc::channel::<AppCommand>();
+        let handle = thread::spawn(move || {
+            if let Ok(AppCommand::NewTab { role, reply, .. }) = rx.recv() {
+                assert_eq!(role.as_deref(), Some("leader"));
+                reply.send(Ok(9)).unwrap();
+            }
+        });
+        let resp = dispatch_request(
+            Request::NewTab {
+                command: None,
+                id: None,
+                label: None,
+                role: Some("leader".into()),
+            },
+            &tx,
+        );
+        handle.join().unwrap();
+        assert!(matches!(resp, Response::Ok { .. }));
     }
 
     #[cfg(unix)]

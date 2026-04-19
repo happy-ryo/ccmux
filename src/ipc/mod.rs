@@ -76,6 +76,9 @@ pub enum Request {
         command: Option<String>,
         #[serde(default)]
         id: Option<String>,
+        /// Free-form role label (see [`PaneInfo::role`]).
+        #[serde(default)]
+        role: Option<String>,
     },
     /// Move keyboard focus to the target pane.
     Focus { target: PaneRef },
@@ -92,6 +95,9 @@ pub enum Request {
         /// Override the tab label (otherwise derived from the cwd).
         #[serde(default)]
         label: Option<String>,
+        /// Free-form role label (see [`PaneInfo::role`]).
+        #[serde(default)]
+        role: Option<String>,
     },
 }
 
@@ -119,6 +125,11 @@ pub struct PaneInfo {
     pub id: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Free-form label. Set via layout TOML `role = ...`, `ccmux split
+    /// --role ...`, or `ccmux new-tab --role ...`. Unlike `name`, not
+    /// unique.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
     pub focused: bool,
 }
 
@@ -190,6 +201,7 @@ mod tests {
             direction: Direction::Vertical,
             command: Some("cce".into()),
             id: Some("engineering".into()),
+            role: None,
         };
         assert_eq!(roundtrip(&r), r);
     }
@@ -242,6 +254,7 @@ mod tests {
             command: Some("cce".into()),
             id: Some("engineering".into()),
             label: Some("eng".into()),
+            role: None,
         };
         assert_eq!(roundtrip(&r), r);
     }
@@ -255,6 +268,7 @@ mod tests {
                 command: None,
                 id: None,
                 label: None,
+                role: None,
             } => {}
             other => panic!("expected empty NewTab, got {other:?}"),
         }
@@ -268,5 +282,53 @@ mod tests {
         };
         let parsed: Response = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(parsed, r);
+    }
+
+    #[test]
+    fn pane_info_role_is_omitted_when_none() {
+        let info = PaneInfo {
+            id: 1,
+            name: None,
+            role: None,
+            focused: false,
+        };
+        let s = serde_json::to_string(&info).unwrap();
+        assert!(!s.contains("role"), "unexpected role field: {s}");
+    }
+
+    #[test]
+    fn pane_info_role_roundtrips_when_present() {
+        let info = PaneInfo {
+            id: 1,
+            name: Some("president".into()),
+            role: Some("leader".into()),
+            focused: true,
+        };
+        let parsed: PaneInfo =
+            serde_json::from_str(&serde_json::to_string(&info).unwrap()).unwrap();
+        assert_eq!(parsed, info);
+    }
+
+    #[test]
+    fn split_request_with_role_roundtrips() {
+        let r = Request::Split {
+            target: PaneRef::Focused,
+            direction: Direction::Vertical,
+            command: None,
+            id: None,
+            role: Some("worker".into()),
+        };
+        assert_eq!(roundtrip(&r), r);
+    }
+
+    #[test]
+    fn new_tab_request_with_role_roundtrips() {
+        let r = Request::NewTab {
+            command: None,
+            id: None,
+            label: None,
+            role: Some("leader".into()),
+        };
+        assert_eq!(roundtrip(&r), r);
     }
 }

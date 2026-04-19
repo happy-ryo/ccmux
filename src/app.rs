@@ -44,6 +44,7 @@ pub enum AppCommand {
         direction: ipc::Direction,
         command: Option<String>,
         name: Option<String>,
+        role: Option<String>,
         reply: oneshot::Sender<std::result::Result<usize, String>>,
     },
     /// Open a new tab with a fresh single pane. Focus switches to the
@@ -53,6 +54,7 @@ pub enum AppCommand {
         command: Option<String>,
         name: Option<String>,
         label: Option<String>,
+        role: Option<String>,
         reply: oneshot::Sender<std::result::Result<usize, String>>,
     },
 }
@@ -1112,15 +1114,18 @@ impl App {
 
     fn apply_layout_node(&mut self, node: &LayoutNodeSpec, target_pane_id: usize) -> Result<()> {
         match node {
-            LayoutNodeSpec::Pane { id, command } => {
+            LayoutNodeSpec::Pane { id, command, role } => {
                 // Register the leaf's id as a human-friendly name so IPC
                 // clients (and external tools like `ccmux-send`) can
                 // target this pane later without tracking numeric ids.
                 if !id.is_empty() {
                     self.ws_mut().pane_names.insert(id.clone(), target_pane_id);
                 }
-                if let Some(cmd) = command {
-                    if let Some(pane) = self.ws_mut().panes.get_mut(&target_pane_id) {
+                if let Some(pane) = self.ws_mut().panes.get_mut(&target_pane_id) {
+                    if let Some(r) = role {
+                        pane.role = Some(r.clone());
+                    }
+                    if let Some(cmd) = command {
                         pane.queue_startup_command(cmd);
                     }
                 }
@@ -1912,9 +1917,11 @@ impl App {
                 }
                 let mut infos: Vec<PaneInfo> = Vec::new();
                 for id in ws.layout.collect_pane_ids() {
+                    let role = ws.panes.get(&id).and_then(|p| p.role.clone());
                     infos.push(PaneInfo {
                         id,
                         name: name_by_id.get(&id).cloned(),
+                        role,
                         focused: id == focused,
                     });
                 }
@@ -1938,18 +1945,20 @@ impl App {
                 direction,
                 command,
                 name,
+                role,
                 reply,
             } => {
-                let result = self.handle_split(&target, direction, command, name);
+                let result = self.handle_split(&target, direction, command, name, role);
                 let _ = reply.send(result);
             }
             AppCommand::NewTab {
                 command,
                 name,
                 label,
+                role,
                 reply,
             } => {
-                let result = self.handle_new_tab(command, name, label);
+                let result = self.handle_new_tab(command, name, label, role);
                 let _ = reply.send(result);
             }
         }
@@ -1960,6 +1969,7 @@ impl App {
         command: Option<String>,
         name: Option<String>,
         label: Option<String>,
+        role: Option<String>,
     ) -> std::result::Result<usize, String> {
         // Delegate to the existing keybinding-driven new_tab so we
         // don't drift from the interactive behavior (pane id bookkeeping,
@@ -1967,9 +1977,12 @@ impl App {
         // becomes the active one, so `ws_mut()` points at it.
         self.new_tab().map_err(|e| e.to_string())?;
         let new_pane_id = self.ws().focused_pane_id;
-        if let Some(cmd) = command {
-            if let Some(pane) = self.ws_mut().panes.get_mut(&new_pane_id) {
+        if let Some(pane) = self.ws_mut().panes.get_mut(&new_pane_id) {
+            if let Some(cmd) = command {
                 pane.queue_startup_command(&cmd);
+            }
+            if let Some(r) = role {
+                pane.role = Some(r);
             }
         }
         if let Some(name) = name {
@@ -2027,6 +2040,7 @@ impl App {
         direction: ipc::Direction,
         command: Option<String>,
         name: Option<String>,
+        role: Option<String>,
     ) -> std::result::Result<usize, String> {
         let target_pane_id = self
             .ws()
@@ -2048,9 +2062,12 @@ impl App {
             self.ws_mut().focused_pane_id = prev_focus;
             return Err("split refused (max panes reached or pane too small)".to_string());
         }
-        if let Some(cmd) = command {
-            if let Some(pane) = self.ws_mut().panes.get_mut(&new_pane_id) {
+        if let Some(pane) = self.ws_mut().panes.get_mut(&new_pane_id) {
+            if let Some(cmd) = command {
                 pane.queue_startup_command(&cmd);
+            }
+            if let Some(r) = role {
+                pane.role = Some(r);
             }
         }
         if let Some(name) = name {
@@ -2402,6 +2419,7 @@ mod tests {
         crate::layout_config::LayoutNodeSpec::Pane {
             id: id.to_string(),
             command: None,
+            role: None,
         }
     }
 

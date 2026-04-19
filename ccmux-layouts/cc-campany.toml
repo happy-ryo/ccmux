@@ -12,4 +12,5 @@ name = "cc-campany"
 [root]
 type = "pane"
 id = "secretary"
+role = "secretary"
 command = "ccc-claude"
