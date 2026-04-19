@@ -171,6 +171,14 @@ fn main() -> Result<()> {
 /// stdout and exits with a non-zero code on error so shell scripts can
 /// branch on it.
 fn run_ipc_client(cmd: &cli::IpcCommand) -> Result<()> {
+    // `--count 0` on `events` is a degenerate "drain zero events"
+    // request. Short-circuit before any environment lookup so the
+    // command is a true no-op: it must succeed even when run outside
+    // a ccmux pane (where `CCMUX_SOCKET` would be unset).
+    if let cli::IpcCommand::Events { count: Some(0), .. } = cmd {
+        return Ok(());
+    }
+
     let endpoint = ipc::endpoint::endpoint_from_env()
         .map_err(|e| anyhow::anyhow!("{e}; run this from inside a ccmux pane"))?;
 

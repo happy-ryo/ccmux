@@ -533,9 +533,12 @@ mod tests {
     }
 
     #[test]
-    fn parses_events_with_count_zero() {
-        // `--count 0` is accepted at parse time; run_events short-circuits
-        // it at runtime so no connection is opened and no event is printed.
+    fn accepts_count_zero_at_parse_time() {
+        // `--count 0` must parse (no clap-level `value_parser` restricts
+        // it) so that `run_ipc_client` can short-circuit it as a true
+        // no-op. Runtime short-circuit behavior is enforced by the
+        // early-return in `main.rs::run_ipc_client` and is not covered
+        // by this parse-level test.
         let cli = Cli::try_parse_from(["ccmux", "events", "--count", "0"]).unwrap();
         match cli.command {
             Some(IpcCommand::Events { count, .. }) => {
