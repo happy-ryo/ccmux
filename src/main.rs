@@ -223,6 +223,13 @@ fn run_events(
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
+    // `--count 0` is a degenerate "drain zero events" request; honor it
+    // by returning immediately so we never open a connection or spawn
+    // a reader for it.
+    if let Some(0) = count {
+        return Ok(());
+    }
+
     let (tx, rx) = mpsc::channel::<ipc::Event>();
     let endpoint_clone = endpoint.clone();
     std::thread::Builder::new()

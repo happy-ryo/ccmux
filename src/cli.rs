@@ -531,4 +531,17 @@ mod tests {
         let req = cli.command.unwrap().to_request().unwrap();
         assert!(matches!(req, crate::ipc::Request::Subscribe));
     }
+
+    #[test]
+    fn parses_events_with_count_zero() {
+        // `--count 0` is accepted at parse time; run_events short-circuits
+        // it at runtime so no connection is opened and no event is printed.
+        let cli = Cli::try_parse_from(["ccmux", "events", "--count", "0"]).unwrap();
+        match cli.command {
+            Some(IpcCommand::Events { count, .. }) => {
+                assert_eq!(count, Some(0));
+            }
+            other => panic!("expected Events, got {other:?}"),
+        }
+    }
 }
