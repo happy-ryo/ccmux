@@ -110,7 +110,7 @@ Each pane stores 10,000 lines of history.
 - **`↑ SCROLL` indicator** appears at the bottom of the pane
 - **Any key press** automatically scrolls back to the latest output
 
-For alt-screen TUI panes, routing depends on whether the app enabled mouse reporting: apps that turn it on (Claude Code `/tui fullscreen`, `vim` with `set mouse=a`, `lazygit`, …) receive the wheel as an xterm mouse report; apps that don't (`less`, etc.) get `Up` / `Down` arrow keys as an xterm/WezTerm-style fallback. See [Keybindings > Mouse Wheel](/docs/en/keybindings#mouse-wheel) for the full table.
+For alt-screen TUI panes, routing depends on whether the app enabled mouse reporting: apps that turn it on (Claude Code `/tui fullscreen`, `vim` with `set mouse=a`, `lazygit`, …) receive the wheel as an xterm mouse report; apps that don't (`less`, etc.) get `Up` / `Down` arrow keys as an xterm/WezTerm-style fallback. See "Mouse Support" below. Set `CCMUX_DISABLE_MOUSE_FORWARD=1` to revert to the legacy "always scroll vt100 scrollback" behavior.
 
 ## Mouse Support
 
@@ -126,6 +126,61 @@ For alt-screen TUI panes, routing depends on whether the app enabled mouse repor
 | Scroll in a TUI pane with mouse reporting on | Forward as xterm mouse report (Claude `/tui fullscreen`, `vim` with `set mouse=a`, `lazygit`, …) |
 | Scroll in an alt-screen TUI pane with mouse reporting off | Forward `Up` / `Down` arrows as a fallback (`less`, etc.) |
 | Drag in pane | Text selection → clipboard |
+
+## IME Input (Japanese / Chinese / Korean)
+
+On Windows with WezTerm / zellij / other third-party terminals, the host IME anchors its candidate window to the cursor, and fast-moving TUIs like Claude Code make that anchor jump around — JP input becomes unusable. (macOS native terminals and Windows Terminal don't reproduce the issue.)
+
+ccmux paints a single-row **composition overlay** at the bottom of the screen to give the host IME a stable anchor, and commits the confirmed text to the pane via bracketed paste.
+
+Three modes selected via the `[ime]` config section or `--ime` flag:
+
+| Mode | Behavior |
+|---|---|
+| `hotkey` (default) | `Ctrl+;` opens the overlay. Enter commits, Esc cancels |
+| `off` | `Ctrl+;` is swallowed, overlay never opens. Opt-out for environments where the problem doesn't exist |
+| `always` | The overlay stays open on focused Claude panes so JP IME can compose from the first keystroke |
+
+See the README Configuration section for the config file location, precedence, and CLI flag.
+
+Windows' conpty layer flickers the hardware caret during ratatui's diff paint; ccmux issues `cursor::Hide` while the overlay is open (`#[cfg(windows)]`) to mitigate. Not a full fix — see Issues #37 / #38.
+
+## Keybindings
+
+The status bar always shows the shortcuts available in the current mode. A summary:
+
+### Global
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+Q` | Quit ccmux |
+| `Ctrl+Right` / `Ctrl+Left` | Cycle focus between panes / areas |
+| `Alt+Right` / `Alt+Left` | Switch tabs |
+| `Alt+1` — `Alt+9` | Jump to tab N |
+
+### Pane Mode
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+D` / `Ctrl+E` | Split vertically / horizontally |
+| `Ctrl+W` | Close pane (close tab if only one pane) |
+| `Alt+T` / `Ctrl+T` | New tab |
+| `Alt+R` | Rename tab (session only) |
+| `Alt+S` | Toggle status bar |
+| `Ctrl+F` | Focus file tree |
+| `Ctrl+P` | Swap preview / terminal layout |
+| `Ctrl+;` | Open the IME overlay (mode = `hotkey` / `always`) |
+| `Tab` / everything else | Forwarded to shell |
+
+### Key conflicts (not forwarded to shell)
+
+| Key | ccmux action | Shell workaround |
+|-----|--------------|------------------|
+| `Ctrl+D` | Vertical split | `exit` to log out |
+| `Ctrl+E` | Horizontal split | `End` key |
+| `Ctrl+F` | File tree | `/` for less/vim search |
+| `Ctrl+W` | Close (only when multiple panes) | works normally with a single pane |
+| `Ctrl+;` | IME overlay (mode hotkey/always) | `--ime off` swallows the keystroke |
 
 ## Small Terminal Handling
 
