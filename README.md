@@ -82,15 +82,16 @@ Controls the IME overlay used for host-terminal IME input (Issue #25 / PR #36).
 
 ```toml
 [ime]
-mode = "hotkey"   # "hotkey" | "off"
+mode = "hotkey"   # "hotkey" | "off" | "always"
 ```
 
 | Value | Behavior |
 |-------|----------|
 | `hotkey` (default) | `Ctrl+;` opens the IME composition overlay on a focused pane. |
 | `off` | `Ctrl+;` is swallowed silently — no overlay, no keystroke leaked to the shell. For users who don't use IME, or whose terminal already handles IME placement correctly. |
+| `always` | The overlay is opened automatically whenever focus rests on a non-scrolled Claude pane, so IME composition (including JP) has an anchor from the first keystroke. Press `Esc` (with an empty buffer) or `Ctrl+C` to dismiss the overlay and interact with the pane directly — the dismiss key is forwarded to the pane so Claude's Esc-to-interrupt still works. Moving focus to another pane and back re-opens the overlay. A printable key on a dismissed overlay still triggers auto-open as a half-width shortcut; scrolled-back panes and shell panes never auto-open. **Tradeoff:** while the overlay is open, ccmux pane-management shortcuts (Ctrl+D split, Ctrl+Left/Right focus-cycle, Alt+Left/Right tab-nav, etc.) do not fire — dismiss first, then use them. If that friction is unwanted, stay on `hotkey` and press Ctrl+; only when you need IME. |
 
-The `--ime hotkey|off` CLI flag overrides the config file for a single run. Precedence is **CLI > config file > default**.
+The `--ime hotkey|off|always` CLI flag overrides the config file for a single run. Precedence is **CLI > config file > default**.
 
 ## Keybindings
 

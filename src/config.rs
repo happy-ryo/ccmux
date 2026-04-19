@@ -36,10 +36,22 @@ pub enum ImeMode {
     /// Ctrl+; opens the IME composition overlay. Default.
     #[default]
     Hotkey,
-    /// Ctrl+; is passed through to the pane's PTY as a normal key,
-    /// and the overlay is never opened. For users who don't use IME
-    /// or prefer their terminal's own IME handling.
+    /// Ctrl+; is swallowed — the overlay is never opened and no
+    /// keystroke is forwarded to the pane either, because terminals
+    /// encode Ctrl+punctuation inconsistently and the bare `;` that
+    /// would otherwise leak through isn't what the user asked for.
+    /// For users who don't use IME or prefer their terminal's own
+    /// IME handling.
     Off,
+    /// The overlay is opened automatically whenever focus rests on
+    /// a non-scrolled Claude pane, so IME (including JP) has an
+    /// anchor from the first keystroke. Esc/Ctrl+C on an empty
+    /// buffer dismisses and forwards the cancel key to the pane;
+    /// dismissal clears when focus moves to another pane and back.
+    /// A printable keystroke still auto-opens on a dismissed pane
+    /// as a half-width convenience. See Issue #40 for full
+    /// semantics.
+    Always,
 }
 
 impl fmt::Display for ImeMode {
@@ -47,6 +59,7 @@ impl fmt::Display for ImeMode {
         match self {
             ImeMode::Hotkey => f.write_str("hotkey"),
             ImeMode::Off => f.write_str("off"),
+            ImeMode::Always => f.write_str("always"),
         }
     }
 }
@@ -57,8 +70,9 @@ impl std::str::FromStr for ImeMode {
         match s {
             "hotkey" => Ok(ImeMode::Hotkey),
             "off" => Ok(ImeMode::Off),
+            "always" => Ok(ImeMode::Always),
             other => Err(format!(
-                "invalid ime mode: {other:?} (expected hotkey | off)"
+                "invalid ime mode: {other:?} (expected hotkey | off | always)"
             )),
         }
     }
@@ -197,15 +211,27 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_ime_mode_value() {
-        let err = toml::from_str::<Config>(
+    fn parses_minimal_ime_always() {
+        let cfg: Config = toml::from_str(
             r#"
             [ime]
             mode = "always"
             "#,
         )
+        .unwrap();
+        assert_eq!(cfg.ime.mode, ImeMode::Always);
+    }
+
+    #[test]
+    fn rejects_unknown_ime_mode_value() {
+        let err = toml::from_str::<Config>(
+            r#"
+            [ime]
+            mode = "banana"
+            "#,
+        )
         .unwrap_err();
-        assert!(err.to_string().contains("always") || err.to_string().contains("variant"));
+        assert!(err.to_string().contains("banana") || err.to_string().contains("variant"));
     }
 
     #[test]
@@ -277,6 +303,7 @@ mod tests {
         use std::str::FromStr;
         assert_eq!(ImeMode::from_str("hotkey").unwrap(), ImeMode::Hotkey);
         assert_eq!(ImeMode::from_str("off").unwrap(), ImeMode::Off);
-        assert!(ImeMode::from_str("always").is_err());
+        assert_eq!(ImeMode::from_str("always").unwrap(), ImeMode::Always);
+        assert!(ImeMode::from_str("banana").is_err());
     }
 }

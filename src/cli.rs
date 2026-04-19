@@ -651,12 +651,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_ime_mode_always() {
+        let cli = Cli::try_parse_from(["ccmux", "--ime", "always"]).unwrap();
+        assert_eq!(cli.ime, Some(crate::config::ImeMode::Always));
+    }
+
+    #[test]
     fn rejects_unknown_ime_mode() {
-        // `always` is reserved for Issue #40 and must not parse yet.
-        let err = Cli::try_parse_from(["ccmux", "--ime", "always"]).unwrap_err();
+        let err = Cli::try_parse_from(["ccmux", "--ime", "banana"]).unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("always") || msg.contains("invalid value") || msg.contains("possible"),
+            msg.contains("banana") || msg.contains("invalid value") || msg.contains("possible"),
             "got: {msg}"
         );
     }

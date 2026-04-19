@@ -330,6 +330,12 @@ fn run_event_loop(
             }
         }
 
+        // Always-mode IME: pre-render hook that keeps the overlay
+        // open whenever focus rests on a non-scrolled Claude pane,
+        // so the host terminal's IME has an anchor from the start.
+        // Idempotent and cheap.
+        app.maybe_auto_open_always_overlay();
+
         // Only render when something changed (and no cooldown is active)
         if app.dirty && app.paste_cooldown == 0 && app.resize_cooldown == 0 {
             app.dirty = false;
