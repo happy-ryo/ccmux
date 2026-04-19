@@ -545,6 +545,51 @@ mod tests {
         }
     }
 
+    #[test]
+    fn dispatch_split_forwards_role() {
+        let (tx, rx) = mpsc::channel::<AppCommand>();
+        let handle = thread::spawn(move || {
+            if let Ok(AppCommand::Split { role, reply, .. }) = rx.recv() {
+                assert_eq!(role.as_deref(), Some("worker"));
+                reply.send(Ok(7)).unwrap();
+            }
+        });
+        let resp = dispatch_request(
+            Request::Split {
+                target: PaneRef::Focused,
+                direction: Direction::Vertical,
+                command: None,
+                id: None,
+                role: Some("worker".into()),
+            },
+            &tx,
+        );
+        handle.join().unwrap();
+        assert!(matches!(resp, Response::Ok { .. }));
+    }
+
+    #[test]
+    fn dispatch_new_tab_forwards_role() {
+        let (tx, rx) = mpsc::channel::<AppCommand>();
+        let handle = thread::spawn(move || {
+            if let Ok(AppCommand::NewTab { role, reply, .. }) = rx.recv() {
+                assert_eq!(role.as_deref(), Some("leader"));
+                reply.send(Ok(9)).unwrap();
+            }
+        });
+        let resp = dispatch_request(
+            Request::NewTab {
+                command: None,
+                id: None,
+                label: None,
+                role: Some("leader".into()),
+            },
+            &tx,
+        );
+        handle.join().unwrap();
+        assert!(matches!(resp, Response::Ok { .. }));
+    }
+
     #[cfg(unix)]
     #[test]
     fn drop_removes_unix_socket_file() {

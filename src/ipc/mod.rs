@@ -308,4 +308,27 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&info).unwrap()).unwrap();
         assert_eq!(parsed, info);
     }
+
+    #[test]
+    fn split_request_with_role_roundtrips() {
+        let r = Request::Split {
+            target: PaneRef::Focused,
+            direction: Direction::Vertical,
+            command: None,
+            id: None,
+            role: Some("worker".into()),
+        };
+        assert_eq!(roundtrip(&r), r);
+    }
+
+    #[test]
+    fn new_tab_request_with_role_roundtrips() {
+        let r = Request::NewTab {
+            command: None,
+            id: None,
+            label: None,
+            role: Some("leader".into()),
+        };
+        assert_eq!(roundtrip(&r), r);
+    }
 }

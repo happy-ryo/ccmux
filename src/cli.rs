@@ -408,4 +408,66 @@ mod tests {
             other => panic!("expected Split, got {other:?}"),
         }
     }
+
+    #[test]
+    fn parses_split_with_role() {
+        let cli = Cli::try_parse_from([
+            "ccmux",
+            "split",
+            "--direction",
+            "horizontal",
+            "--role",
+            "worker",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(IpcCommand::Split { role, .. }) => {
+                assert_eq!(role.as_deref(), Some("worker"));
+            }
+            other => panic!("expected Split, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_new_tab_with_role() {
+        let cli = Cli::try_parse_from(["ccmux", "new-tab", "--role", "leader"]).unwrap();
+        match cli.command {
+            Some(IpcCommand::NewTab { role, .. }) => {
+                assert_eq!(role.as_deref(), Some("leader"));
+            }
+            other => panic!("expected NewTab, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn split_to_request_carries_role() {
+        let cli = Cli::try_parse_from([
+            "ccmux",
+            "split",
+            "--direction",
+            "vertical",
+            "--role",
+            "worker",
+        ])
+        .unwrap();
+        let req = cli.command.unwrap().to_request().unwrap();
+        match req {
+            crate::ipc::Request::Split { role, .. } => {
+                assert_eq!(role.as_deref(), Some("worker"));
+            }
+            other => panic!("expected Split, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn new_tab_to_request_carries_role() {
+        let cli = Cli::try_parse_from(["ccmux", "new-tab", "--role", "leader"]).unwrap();
+        let req = cli.command.unwrap().to_request().unwrap();
+        match req {
+            crate::ipc::Request::NewTab { role, .. } => {
+                assert_eq!(role.as_deref(), Some("leader"));
+            }
+            other => panic!("expected NewTab, got {other:?}"),
+        }
+    }
 }
