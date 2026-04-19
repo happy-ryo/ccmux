@@ -148,6 +148,15 @@ pub fn endpoint_from_env() -> Result<EndpointName> {
 mod tests {
     use super::*;
 
+    // Tests in this module mutate process-global environment variables
+    // (`UID`, `XDG_RUNTIME_DIR`, `TMPDIR`, `CCMUX_SOCKET`). `cargo test`
+    // runs test functions on multiple threads inside a single process,
+    // which makes concurrent env reads/writes racy. Guard every env-
+    // touching test with this Mutex so they serialize among themselves
+    // and — implicitly via the lock — against each other's restore
+    // paths. Tests that don't touch env vars don't need the lock.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn endpoint_for_pid_includes_pid() {
         let ep = endpoint_for_pid(12345).unwrap();
@@ -176,6 +185,7 @@ mod tests {
         // If a hostile / unusual shell exports UID=1337, the socket
         // directory must still be named after the *OS* uid — that's
         // the whole point of #58.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let before = unix_real_uid();
         let prev = std::env::var("UID").ok();
         std::env::set_var("UID", "1337");
@@ -193,6 +203,7 @@ mod tests {
         // Force the /tmp fallback by clearing both XDG_RUNTIME_DIR
         // and TMPDIR, then confirm the resulting path contains the
         // OS uid even if $UID is lying.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prev_xdg = std::env::var("XDG_RUNTIME_DIR").ok();
         let prev_tmp = std::env::var("TMPDIR").ok();
         let prev_uid = std::env::var("UID").ok();
@@ -229,7 +240,13 @@ mod tests {
 
     #[test]
     fn endpoint_from_env_fails_without_var() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var(ENV_SOCKET).ok();
         std::env::remove_var(ENV_SOCKET);
-        assert!(endpoint_from_env().is_err());
+        let result = endpoint_from_env();
+        if let Some(v) = prev {
+            std::env::set_var(ENV_SOCKET, v);
+        }
+        assert!(result.is_err());
     }
 }
