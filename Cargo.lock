@@ -210,7 +210,7 @@ dependencies = [
 
 [[package]]
 name = "ccmux"
-version = "0.5.7-fork.2"
+version = "0.5.7-fork.3"
 dependencies = [
  "anyhow",
  "arboard",
