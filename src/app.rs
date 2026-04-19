@@ -449,6 +449,89 @@ impl Workspace {
     }
 }
 
+// ─── IME composition overlay ──────────────────────────────
+
+/// Phase 4b overlay state. When present, ccmux reserves a one-line
+/// bottom row as a plain text-input widget so the host terminal's
+/// IME attaches its candidate window to a concrete position the
+/// user actually sees (Issue #25). The buffer holds the in-progress
+/// composition; on Enter we send it to `target_pane` via
+/// [`App::forward_paste_to_pty`] (bracketed paste when the PTY
+/// supports it, raw bytes otherwise) and close the overlay.
+#[derive(Debug, Clone)]
+pub struct OverlayState {
+    /// Pane id the overlay will commit its buffer to. Stored at open
+    /// time so focus changes during composition don't reroute the
+    /// text; the overlay always commits to the pane that originated
+    /// it.
+    pub target_pane: usize,
+    /// Composed characters so far, indexed by character (not byte),
+    /// so inserting multibyte text and editing via arrow keys
+    /// behaves intuitively for Japanese/Chinese composition.
+    pub buffer: String,
+    /// Cursor position in `buffer`, measured in characters. Valid
+    /// range: `0..=buffer.chars().count()`.
+    pub cursor: usize,
+}
+
+impl OverlayState {
+    pub fn new(target_pane: usize) -> Self {
+        Self {
+            target_pane,
+            buffer: String::new(),
+            cursor: 0,
+        }
+    }
+
+    /// Insert `ch` at the overlay cursor and advance.
+    pub fn insert_char(&mut self, ch: char) {
+        let byte_idx = self
+            .buffer
+            .char_indices()
+            .nth(self.cursor)
+            .map(|(i, _)| i)
+            .unwrap_or(self.buffer.len());
+        self.buffer.insert(byte_idx, ch);
+        self.cursor += 1;
+    }
+
+    /// Backspace: remove the char left of the cursor.
+    pub fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let prev = self.cursor - 1;
+        let (start, ch) = match self.buffer.char_indices().nth(prev) {
+            Some(pair) => pair,
+            None => return,
+        };
+        let end = start + ch.len_utf8();
+        self.buffer.replace_range(start..end, "");
+        self.cursor = prev;
+    }
+
+    pub fn cursor_left(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        }
+    }
+
+    pub fn cursor_right(&mut self) {
+        let len = self.buffer.chars().count();
+        if self.cursor < len {
+            self.cursor += 1;
+        }
+    }
+
+    pub fn cursor_home(&mut self) {
+        self.cursor = 0;
+    }
+
+    pub fn cursor_end(&mut self) {
+        self.cursor = self.buffer.chars().count();
+    }
+}
+
 // ─── App (global state) ───────────────────────────────────
 
 pub struct App {
@@ -491,6 +574,13 @@ pub struct App {
     /// routed to this buffer instead of the focused PTY; Enter commits
     /// to the active workspace's `custom_name`, Esc cancels.
     pub rename_input: Option<String>,
+    /// IME composition overlay. When `Some`, key input is routed into
+    /// this buffer instead of the focused PTY; the overlay reserves a
+    /// bottom row so the host terminal's IME candidate window has a
+    /// concrete text-input widget to anchor to (Issue #25 / Phase 4b).
+    /// Enter commits the composed text to the target pane via the
+    /// existing bracketed-paste path; Esc / Ctrl+C cancels.
+    pub overlay: Option<OverlayState>,
     /// (tab index, timestamp) of the last left-click on a tab label.
     /// Used to detect a double-click → enter rename mode.
     last_tab_click: Option<(usize, Instant)>,
@@ -552,6 +642,7 @@ impl App {
             last_tab_rects: Vec::new(),
             last_new_tab_rect: None,
             rename_input: None,
+            overlay: None,
             last_tab_click: None,
             selection: None,
             version_info: {
@@ -641,7 +732,8 @@ impl App {
         } else {
             0
         };
-        let main_h = rows.saturating_sub(tab_h + status_h);
+        let overlay_h: u16 = if self.overlay.is_some() { 1 } else { 0 };
+        let main_h = rows.saturating_sub(tab_h + status_h + overlay_h);
 
         let mut has_tree = self.ws().file_tree_visible;
         let mut has_preview = self.ws().preview.is_active();
@@ -723,9 +815,51 @@ impl App {
     // ─── Key handling ─────────────────────────────────────
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<bool> {
+        // Emergency escape hatch: Ctrl+Q must always quit ccmux, even
+        // while the IME composition overlay is holding input. Checked
+        // before overlay routing so the user can never get trapped in
+        // a wedged composition mode.
+        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('q') {
+            self.should_quit = true;
+            return Ok(true);
+        }
+
+        // IME composition overlay — route every relevant key into the
+        // buffer until the user commits or cancels. Takes precedence
+        // over rename and every other handler so composition never
+        // leaks into the layout / PTY unintentionally.
+        if self.overlay.is_some() {
+            return self.handle_overlay_key(key);
+        }
+
         // Rename mode — swallow all input until Enter/Esc.
         if self.rename_input.is_some() {
             return Ok(self.handle_rename_key(key));
+        }
+
+        // Ctrl+; — open the IME composition overlay whenever a PTY
+        // pane is focused. Initially gated to "is_claude_running()"
+        // panes, but that proved flaky: Claude briefly retitles the
+        // pane while running tools (e.g. "Edit", "Bash"), so the
+        // detection would flicker and the hotkey would "mysteriously
+        // stop working" mid-session. Open the overlay unconditionally
+        // when focused on a pane and let the user choose when to
+        // invoke it — users who don't need IME just don't press
+        // Ctrl+; in that pane.
+        if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char(';')) {
+            let focused_id = self.ws().focused_pane_id;
+            let pane_focused = matches!(self.ws().focus_target, FocusTarget::Pane)
+                && self.ws().panes.contains_key(&focused_id);
+            if pane_focused {
+                self.overlay = Some(OverlayState::new(focused_id));
+                // Layout includes an overlay row now — repaint so the
+                // panes shrink and the row appears.
+                self.mark_layout_change();
+                return Ok(true);
+            }
+            // Fall through when focus is on the file tree / preview;
+            // Ctrl+; in those contexts has no meaning and shouldn't
+            // open an overlay attached to a hidden target.
         }
 
         // Ctrl+Q — quit
@@ -783,6 +917,7 @@ impl App {
         if key.modifiers == KeyModifiers::ALT && key.code == KeyCode::Right {
             if !self.workspaces.is_empty() {
                 self.active_tab = (self.active_tab + 1) % self.workspaces.len();
+                self.overlay = None;
             }
             return Ok(true);
         }
@@ -795,6 +930,7 @@ impl App {
                 } else {
                     self.active_tab - 1
                 };
+                self.overlay = None;
             }
             return Ok(true);
         }
@@ -814,6 +950,7 @@ impl App {
                 if let Some(digit) = c.to_digit(10) {
                     if digit >= 1 && (digit as usize) <= self.workspaces.len() {
                         self.active_tab = (digit as usize) - 1;
+                        self.overlay = None;
                         return Ok(true);
                     }
                 }
@@ -888,6 +1025,106 @@ impl App {
             }
             _ => Ok(false),
         }
+    }
+
+    /// Modal key handling while the IME composition overlay is open.
+    /// Commits with Enter, cancels with Esc or Ctrl+C, edits the
+    /// buffer with Backspace / Arrow / Home / End, inserts other
+    /// printable characters (Shift allowed, Ctrl/Alt modifiers
+    /// ignored so ccmux chords can't sneak into the buffer). On
+    /// commit, forwards the buffer to the original target pane via
+    /// the existing bracketed-paste path, which matches how Claude
+    /// Code already handles multi-character input.
+    fn handle_overlay_key(&mut self, key: KeyEvent) -> Result<bool> {
+        let overlay = match self.overlay.as_mut() {
+            Some(o) => o,
+            None => return Ok(false),
+        };
+
+        // Cancel (Esc or Ctrl+C).
+        if matches!(key.code, KeyCode::Esc)
+            || (key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('c')))
+        {
+            self.overlay = None;
+            self.mark_layout_change();
+            return Ok(true);
+        }
+
+        // Commit.
+        if matches!(key.code, KeyCode::Enter) {
+            let target_pane = overlay.target_pane;
+            let buffer = std::mem::take(&mut overlay.buffer);
+
+            // Target sanity check — if the pane disappeared (close tab,
+            // shell exit, …) while the user was composing, don't
+            // silently discard their input. Keep the overlay open with
+            // the buffer restored and fall out of this frame so the
+            // user can recover. The buffer was `mem::take`'d above, so
+            // put it back.
+            let target_alive = self
+                .ws()
+                .panes
+                .get(&target_pane)
+                .map(|p| !p.exited)
+                .unwrap_or(false);
+            if !target_alive {
+                if let Some(o) = self.overlay.as_mut() {
+                    o.buffer = buffer;
+                    o.cursor = o.buffer.chars().count();
+                }
+                self.dirty = true;
+                return Ok(true);
+            }
+
+            // Target alive: close the overlay and deliver. If the
+            // paste write fails (PTY closed mid-send, very rare), the
+            // error propagates so the top-level render loop can log
+            // or surface it instead of the text being dropped
+            // silently.
+            self.overlay = None;
+            let mut commit_result: Result<()> = Ok(());
+            if !buffer.is_empty() {
+                let focused_before = self.ws().focused_pane_id;
+                // forward_paste_to_pty writes to the currently-focused
+                // pane, so temporarily refocus the overlay's target so
+                // the paste reaches the right pane even if focus moved.
+                self.ws_mut().focused_pane_id = target_pane;
+                commit_result = self.forward_paste_to_pty(&buffer);
+                self.ws_mut().focused_pane_id = focused_before;
+            }
+            self.mark_layout_change();
+            commit_result?;
+            return Ok(true);
+        }
+
+        // Edit.
+        match key.code {
+            KeyCode::Backspace => overlay.backspace(),
+            KeyCode::Left => overlay.cursor_left(),
+            KeyCode::Right => overlay.cursor_right(),
+            KeyCode::Home => overlay.cursor_home(),
+            KeyCode::End => overlay.cursor_end(),
+            KeyCode::Char(c) => {
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                {
+                    // Don't leak ccmux chord keys (Ctrl+D, Alt+T …)
+                    // into the buffer, but also don't let them
+                    // trigger ccmux's layout commands mid-composition
+                    // — the overlay is modal.
+                    return Ok(true);
+                }
+                // Cap at a generous but bounded size so a stuck key
+                // can't grow the buffer without limit.
+                if overlay.buffer.chars().count() < 1024 {
+                    overlay.insert_char(c);
+                }
+            }
+            _ => return Ok(true),
+        }
+        self.dirty = true;
+        Ok(true)
     }
 
     fn handle_rename_key(&mut self, key: KeyEvent) -> bool {
@@ -1046,6 +1283,7 @@ impl App {
         let ws = Workspace::new(name, cwd, pane_id, 10, 40, self.event_tx.clone())?;
         self.workspaces.push(ws);
         self.active_tab = self.workspaces.len() - 1;
+        self.overlay = None;
         self.emit_pane_started(pane_id);
         Ok(())
     }
@@ -1081,10 +1319,23 @@ impl App {
             }
         }
 
+        // If the overlay targets a pane in the tab being closed, cancel it.
+        let overlay_in_tab = self
+            .overlay
+            .as_ref()
+            .is_some_and(|o| self.workspaces[index].panes.contains_key(&o.target_pane));
+        if overlay_in_tab {
+            self.overlay = None;
+        }
+
         self.workspaces[index].shutdown();
         self.workspaces.remove(index);
+        let prev_active = self.active_tab;
         if self.active_tab >= self.workspaces.len() {
             self.active_tab = self.workspaces.len() - 1;
+        }
+        if prev_active != self.active_tab {
+            self.overlay = None;
         }
         for (pid, name, role) in to_emit {
             self.emit_pane_exited(pid, name, role);
@@ -1267,6 +1518,16 @@ impl App {
             pane.kill();
         }
 
+        // If the IME overlay targets the pane being removed, cancel it so
+        // we don't leave a modal pointing at a dead pane id.
+        if self
+            .overlay
+            .as_ref()
+            .is_some_and(|o| o.target_pane == focused)
+        {
+            self.overlay = None;
+        }
+
         // Clean up claude monitor state for this pane
         self.claude_monitor.remove(focused);
         let ws = self.ws_mut();
@@ -1446,6 +1707,9 @@ impl App {
                                 if prev_idx == tab_idx
                                     && now.duration_since(prev_t).as_millis() < 500
                         );
+                        if self.active_tab != tab_idx {
+                            self.overlay = None;
+                        }
                         self.active_tab = tab_idx;
                         if is_double {
                             self.rename_input = Some(String::new());
