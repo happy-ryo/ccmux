@@ -20,6 +20,14 @@ pub struct Cli {
     /// `./ccmux-layouts/<NAME>.toml` or `~/.config/ccmux/layouts/<NAME>.toml`
     #[arg(long, value_name = "NAME", conflicts_with = "exec")]
     pub layout: Option<String>,
+
+    /// IME overlay mode. Overrides `[ime] mode` in config.toml.
+    ///
+    /// * `hotkey` (default) — Ctrl+; opens the IME composition overlay.
+    /// * `off` — Ctrl+; is forwarded to the pane's PTY; the overlay is
+    ///   never opened.
+    #[arg(long, value_name = "MODE", value_enum)]
+    pub ime: Option<crate::config::ImeMode>,
 }
 
 /// Subcommands dispatched to a running ccmux instance via its IPC
@@ -628,6 +636,35 @@ mod tests {
             }
             other => panic!("expected Inspect, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_ime_mode_off() {
+        let cli = Cli::try_parse_from(["ccmux", "--ime", "off"]).unwrap();
+        assert_eq!(cli.ime, Some(crate::config::ImeMode::Off));
+    }
+
+    #[test]
+    fn parses_ime_mode_hotkey() {
+        let cli = Cli::try_parse_from(["ccmux", "--ime", "hotkey"]).unwrap();
+        assert_eq!(cli.ime, Some(crate::config::ImeMode::Hotkey));
+    }
+
+    #[test]
+    fn rejects_unknown_ime_mode() {
+        // `always` is reserved for Issue #40 and must not parse yet.
+        let err = Cli::try_parse_from(["ccmux", "--ime", "always"]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("always") || msg.contains("invalid value") || msg.contains("possible"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn ime_flag_is_optional() {
+        let cli = Cli::try_parse_from(["ccmux"]).unwrap();
+        assert_eq!(cli.ime, None);
     }
 
     #[test]

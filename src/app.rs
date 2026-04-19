@@ -594,6 +594,9 @@ pub struct App {
     clipboard: Option<arboard::Clipboard>,
     // Pane lifecycle event bus shared with IPC subscribers.
     pub event_bus: crate::ipc::EventBus,
+    /// IME overlay mode resolved from config + CLI. `Off` disables
+    /// the Ctrl+; hotkey so the keystroke reaches the PTY untouched.
+    pub ime_mode: crate::config::ImeMode,
 }
 
 impl App {
@@ -653,7 +656,16 @@ impl App {
             claude_monitor: crate::claude_monitor::ClaudeMonitor::new(),
             clipboard: None,
             event_bus,
+            ime_mode: crate::config::ImeMode::default(),
         })
+    }
+
+    /// Install a user-level config on top of the default App state.
+    /// Called by `main` right after [`App::new`] so the CLI / config
+    /// precedence in `config::Config::apply_cli_overrides` has already
+    /// collapsed into a single resolved value.
+    pub fn apply_config(&mut self, cfg: &crate::config::Config) {
+        self.ime_mode = cfg.ime.mode;
     }
 
     /// Emit a [`PaneStarted`] event for the given pane id. Pulls the
@@ -846,7 +858,10 @@ impl App {
         // when focused on a pane and let the user choose when to
         // invoke it — users who don't need IME just don't press
         // Ctrl+; in that pane.
-        if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char(';')) {
+        if self.ime_mode == crate::config::ImeMode::Hotkey
+            && key.modifiers == KeyModifiers::CONTROL
+            && matches!(key.code, KeyCode::Char(';'))
+        {
             let focused_id = self.ws().focused_pane_id;
             let pane_focused = matches!(self.ws().focus_target, FocusTarget::Pane)
                 && self.ws().panes.contains_key(&focused_id);
