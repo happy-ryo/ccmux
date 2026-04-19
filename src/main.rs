@@ -176,17 +176,8 @@ fn run_ipc_client(cmd: &cli::IpcCommand) -> Result<()> {
 
     // `events` uses the subscription path (long-lived stream), not the
     // single-shot request/response path.
-    if matches!(cmd, cli::IpcCommand::Events) {
-        return ipc::client::subscribe_events(&endpoint, |event| {
-            if let Ok(s) = serde_json::to_string(&event) {
-                println!("{s}");
-                // Flush after each line so the output is usable
-                // as a pipe source (`ccmux events | while read …`).
-                use std::io::Write;
-                let _ = std::io::stdout().flush();
-            }
-            true
-        });
+    if let cli::IpcCommand::Events { timeout, count } = cmd {
+        return run_events(&endpoint, timeout.map(|d| d.into()), *count);
     }
 
     let request = cmd.to_request()?;
@@ -209,6 +200,64 @@ fn run_ipc_client(cmd: &cli::IpcCommand) -> Result<()> {
             Err(anyhow::anyhow!("unexpected control response to command"))
         }
         ipc::Response::Err { message } => Err(anyhow::anyhow!("{message}")),
+    }
+}
+
+/// Run `ccmux events` with optional stop budgets. Bounds the drain so
+/// shell callers can poll inside a `/loop` cycle without hanging.
+///
+/// Architecture: a worker thread holds the subscription and forwards
+/// events into a channel; the main thread selects on that channel with
+/// a deadline, printing each event and decrementing the count budget
+/// as we go. When main returns, the `Receiver` is dropped and the
+/// worker's next `tx.send` fails, making its `on_event` callback
+/// return `false` so the subscription exits cleanly. The worker may
+/// still be blocked in `read_line` at that point; we detach it and
+/// let the OS reap on process exit (CLI is short-lived).
+fn run_events(
+    endpoint: &ipc::endpoint::EndpointName,
+    timeout: Option<std::time::Duration>,
+    count: Option<usize>,
+) -> Result<()> {
+    use std::io::Write;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let (tx, rx) = mpsc::channel::<ipc::Event>();
+    let endpoint_clone = endpoint.clone();
+    std::thread::Builder::new()
+        .name("ccmux-events-reader".into())
+        .spawn(move || {
+            let _ = ipc::client::subscribe_events(&endpoint_clone, |event| tx.send(event).is_ok());
+        })
+        .map_err(|e| anyhow::anyhow!("spawn events reader: {e}"))?;
+
+    let deadline = timeout.map(|d| Instant::now() + d);
+    let mut remaining = count;
+    loop {
+        let wait = match deadline {
+            Some(d) => match d.checked_duration_since(Instant::now()) {
+                Some(remaining_time) => remaining_time,
+                None => return Ok(()),
+            },
+            None => Duration::from_secs(60 * 60 * 24 * 365),
+        };
+        match rx.recv_timeout(wait) {
+            Ok(event) => {
+                if let Ok(s) = serde_json::to_string(&event) {
+                    println!("{s}");
+                    let _ = std::io::stdout().flush();
+                }
+                if let Some(ref mut n) = remaining {
+                    *n = n.saturating_sub(1);
+                    if *n == 0 {
+                        return Ok(());
+                    }
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => return Ok(()),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+        }
     }
 }
 
