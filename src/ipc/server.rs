@@ -424,7 +424,7 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
             }
             match reply_rx.recv_timeout(APP_REPLY_TIMEOUT) {
                 Ok(Ok(new_id)) => Response::ok_value(serde_json::json!({ "id": new_id })),
-                Ok(Err(msg)) => Response::err(msg),
+                Ok(Err(err)) => err.into_response(),
                 Err(e) => {
                     Response::err_coded(err_code::APP_TIMEOUT, format!("app did not respond: {e}"))
                 }
@@ -451,7 +451,7 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
             }
             match reply_rx.recv_timeout(APP_REPLY_TIMEOUT) {
                 Ok(Ok(new_id)) => Response::ok_value(serde_json::json!({ "id": new_id })),
-                Ok(Err(msg)) => Response::err(msg),
+                Ok(Err(err)) => err.into_response(),
                 Err(e) => {
                     Response::err_coded(err_code::APP_TIMEOUT, format!("app did not respond: {e}"))
                 }
@@ -483,7 +483,7 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
             }
             match reply_rx.recv_timeout(APP_REPLY_TIMEOUT) {
                 Ok(Ok(payload)) => Response::ok_value(payload),
-                Ok(Err(msg)) => Response::err(msg),
+                Ok(Err(err)) => err.into_response(),
                 Err(e) => {
                     Response::err_coded(err_code::APP_TIMEOUT, format!("app did not respond: {e}"))
                 }
@@ -497,7 +497,7 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
 /// variants share this exact shape.
 fn forward_unit(
     command_tx: &Sender<AppCommand>,
-    build: impl FnOnce(oneshot::Sender<std::result::Result<(), String>>) -> AppCommand,
+    build: impl FnOnce(oneshot::Sender<std::result::Result<(), super::CodedError>>) -> AppCommand,
 ) -> Response {
     let (reply_tx, reply_rx) = oneshot::channel();
     if command_tx.send(build(reply_tx)).is_err() {
@@ -508,7 +508,7 @@ fn forward_unit(
         // App-originated error strings pass through uncoded for now —
         // plumbing a stable code through AppCommand replies is a
         // follow-up (see Issue #28 non-goals).
-        Ok(Err(msg)) => Response::err(msg),
+        Ok(Err(err)) => err.into_response(),
         Err(e) => Response::err_coded(err_code::APP_TIMEOUT, format!("app did not respond: {e}")),
     }
 }
@@ -559,6 +559,41 @@ mod tests {
         );
         handle.join().unwrap();
         assert!(matches!(resp, Response::Ok { .. }));
+    }
+
+    #[test]
+    fn dispatch_focus_routes_app_coded_error_to_wire() {
+        // When the App reply carries a code (new behavior on the
+        // AppCommand reply type), the wire Response::Err must
+        // surface that same code so clients can match on it.
+        let (tx, rx) = mpsc::channel::<AppCommand>();
+        let handle = thread::spawn(move || {
+            if let Ok(AppCommand::Focus { reply, .. }) = rx.recv() {
+                reply
+                    .send(Err(super::super::CodedError::new(
+                        super::super::err_code::PANE_NOT_FOUND,
+                        "pane not found: Id(999)",
+                    )))
+                    .unwrap();
+            }
+        });
+        let resp = dispatch_request(
+            Request::Focus {
+                target: PaneRef::Id(999),
+            },
+            &tx,
+        );
+        handle.join().unwrap();
+        match resp {
+            Response::Err { message, code } => {
+                assert!(message.contains("pane not found"));
+                assert_eq!(
+                    code.as_deref(),
+                    Some(super::super::err_code::PANE_NOT_FOUND)
+                );
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
     }
 
     #[test]
