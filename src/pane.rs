@@ -259,23 +259,23 @@ impl Pane {
     }
 
     /// Decide how a mouse-wheel event at `(local_col, local_row)` — pane
-    /// content-area coordinates, 0-origin — should be handled when the
-    /// pane is in alternate-screen mode. Returns:
+    /// content-area coordinates, 0-origin — should be handled. Returns:
     ///
     /// * `Some(bytes)` when the caller should forward those bytes to
     ///   the PTY instead of scrolling the vt100 scrollback. Two sub-
     ///   cases:
-    ///   - If the application enabled mouse reporting (e.g. Claude
-    ///     Code `/tui`, vim with `set mouse=a`), the bytes are an
-    ///     xterm mouse report encoded in whatever protocol the app
-    ///     selected (SGR / UTF-8 / Default).
-    ///   - If the app is alt-screen but did NOT enable mouse
-    ///     reporting (e.g. `less`), the bytes are an arrow-key escape
-    ///     so the wheel still moves the cursor, mirroring xterm /
-    ///     WezTerm behavior.
-    /// * `None` when the pane is **not** in alternate screen — the
-    ///   caller falls back to the normal `scroll_up` / `scroll_down`
-    ///   path that walks the vt100 scrollback.
+    ///   - **Mouse reporting enabled** (any `MouseProtocolMode` other
+    ///     than `None`), regardless of whether the app is in the
+    ///     alternate screen buffer: the bytes are an xterm mouse
+    ///     report encoded in the protocol the app selected (SGR /
+    ///     UTF-8 / Default). Claude Code `/tui fullscreen` lives
+    ///     here — it enables DECSET 1003 on the *main* screen.
+    ///   - **Alt screen but no mouse reporting** (e.g. `less`): the
+    ///     bytes are an arrow-key escape so the wheel still moves
+    ///     the cursor, mirroring xterm / WezTerm behavior.
+    /// * `None` for a plain shell on the main screen with no mouse
+    ///   reporting — the caller falls back to `scroll_up` /
+    ///   `scroll_down` and walks the vt100 scrollback.
     pub fn wheel_forward_bytes(
         &self,
         scroll_down: bool,
