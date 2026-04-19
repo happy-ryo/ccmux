@@ -141,7 +141,13 @@ Three modes selected via the `[ime]` config section or `--ime` flag:
 | `off` | `Ctrl+;` is swallowed, overlay never opens. Opt-out for environments where the problem doesn't exist |
 | `always` | The overlay stays open on focused Claude panes so JP IME can compose from the first keystroke |
 
-See the README Configuration section for the config file location, precedence, and CLI flag.
+Config file location:
+
+- Linux: `$XDG_CONFIG_HOME/ccmux/config.toml` (default `~/.config/ccmux/config.toml`)
+- macOS: `~/Library/Application Support/ccmux/config.toml`
+- Windows: `%APPDATA%\ccmux\config.toml`
+
+The `--ime hotkey|off|always` CLI flag overrides the file. Precedence is **CLI > config > default (`hotkey`)**. See the README Configuration section for more details.
 
 Windows' conpty layer flickers the hardware caret during ratatui's diff paint; ccmux issues `cursor::Hide` while the overlay is open (`#[cfg(windows)]`) to mitigate. Not a full fix — see Issues #37 / #38.
 
