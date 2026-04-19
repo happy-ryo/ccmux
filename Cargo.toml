@@ -23,3 +23,8 @@ interprocess = "2"
 oneshot = "0.1"
 subtle = "2"
 humantime = "2"
+
+[target.'cfg(unix)'.dependencies]
+# getuid() for the IPC endpoint directory name. Used only on Unix;
+# on Windows the endpoint is a Named Pipe that doesn't need a uid.
+libc = "0.2"

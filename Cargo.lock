@@ -219,6 +219,7 @@ dependencies = [
  "dirs",
  "humantime",
  "interprocess",
+ "libc",
  "oneshot",
  "portable-pty",
  "ratatui",

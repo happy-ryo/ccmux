@@ -88,8 +88,21 @@ fn main() -> Result<()> {
     // inherit env from this process (via portable-pty's CommandBuilder),
     // and we publish `CCMUX` as a "you're inside ccmux" flag here too.
     let our_pid = std::process::id();
-    let ipc_endpoint = ipc::endpoint::endpoint_for_pid(our_pid)?;
-    std::env::set_var(ipc::endpoint::ENV_SOCKET, ipc_endpoint.as_str());
+    // Endpoint resolution can fail on Unix if we can't create the
+    // owner-only socket directory (read-only FS, permission-constrained
+    // mount, …). IPC is non-essential — fall through without it so the
+    // TUI still works as a plain multiplexer, mirroring the IpcServer
+    // soft-fail path below.
+    let ipc_endpoint = match ipc::endpoint::endpoint_for_pid(our_pid) {
+        Ok(ep) => Some(ep),
+        Err(e) => {
+            eprintln!("ccmux: IPC endpoint unavailable ({e}); external commands disabled.");
+            None
+        }
+    };
+    if let Some(ep) = &ipc_endpoint {
+        std::env::set_var(ipc::endpoint::ENV_SOCKET, ep.as_str());
+    }
     std::env::set_var("CCMUX", "1");
 
     // Session token derived from the process's start nanoseconds so a
@@ -117,20 +130,23 @@ fn main() -> Result<()> {
 
     // Keep the server handle alive for the process lifetime; its Drop
     // impl cleans up the Unix socket file on exit.
-    let _ipc_server = match ipc::server::IpcServer::spawn(
-        ipc_endpoint.clone(),
-        app.command_tx.clone(),
-        session_token.clone(),
-        app.event_bus.clone(),
-    ) {
-        Ok(server) => Some(server),
-        Err(e) => {
-            // IPC is non-essential for the TUI itself — fail soft so users
-            // without the required socket permissions can still use ccmux
-            // as a plain multiplexer.
-            eprintln!("ccmux: IPC server failed to start ({e}); external commands disabled.");
-            None
-        }
+    let _ipc_server = match ipc_endpoint.clone() {
+        Some(endpoint) => match ipc::server::IpcServer::spawn(
+            endpoint,
+            app.command_tx.clone(),
+            session_token.clone(),
+            app.event_bus.clone(),
+        ) {
+            Ok(server) => Some(server),
+            Err(e) => {
+                // IPC is non-essential for the TUI itself — fail soft so users
+                // without the required socket permissions can still use ccmux
+                // as a plain multiplexer.
+                eprintln!("ccmux: IPC server failed to start ({e}); external commands disabled.");
+                None
+            }
+        },
+        None => None,
     };
 
     // Phase 1 (--exec): queue the requested command on the initial focused
