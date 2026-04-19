@@ -663,8 +663,7 @@ mod tests {
         let endpoint = EndpointName::socket(sock_path.clone());
 
         let (tx, _rx) = mpsc::channel::<AppCommand>();
-        let server =
-            IpcServer::spawn(endpoint, tx, "test-token".into(), EventBus::new()).unwrap();
+        let server = IpcServer::spawn(endpoint, tx, "test-token".into(), EventBus::new()).unwrap();
 
         // Socket file should exist after binding.
         assert!(sock_path.exists(), "socket file not created");
