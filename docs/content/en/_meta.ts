@@ -3,5 +3,6 @@ export default {
   'getting-started': 'Getting Started',
   features: 'Features',
   keybindings: 'Keybindings',
+  ipc: 'IPC',
   architecture: 'Architecture',
 }

@@ -1,0 +1,175 @@
+# IPC (外部からの操作)
+
+ccmux は起動中のインスタンスを外部プロセスから制御できる **local-only IPC** を持つ。スクリプト / エージェント / 別の Claude Code セッションから pane 操作 / 画面取得 / ライフサイクル監視が行える。
+
+import { Callout } from 'nextra/components'
+
+<Callout type="info">
+  エンドポイントは Unix socket (macOS / Linux) または Named Pipe (Windows)。access control は **OS レベルの socket パーミッション** に委ねられ、same user でのみ到達できる (詳細は「セキュリティモデル」参照)。`CCMUX_SOCKET` / `CCMUX_TOKEN` 環境変数はクライアントが **エンドポイントを見つけるための指標**で、ccmux pane 内で起動した子プロセス (claude / bash / スクリプト) はこれらを継承して透過的にサブコマンドを呼び出せる。
+</Callout>
+
+## 基本サブコマンド
+
+### `ccmux list`
+
+アクティブタブ内の全 pane をリスト:
+
+```bash
+$ ccmux list
+[
+  { "id": 1, "name": "secretary", "role": "leader", "focused": true },
+  { "id": 2, "name": "worker-foo", "role": "worker", "focused": false }
+]
+```
+
+### `ccmux send`
+
+指定 pane の PTY にテキストを送る。`--enter` で改行を付けて実行まで流す。
+
+```bash
+ccmux send --name worker-foo --enter "git status"
+ccmux send --id 2 "Hello"
+ccmux send --focused $'\x1b'  # Esc を送る
+```
+
+ターゲット指定: `--name <NAME>` / `--id <N>` / `--focused`。省略時は focused pane。
+
+### `ccmux focus`
+
+キーボードフォーカスを移動。
+
+```bash
+ccmux focus --name secretary
+```
+
+### `ccmux split`
+
+pane を分割。新 pane に開始コマンドを流したり、安定名 (`--id`) や役割 (`--role`) を付けられる。
+
+```bash
+ccmux split --direction vertical --command "claude" --id worker-a --role worker
+```
+
+分割対象の pane は `--target-name <NAME>` / `--target-id <N>` / `--target-focused` で指定。省略時は focused pane が分割される。`--direction vertical | horizontal` は必須。
+
+### `ccmux new-tab`
+
+新しいタブを開き、そのタブに新 pane を 1 つ作る。
+
+```bash
+ccmux new-tab --command "claude --permission-mode plan" --id worker-plan --role worker --label "plan-session"
+```
+
+## ライフサイクル監視
+
+### `ccmux events`
+
+pane の起動 / 終了などライフサイクルイベントを JSON Lines で購読する。
+
+```bash
+ccmux events --timeout 5s --count 10
+```
+
+| Flag | 意味 |
+|---|---|
+| `--timeout <DUR>` | 指定時間後に購読終了 (`2s` / `500ms` / `1m` など) |
+| `--count <N>` | N 件受信したら終了。 `EventsDropped` meta-event も 1 件とカウント |
+
+未指定だとサーバーが切断するまで無期限に流れる。片方を指定しておけば安全。
+
+#### Event 種別
+
+```json
+{ "type": "pane_started",   "id": 3, "name": "worker-foo", "role": "worker", "ts_ms": 1700000000000 }
+{ "type": "pane_exited",    "id": 3, "name": "worker-foo", "role": "worker", "ts_ms": 1700000005000 }
+{ "type": "events_dropped", "count": 17, "ts_ms": 1700000010000 }
+{ "type": "heartbeat",      "ts_ms": 1700000012000 }
+```
+
+- `pane_started` / `pane_exited`: pane の開閉
+- `events_dropped`: 購読が遅くて event がドロップされた合算数 (subscriber 側でリコンサイル推奨)
+- `heartbeat`: 30 秒おきに出る keep-alive。接続が生きていることの確認以外に意味はない (無視して良い)
+
+#### 典型的なワンライナー
+
+ワーカーペイン終了だけを拾う:
+
+```bash
+ccmux events --timeout 5s \
+  | jq -c 'select(.type == "pane_exited" and .role == "worker")'
+```
+
+### `ccmux inspect`
+
+指定 pane の画面内容を取得。承認プロンプト検出 / エラーバナー検出など、人間の目を使わない観測に使う。
+
+```bash
+ccmux inspect --name worker-foo --lines 10 --cursor
+```
+
+| Flag | 意味 |
+|---|---|
+| `--lines <N>` | 画面下端から N 行だけ返す (省略で画面全体) |
+| `--cursor` | カーソル位置と表示状態を payload に含める |
+
+レスポンス例:
+
+```json
+{
+  "status": "ok",
+  "data": {
+    "pane": { "id": 3, "name": "worker-foo" },
+    "screen": { "rows": 40, "cols": 120, "line_start": 30, "line_count": 10 },
+    "lines": [
+      { "row": 30, "text": "Running tests..." },
+      { "row": 39, "text": "Allow this tool use? (y/n)" }
+    ],
+    "text": "Running tests...\n...\nAllow this tool use? (y/n)",
+    "cursor": { "visible": true, "row": 39, "col": 27 }
+  }
+}
+```
+
+空行も `text: ""` で保持されるので、行インデックスに依存した検知ロジックが書きやすい。
+
+## エラーコード
+
+IPC 応答のエラーは `[<code>] <message>` 形式で stderr に出る (ccmux 0.5.7+)。code は wire ABI として安定しており、substring match ではなく code で分岐するのが推奨。
+
+| Code | 意味 |
+|---|---|
+| `shutting_down` | ccmux 本体がシャットダウン中。クライアント側は即停止 |
+| `app_timeout` | UI スレッドが応答しなかった。一過性の可能性、リトライ |
+| `parse` | JSON パース失敗 (protocol bug) |
+| `protocol` | プロトコル違反 (duplicate hello など) |
+| `internal` | 内部不変条件違反 (parser lock poison 等) |
+| `pane_not_found` | 指定された pane 名 / id / Focused が存在しない |
+| `pane_vanished` | resolve 成功後に消えたレース (実質 `pane_not_found` と同扱い) |
+| `split_refused` | `ccmux split` が MAX_PANES / 最小サイズ制約で拒否 |
+| `io_error` | PTY write / spawn / OS レベル失敗 |
+
+シェルからの分岐例:
+
+```bash
+out=$(ccmux send --name worker-foo --enter "ping" 2>&1)
+case "$out" in
+  *"[pane_not_found]"*|*"[pane_vanished]"*)
+    echo "worker closed" ;;
+  *"[shutting_down]"*)
+    exit 0 ;;
+  *"[io_error]"*|*"[app_timeout]"*|*"[internal]"*)
+    echo "transient: $out" ;;
+esac
+```
+
+未知の code (将来追加される可能性) は必ず非致命扱いにして、ロジックを落とさないこと。
+
+## サブスクライバ切断
+
+`ccmux events` 購読は server 側で half-close 検知される。クライアントが read 側を閉じても、server 側の 30 秒おきの heartbeat write が失敗した時点で subscriber slot が解放される — quiet な workspace でも stale subscriber が残らない設計。
+
+## セキュリティモデル
+
+same-user 前提の local IPC で、秘匿通信用ではない。同一ユーザーで動く他プロセスは `/proc/<pid>/environ` 等から `CCMUX_TOKEN` を読める。OS レベルの user isolation が信頼境界。
+
+`CCMUX_TOKEN` は「PID 再利用で別 ccmux に誤接続しないための session token」として機能する。
