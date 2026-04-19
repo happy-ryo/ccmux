@@ -28,12 +28,12 @@ pub enum AppCommand {
         target: PaneRef,
         data: Vec<u8>,
         append_enter: bool,
-        reply: oneshot::Sender<std::result::Result<(), String>>,
+        reply: oneshot::Sender<std::result::Result<(), ipc::CodedError>>,
     },
     /// Move keyboard focus to the target pane in the active workspace.
     Focus {
         target: PaneRef,
-        reply: oneshot::Sender<std::result::Result<(), String>>,
+        reply: oneshot::Sender<std::result::Result<(), ipc::CodedError>>,
     },
     /// Split the target pane. If `command` is given, it's queued on the
     /// new pane and flushed when its shell prompt appears. If `name` is
@@ -45,7 +45,7 @@ pub enum AppCommand {
         command: Option<String>,
         name: Option<String>,
         role: Option<String>,
-        reply: oneshot::Sender<std::result::Result<usize, String>>,
+        reply: oneshot::Sender<std::result::Result<usize, ipc::CodedError>>,
     },
     /// Open a new tab with a fresh single pane. Focus switches to the
     /// new tab (mirrors the Alt+T keybinding). Returns the new pane's
@@ -55,7 +55,7 @@ pub enum AppCommand {
         name: Option<String>,
         label: Option<String>,
         role: Option<String>,
-        reply: oneshot::Sender<std::result::Result<usize, String>>,
+        reply: oneshot::Sender<std::result::Result<usize, ipc::CodedError>>,
     },
     /// Snapshot the visible screen of the target pane. See
     /// [`ipc::Request::Inspect`] for the response shape.
@@ -63,7 +63,7 @@ pub enum AppCommand {
         target: PaneRef,
         lines: Option<usize>,
         include_cursor: bool,
-        reply: oneshot::Sender<std::result::Result<serde_json::Value, String>>,
+        reply: oneshot::Sender<std::result::Result<serde_json::Value, ipc::CodedError>>,
     },
 }
 
@@ -2558,15 +2558,18 @@ impl App {
         target: &PaneRef,
         lines: Option<usize>,
         include_cursor: bool,
-    ) -> std::result::Result<serde_json::Value, String> {
+    ) -> std::result::Result<serde_json::Value, ipc::CodedError> {
         let ws = self.ws();
-        let pane_id = ws
-            .resolve_pane_ref(target)
-            .ok_or_else(|| format!("pane not found: {target:?}"))?;
+        let pane_id = ws.resolve_pane_ref(target).ok_or_else(|| {
+            ipc::CodedError::new(
+                ipc::err_code::PANE_NOT_FOUND,
+                format!("pane not found: {target:?}"),
+            )
+        })?;
         let pane = ws
             .panes
             .get(&pane_id)
-            .ok_or_else(|| "pane vanished".to_string())?;
+            .ok_or_else(|| ipc::CodedError::new(ipc::err_code::PANE_VANISHED, "pane vanished"))?;
 
         let pane_name = ws
             .pane_names
@@ -2577,10 +2580,9 @@ impl App {
         // Snapshot the vt100 state under the lock, release it before
         // JSON serialization.
         let (rows, cols, line_start, line_count, collected, cursor) = {
-            let parser = pane
-                .parser
-                .lock()
-                .map_err(|_| "vt100 parser lock poisoned".to_string())?;
+            let parser = pane.parser.lock().map_err(|_| {
+                ipc::CodedError::new(ipc::err_code::INTERNAL, "vt100 parser lock poisoned")
+            })?;
             let screen = parser.screen();
             let size = screen.size();
             let total_rows = size.0 as usize;
@@ -2668,12 +2670,13 @@ impl App {
         name: Option<String>,
         label: Option<String>,
         role: Option<String>,
-    ) -> std::result::Result<usize, String> {
+    ) -> std::result::Result<usize, ipc::CodedError> {
         // Delegate to the existing keybinding-driven new_tab so we
         // don't drift from the interactive behavior (pane id bookkeeping,
         // active_tab update, cwd inheritance). The freshly-created tab
         // becomes the active one, so `ws_mut()` points at it.
-        self.new_tab().map_err(|e| e.to_string())?;
+        self.new_tab()
+            .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?;
         let new_pane_id = self.ws().focused_pane_id;
         if let Some(pane) = self.ws_mut().panes.get_mut(&new_pane_id) {
             if let Some(cmd) = command {
@@ -2702,29 +2705,34 @@ impl App {
         target: &PaneRef,
         data: &[u8],
         append_enter: bool,
-    ) -> std::result::Result<(), String> {
-        let pane_id = self
-            .ws()
-            .resolve_pane_ref(target)
-            .ok_or_else(|| format!("pane not found: {target:?}"))?;
-        let pane = self
-            .ws_mut()
-            .panes
-            .get_mut(&pane_id)
-            .ok_or_else(|| "pane vanished".to_string())?;
-        pane.write_input(data).map_err(|e| e.to_string())?;
+    ) -> std::result::Result<(), ipc::CodedError> {
+        let pane_id = self.ws().resolve_pane_ref(target).ok_or_else(|| {
+            ipc::CodedError::new(
+                ipc::err_code::PANE_NOT_FOUND,
+                format!("pane not found: {target:?}"),
+            )
+        })?;
+        let pane =
+            self.ws_mut().panes.get_mut(&pane_id).ok_or_else(|| {
+                ipc::CodedError::new(ipc::err_code::PANE_VANISHED, "pane vanished")
+            })?;
+        pane.write_input(data)
+            .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?;
         if append_enter {
-            pane.write_input(b"\r").map_err(|e| e.to_string())?;
+            pane.write_input(b"\r")
+                .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?;
         }
         self.dirty = true;
         Ok(())
     }
 
-    fn handle_focus(&mut self, target: &PaneRef) -> std::result::Result<(), String> {
-        let pane_id = self
-            .ws()
-            .resolve_pane_ref(target)
-            .ok_or_else(|| format!("pane not found: {target:?}"))?;
+    fn handle_focus(&mut self, target: &PaneRef) -> std::result::Result<(), ipc::CodedError> {
+        let pane_id = self.ws().resolve_pane_ref(target).ok_or_else(|| {
+            ipc::CodedError::new(
+                ipc::err_code::PANE_NOT_FOUND,
+                format!("pane not found: {target:?}"),
+            )
+        })?;
         let ws = self.ws_mut();
         ws.focused_pane_id = pane_id;
         ws.focus_target = FocusTarget::Pane;
@@ -2739,11 +2747,13 @@ impl App {
         command: Option<String>,
         name: Option<String>,
         role: Option<String>,
-    ) -> std::result::Result<usize, String> {
-        let target_pane_id = self
-            .ws()
-            .resolve_pane_ref(target)
-            .ok_or_else(|| format!("pane not found: {target:?}"))?;
+    ) -> std::result::Result<usize, ipc::CodedError> {
+        let target_pane_id = self.ws().resolve_pane_ref(target).ok_or_else(|| {
+            ipc::CodedError::new(
+                ipc::err_code::PANE_NOT_FOUND,
+                format!("pane not found: {target:?}"),
+            )
+        })?;
         let prev_focus = self.ws().focused_pane_id;
         self.ws_mut().focused_pane_id = target_pane_id;
         let split_dir = match direction {
@@ -2751,14 +2761,17 @@ impl App {
             ipc::Direction::Horizontal => SplitDirection::Horizontal,
         };
         self.split_focused_pane(split_dir)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?;
         let new_pane_id = self.ws().focused_pane_id;
         // split_focused_pane is a no-op (keeps focus) when the pane is
         // too small or the workspace is already at MAX_PANES; detect
         // that by checking whether focus actually advanced.
         if new_pane_id == target_pane_id {
             self.ws_mut().focused_pane_id = prev_focus;
-            return Err("split refused (max panes reached or pane too small)".to_string());
+            return Err(ipc::CodedError::new(
+                ipc::err_code::SPLIT_REFUSED,
+                "split refused (max panes reached or pane too small)",
+            ));
         }
         if let Some(pane) = self.ws_mut().panes.get_mut(&new_pane_id) {
             if let Some(cmd) = command {

@@ -227,6 +227,82 @@ pub mod err_code {
     /// A sibling server-side invariant was violated while serializing
     /// the response payload.
     pub const INTERNAL: &str = "internal";
+    /// The referenced pane (by id, name, or Focused) does not exist
+    /// in the active workspace.
+    pub const PANE_NOT_FOUND: &str = "pane_not_found";
+    /// A pane id resolved on lookup but disappeared before the App
+    /// could act on it (close / exit race). Rare.
+    pub const PANE_VANISHED: &str = "pane_vanished";
+    /// The workspace cannot accept another split — either the
+    /// MAX_PANES cap is reached or the target pane is already at
+    /// the minimum geometry.
+    pub const SPLIT_REFUSED: &str = "split_refused";
+    /// PTY write / spawn / OS-level I/O failure surfaced to the
+    /// client so it can distinguish "setup broken" from "request
+    /// invalid".
+    pub const IO_ERROR: &str = "io_error";
+}
+
+/// App-side error carrying a free-form message plus an optional
+/// stable code from [`err_code`]. Replaces the previous
+/// `Result<T, String>` reply shape on [`crate::app::AppCommand`] so
+/// ccmux clients (including `aainc-ops`) can match on the code
+/// instead of grepping human-readable text.
+///
+/// Uncoded variants still work — older App paths or new cases that
+/// don't warrant a stable code yet can call
+/// [`CodedError::uncoded`], and the wire response still carries the
+/// message so humans can read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodedError {
+    pub message: String,
+    pub code: Option<&'static str>,
+}
+
+impl CodedError {
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            code: Some(code),
+        }
+    }
+
+    pub fn uncoded(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            code: None,
+        }
+    }
+
+    /// Convert into a wire [`Response::Err`], preserving the code
+    /// when present.
+    pub fn into_response(self) -> Response {
+        match self.code {
+            Some(c) => Response::err_coded(c, self.message),
+            None => Response::err(self.message),
+        }
+    }
+}
+
+impl std::fmt::Display for CodedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code {
+            Some(c) => write!(f, "[{c}] {}", self.message),
+            None => f.write_str(&self.message),
+        }
+    }
+}
+
+impl From<String> for CodedError {
+    fn from(s: String) -> Self {
+        CodedError::uncoded(s)
+    }
+}
+
+impl From<&str> for CodedError {
+    fn from(s: &str) -> Self {
+        CodedError::uncoded(s.to_string())
+    }
 }
 
 /// Server-pushed lifecycle event on a subscribed connection. Emitted
