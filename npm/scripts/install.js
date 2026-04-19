@@ -130,6 +130,67 @@ function cleanupFile(filePath) {
   }
 }
 
+// Atomically replace `dest` with `tempDest`. The rename can fail on
+// Windows when an antivirus scanner or another process briefly holds
+// the old binary open (EBUSY / EPERM). Retry a handful of times with
+// exponential backoff before bailing out. Importantly, we move the
+// old binary to a sibling backup path first so a crash between
+// "delete old" and "install new" doesn't leave the user with no
+// binary at all — if the rename of tempDest -> dest fails, we restore
+// the backup.
+function replaceBinaryAtomically(tempDest, dest) {
+  const backup = `${dest}.bak`;
+  const hadExisting = fs.existsSync(dest);
+
+  if (hadExisting) {
+    cleanupFile(backup);
+    fs.renameSync(dest, backup);
+  }
+
+  const maxAttempts = 5;
+  let lastErr = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      fs.renameSync(tempDest, dest);
+      lastErr = null;
+      break;
+    } catch (err) {
+      lastErr = err;
+      const retryable =
+        err && (err.code === 'EBUSY' || err.code === 'EPERM' || err.code === 'EACCES');
+      if (!retryable || attempt === maxAttempts) break;
+      const waitMs = 50 * Math.pow(2, attempt - 1);
+      const until = Date.now() + waitMs;
+      while (Date.now() < until) {
+        // Busy-wait is fine here; install.js is short-lived and
+        // single-threaded, and we want to stay synchronous.
+      }
+    }
+  }
+
+  if (lastErr) {
+    if (hadExisting) {
+      try {
+        fs.renameSync(backup, dest);
+      } catch (restoreErr) {
+        // Restore failed too; surface the original error but note the
+        // degraded state so the user can fix it manually.
+        lastErr = new Error(
+          `Failed to install new binary and failed to restore old binary.\n` +
+            `  Install error: ${lastErr.message}\n` +
+            `  Restore error: ${restoreErr.message}\n` +
+            `  Backup lives at: ${backup}`
+        );
+      }
+    }
+    throw lastErr;
+  }
+
+  if (hadExisting) {
+    cleanupFile(backup);
+  }
+}
+
 async function main() {
   const binaryName = getPlatformBinary();
   const baseUrl = `https://github.com/${REPO}/releases/download/v${VERSION}`;
@@ -165,8 +226,7 @@ async function main() {
       fs.chmodSync(tempDest, 0o755);
     }
 
-    cleanupFile(dest);
-    fs.renameSync(tempDest, dest);
+    replaceBinaryAtomically(tempDest, dest);
 
     const BLUE = '\x1b[38;2;88;166;255m';
     const DIM = '\x1b[38;2;110;118;129m';
@@ -184,8 +244,16 @@ async function main() {
     console.log('');
   } catch (err) {
     cleanupFile(tempDest);
-    console.error(`Failed to download ccmux: ${err.message}`);
-    console.error(`URL: ${url}`);
+    // `err.message` already carries the specific failing resource
+    // when it comes from resolveAndValidateUrl (host / scheme),
+    // getExpectedChecksum (checksum entry lookup), the Checksum
+    // verification FAILED branch, or replaceBinaryAtomically
+    // (install + restore detail). Print it verbatim, and add the
+    // binary URL as the default download context for the manual
+    // fallback path.
+    console.error(`Failed to install ccmux: ${err.message}`);
+    console.error(`Binary URL: ${url}`);
+    console.error(`Checksums URL: ${baseUrl}/checksums.txt`);
     console.error('You can download manually from: https://github.com/happy-ryo/ccmux/releases');
     process.exit(1);
   }
