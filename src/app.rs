@@ -898,6 +898,19 @@ impl App {
         // Claude panes (bash / vim shouldn't hijack Enter+text), and
         // disabled when the pane is scrolled back so scrollback key
         // shortcuts still work.
+        //
+        // Note on `is_claude_running()` flakiness: PR #36 removed the
+        // same gate from Ctrl+; because Claude briefly retitles the
+        // pane while running tools, causing the hotkey to
+        // "mysteriously stop working" mid-session. The failure mode
+        // for always-on is the mirror image: a momentary false-
+        // negative just means one keystroke goes to the PTY instead
+        // of the overlay, which is recoverable (user presses Ctrl+;
+        // or retypes). A false-positive would be worse — a non-
+        // Claude pane hijacking text input — but the detector keys
+        // on Claude-specific title substrings, so false positives
+        // are rare in practice. Accepting the tradeoff intentionally
+        // here; revisit if users report shell panes being hijacked.
         if self.ime_mode == crate::config::ImeMode::Always {
             if let Some(ch) = always_on_trigger_char(&key) {
                 let focused_id = self.ws().focused_pane_id;
@@ -2910,6 +2923,45 @@ mod tests {
         // ccmux (if the host passes it as Char rather than a paste).
         let k = mk_key(KeyCode::Char('あ'), KeyModifiers::NONE);
         assert_eq!(always_on_trigger_char(&k), Some('あ'));
+    }
+
+    #[test]
+    fn always_on_trigger_ctrl_alt_does_not_fire() {
+        // Windows AltGr surfaces as CTRL | ALT; must not open the
+        // overlay or the composed character wouldn't reach the
+        // terminal's own AltGr-driven keymap.
+        let k = mk_key(
+            KeyCode::Char('e'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        assert_eq!(always_on_trigger_char(&k), None);
+    }
+
+    #[test]
+    fn always_on_trigger_super_does_not_fire() {
+        let k = mk_key(KeyCode::Char('a'), KeyModifiers::SUPER);
+        assert_eq!(always_on_trigger_char(&k), None);
+    }
+
+    #[test]
+    fn always_on_trigger_meta_does_not_fire() {
+        let k = mk_key(KeyCode::Char('a'), KeyModifiers::META);
+        assert_eq!(always_on_trigger_char(&k), None);
+    }
+
+    #[test]
+    fn always_on_trigger_hyper_does_not_fire() {
+        let k = mk_key(KeyCode::Char('a'), KeyModifiers::HYPER);
+        assert_eq!(always_on_trigger_char(&k), None);
+    }
+
+    #[test]
+    fn always_on_trigger_ctrl_shift_does_not_fire() {
+        let k = mk_key(
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(always_on_trigger_char(&k), None);
     }
 
     #[test]

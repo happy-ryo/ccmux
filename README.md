@@ -91,7 +91,7 @@ mode = "hotkey"   # "hotkey" | "off" | "always"
 | `off` | `Ctrl+;` is swallowed silently — no overlay, no keystroke leaked to the shell. For users who don't use IME, or whose terminal already handles IME placement correctly. |
 | `always` | In a focused Claude pane, any printable key automatically opens the overlay and seeds it with that first character. Ctrl / Alt / navigation / function keys still pass through to the pane. Scrolled-back panes are exempt so scrollback shortcuts keep working. `Ctrl+;` also still opens the overlay explicitly. |
 
-The `--ime hotkey|off` CLI flag overrides the config file for a single run. Precedence is **CLI > config file > default**.
+The `--ime hotkey|off|always` CLI flag overrides the config file for a single run. Precedence is **CLI > config file > default**.
 
 ## Keybindings
 
