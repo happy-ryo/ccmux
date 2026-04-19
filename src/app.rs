@@ -837,27 +837,29 @@ impl App {
             return Ok(self.handle_rename_key(key));
         }
 
-        // Ctrl+; — open the IME composition overlay when the focused
-        // pane is running Claude Code. On other panes the host
-        // terminal's IME works fine because those applications don't
-        // chase the cursor around (Issue #25).
+        // Ctrl+; — open the IME composition overlay whenever a PTY
+        // pane is focused. Initially gated to "is_claude_running()"
+        // panes, but that proved flaky: Claude briefly retitles the
+        // pane while running tools (e.g. "Edit", "Bash"), so the
+        // detection would flicker and the hotkey would "mysteriously
+        // stop working" mid-session. Open the overlay unconditionally
+        // when focused on a pane and let the user choose when to
+        // invoke it — users who don't need IME just don't press
+        // Ctrl+; in that pane.
         if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char(';')) {
             let focused_id = self.ws().focused_pane_id;
-            let claude_focused = self
-                .ws()
-                .panes
-                .get(&focused_id)
-                .map(|p| p.is_claude_running())
-                .unwrap_or(false);
-            if claude_focused {
+            let pane_focused = matches!(self.ws().focus_target, FocusTarget::Pane)
+                && self.ws().panes.contains_key(&focused_id);
+            if pane_focused {
                 self.overlay = Some(OverlayState::new(focused_id));
                 // Layout includes an overlay row now — repaint so the
                 // panes shrink and the row appears.
                 self.mark_layout_change();
                 return Ok(true);
             }
-            // Fall through so non-Claude panes still receive Ctrl+; as
-            // regular PTY input.
+            // Fall through when focus is on the file tree / preview;
+            // Ctrl+; in those contexts has no meaning and shouldn't
+            // open an overlay attached to a hidden target.
         }
 
         // Ctrl+Q — quit
