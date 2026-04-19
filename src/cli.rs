@@ -65,6 +65,9 @@ pub enum IpcCommand {
         /// Tab label (overrides the cwd-derived default).
         #[arg(long)]
         label: Option<String>,
+        /// Free-form role label attached to the new pane.
+        #[arg(long)]
+        role: Option<String>,
     },
     /// Split a pane and optionally run a command in the new side.
     Split {
@@ -85,6 +88,9 @@ pub enum IpcCommand {
         /// later via `--name`.
         #[arg(long)]
         id: Option<String>,
+        /// Free-form role label attached to the new pane.
+        #[arg(long)]
+        role: Option<String>,
     },
 }
 
@@ -123,10 +129,16 @@ impl IpcCommand {
 
         match self {
             IpcCommand::List => Ok(Request::List),
-            IpcCommand::NewTab { command, id, label } => Ok(Request::NewTab {
+            IpcCommand::NewTab {
+                command,
+                id,
+                label,
+                role,
+            } => Ok(Request::NewTab {
                 command: command.clone(),
                 id: id.clone(),
                 label: label.clone(),
+                role: role.clone(),
             }),
             IpcCommand::Send {
                 name,
@@ -149,6 +161,7 @@ impl IpcCommand {
                 direction,
                 command,
                 id,
+                role,
             } => {
                 let dir = match direction.as_str() {
                     "vertical" => Direction::Vertical,
@@ -160,6 +173,7 @@ impl IpcCommand {
                     direction: dir,
                     command: command.clone(),
                     id: id.clone(),
+                    role: role.clone(),
                 })
             }
         }
@@ -345,10 +359,16 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Some(IpcCommand::NewTab { command, id, label }) => {
+            Some(IpcCommand::NewTab {
+                command,
+                id,
+                label,
+                role,
+            }) => {
                 assert_eq!(command.as_deref(), Some("cce"));
                 assert_eq!(id.as_deref(), Some("engineering"));
                 assert_eq!(label.as_deref(), Some("eng"));
+                assert!(role.is_none());
             }
             other => panic!("expected NewTab, got {other:?}"),
         }
@@ -360,10 +380,16 @@ mod tests {
             .unwrap();
         let req = cli.command.unwrap().to_request().unwrap();
         match req {
-            crate::ipc::Request::NewTab { command, id, label } => {
+            crate::ipc::Request::NewTab {
+                command,
+                id,
+                label,
+                role,
+            } => {
                 assert_eq!(command.as_deref(), Some("ccr"));
                 assert_eq!(id.as_deref(), Some("research"));
                 assert!(label.is_none());
+                assert!(role.is_none());
             }
             other => panic!("expected NewTab, got {other:?}"),
         }

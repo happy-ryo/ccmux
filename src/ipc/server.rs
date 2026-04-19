@@ -316,6 +316,7 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
             direction,
             command,
             id,
+            role,
         } => {
             let (reply_tx, reply_rx) = oneshot::channel();
             if command_tx
@@ -324,6 +325,7 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
                     direction,
                     command,
                     name: id,
+                    role,
                     reply: reply_tx,
                 })
                 .is_err()
@@ -336,13 +338,19 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
                 Err(e) => Response::err(format!("app did not respond: {e}")),
             }
         }
-        Request::NewTab { command, id, label } => {
+        Request::NewTab {
+            command,
+            id,
+            label,
+            role,
+        } => {
             let (reply_tx, reply_rx) = oneshot::channel();
             if command_tx
                 .send(AppCommand::NewTab {
                     command,
                     name: id,
                     label,
+                    role,
                     reply: reply_tx,
                 })
                 .is_err()
@@ -459,6 +467,7 @@ mod tests {
                 direction: Direction::Vertical,
                 command: None,
                 id: None,
+                role: None,
             },
             &tx,
         );
@@ -512,6 +521,7 @@ mod tests {
                 command: Some("cce".into()),
                 id: Some("engineering".into()),
                 label: None,
+                role: None,
             },
             &tx,
         );

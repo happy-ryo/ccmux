@@ -31,6 +31,10 @@ pub struct Pane {
     /// observed. Used to gate `pending_startup` flushing so the command
     /// is not eaten by an initializing shell.
     pub prompt_seen: Arc<AtomicBool>,
+    /// Free-form label for tools/humans. Unlike the name (registered in
+    /// `Workspace.pane_names` as the unique IPC key), `role` may repeat
+    /// and may be absent. Surfaced via `ccmux list`.
+    pub role: Option<String>,
 }
 
 impl Pane {
@@ -130,6 +134,7 @@ impl Pane {
             total_scrollback: scrollback_counter,
             pending_startup: None,
             prompt_seen,
+            role: None,
         };
 
         // Inject OSC 7 hook after shell starts

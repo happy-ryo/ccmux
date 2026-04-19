@@ -23,6 +23,11 @@ pub enum LayoutNodeSpec {
         id: String,
         #[serde(default)]
         command: Option<String>,
+        /// Optional human/tool-facing label. Unlike `id` (which is the
+        /// unique addressing key for IPC), `role` is free-form and may
+        /// repeat across panes (e.g. multiple `role = "worker"` panes).
+        #[serde(default)]
+        role: Option<String>,
     },
     Split {
         direction: DirectionSpec,
@@ -229,9 +234,10 @@ mod tests {
         assert_eq!(cfg.version, 1);
         assert_eq!(cfg.name, "single");
         match &cfg.root {
-            LayoutNodeSpec::Pane { id, command } => {
+            LayoutNodeSpec::Pane { id, command, role } => {
                 assert_eq!(id, "secretary");
                 assert_eq!(command.as_deref(), Some("claude /company"));
+                assert!(role.is_none());
             }
             _ => panic!("expected Pane at root"),
         }
@@ -241,6 +247,27 @@ mod tests {
     fn parses_nested_split_layout() {
         let cfg = LayoutConfig::from_toml_str(nested_layout_toml()).unwrap();
         assert_eq!(cfg.name, "cc-campany");
+    }
+
+    #[test]
+    fn parses_pane_with_role() {
+        let toml = r#"
+            version = 1
+            name = "roled"
+
+            [root]
+            type = "pane"
+            id = "primary"
+            role = "leader"
+        "#;
+        let cfg = LayoutConfig::from_toml_str(toml).unwrap();
+        match &cfg.root {
+            LayoutNodeSpec::Pane { id, role, .. } => {
+                assert_eq!(id, "primary");
+                assert_eq!(role.as_deref(), Some("leader"));
+            }
+            _ => panic!("expected Pane"),
+        }
     }
 
     #[test]

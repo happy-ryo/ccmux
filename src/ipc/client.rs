@@ -225,6 +225,7 @@ mod tests {
             direction: Direction::Horizontal,
             command: Some("echo".into()),
             id: Some("foo".into()),
+            role: None,
         };
         let mut out: Vec<u8> = Vec::new();
         write_request_line(&mut out, &req).unwrap();
