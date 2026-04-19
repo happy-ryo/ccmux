@@ -57,6 +57,14 @@ pub enum AppCommand {
         role: Option<String>,
         reply: oneshot::Sender<std::result::Result<usize, String>>,
     },
+    /// Snapshot the visible screen of the target pane. See
+    /// [`ipc::Request::Inspect`] for the response shape.
+    Inspect {
+        target: PaneRef,
+        lines: Option<usize>,
+        include_cursor: bool,
+        reply: oneshot::Sender<std::result::Result<serde_json::Value, String>>,
+    },
 }
 
 /// Resolve a [`PaneRef`] to a concrete pane id.
@@ -2091,7 +2099,121 @@ impl App {
                 let result = self.handle_new_tab(command, name, label, role);
                 let _ = reply.send(result);
             }
+            AppCommand::Inspect {
+                target,
+                lines,
+                include_cursor,
+                reply,
+            } => {
+                let result = self.handle_inspect(&target, lines, include_cursor);
+                let _ = reply.send(result);
+            }
         }
+    }
+
+    fn handle_inspect(
+        &self,
+        target: &PaneRef,
+        lines: Option<usize>,
+        include_cursor: bool,
+    ) -> std::result::Result<serde_json::Value, String> {
+        let ws = self.ws();
+        let pane_id = ws
+            .resolve_pane_ref(target)
+            .ok_or_else(|| format!("pane not found: {target:?}"))?;
+        let pane = ws
+            .panes
+            .get(&pane_id)
+            .ok_or_else(|| "pane vanished".to_string())?;
+
+        let pane_name = ws
+            .pane_names
+            .iter()
+            .find(|(_, id)| **id == pane_id)
+            .map(|(n, _)| n.clone());
+
+        // Snapshot the vt100 state under the lock, release it before
+        // JSON serialization.
+        let (rows, cols, line_start, line_count, collected, cursor) = {
+            let parser = pane
+                .parser
+                .lock()
+                .map_err(|_| "vt100 parser lock poisoned".to_string())?;
+            let screen = parser.screen();
+            let size = screen.size();
+            let total_rows = size.0 as usize;
+            let total_cols = size.1 as usize;
+
+            let want: usize = lines.map(|n| n.min(total_rows)).unwrap_or(total_rows);
+            let start: usize = total_rows.saturating_sub(want);
+            let end: usize = total_rows;
+
+            let mut collected: Vec<(usize, String)> = Vec::with_capacity(end - start);
+            for row in start..end {
+                let mut s = String::with_capacity(total_cols);
+                for col in 0..total_cols {
+                    if let Some(cell) = screen.cell(row as u16, col as u16) {
+                        s.push_str(cell.contents());
+                    }
+                }
+                // Trim trailing spaces but preserve the row's existence
+                // so callers can rely on positional indexing.
+                let trimmed = s.trim_end().to_string();
+                collected.push((row, trimmed));
+            }
+
+            let cursor = if include_cursor {
+                let (crow, ccol) = screen.cursor_position();
+                Some((!screen.hide_cursor(), crow as usize, ccol as usize))
+            } else {
+                None
+            };
+
+            (
+                total_rows,
+                total_cols,
+                start,
+                end - start,
+                collected,
+                cursor,
+            )
+        };
+
+        let text = collected
+            .iter()
+            .map(|(_, s)| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let lines_json: Vec<serde_json::Value> = collected
+            .into_iter()
+            .map(|(row, text)| serde_json::json!({ "row": row, "text": text }))
+            .collect();
+
+        let mut payload = serde_json::json!({
+            "pane": {
+                "id": pane_id,
+                "name": pane_name,
+            },
+            "screen": {
+                "rows": rows,
+                "cols": cols,
+                "line_start": line_start,
+                "line_count": line_count,
+            },
+            "lines": lines_json,
+            "text": text,
+        });
+
+        if let Some((visible, crow, ccol)) = cursor {
+            payload["cursor"] = serde_json::json!({
+                "visible": visible,
+                "row": crow,
+                "col": ccol,
+            });
+        }
+
+        Ok(payload)
     }
 
     fn handle_new_tab(

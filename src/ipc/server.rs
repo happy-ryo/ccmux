@@ -416,6 +416,29 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
         // round-tripping through App commands. If we see it here, the
         // handler called us by mistake; refuse rather than hang.
         Request::Subscribe => Response::err("subscribe should be handled inline"),
+        Request::Inspect {
+            target,
+            lines,
+            include_cursor,
+        } => {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            if command_tx
+                .send(AppCommand::Inspect {
+                    target,
+                    lines,
+                    include_cursor,
+                    reply: reply_tx,
+                })
+                .is_err()
+            {
+                return Response::err("app shutting down");
+            }
+            match reply_rx.recv_timeout(APP_REPLY_TIMEOUT) {
+                Ok(Ok(payload)) => Response::ok_value(payload),
+                Ok(Err(msg)) => Response::err(msg),
+                Err(e) => Response::err(format!("app did not respond: {e}")),
+            }
+        }
     }
 }
 
@@ -641,6 +664,63 @@ mod tests {
         );
         handle.join().unwrap();
         assert!(matches!(resp, Response::Ok { .. }));
+    }
+
+    #[test]
+    fn dispatch_inspect_forwards_payload() {
+        let (tx, rx) = mpsc::channel::<AppCommand>();
+        let handle = thread::spawn(move || {
+            if let Ok(AppCommand::Inspect {
+                lines,
+                include_cursor,
+                reply,
+                ..
+            }) = rx.recv()
+            {
+                assert_eq!(lines, Some(3));
+                assert!(include_cursor);
+                let payload = serde_json::json!({
+                    "pane": { "id": 7, "name": "worker-foo" },
+                    "screen": { "rows": 24, "cols": 80, "line_start": 21, "line_count": 3 },
+                    "lines": [
+                        { "row": 21, "text": "" },
+                        { "row": 22, "text": "" },
+                        { "row": 23, "text": "Allow this tool use? (y/n)" },
+                    ],
+                    "text": "\n\nAllow this tool use? (y/n)",
+                    "cursor": { "visible": true, "row": 23, "col": 0 },
+                });
+                reply.send(Ok(payload)).unwrap();
+            }
+        });
+        let resp = dispatch_request(
+            Request::Inspect {
+                target: PaneRef::Name("worker-foo".into()),
+                lines: Some(3),
+                include_cursor: true,
+            },
+            &tx,
+        );
+        handle.join().unwrap();
+        match resp {
+            Response::Ok { data } => {
+                assert_eq!(
+                    data.get("pane")
+                        .and_then(|p| p.get("id"))
+                        .and_then(|v| v.as_u64()),
+                    Some(7)
+                );
+                assert_eq!(
+                    data.get("cursor")
+                        .and_then(|c| c.get("visible"))
+                        .and_then(|v| v.as_bool()),
+                    Some(true)
+                );
+                let lines = data.get("lines").and_then(|v| v.as_array()).unwrap();
+                assert_eq!(lines.len(), 3);
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
     }
 
     #[cfg(unix)]
