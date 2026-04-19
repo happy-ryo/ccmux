@@ -36,15 +36,21 @@ pub enum ImeMode {
     /// Ctrl+; opens the IME composition overlay. Default.
     #[default]
     Hotkey,
-    /// Ctrl+; is passed through to the pane's PTY as a normal key,
-    /// and the overlay is never opened. For users who don't use IME
-    /// or prefer their terminal's own IME handling.
+    /// Ctrl+; is swallowed — the overlay is never opened and no
+    /// keystroke is forwarded to the pane either, because terminals
+    /// encode Ctrl+punctuation inconsistently and the bare `;` that
+    /// would otherwise leak through isn't what the user asked for.
+    /// For users who don't use IME or prefer their terminal's own
+    /// IME handling.
     Off,
-    /// The overlay opens automatically when a printable key is
-    /// pressed in a focused Claude pane that isn't scrolled back.
-    /// The triggering keystroke lands in the overlay buffer as the
-    /// first character, so the user doesn't see a dropped key. See
-    /// Issue #40 for full semantics.
+    /// The overlay is opened automatically whenever focus rests on
+    /// a non-scrolled Claude pane, so IME (including JP) has an
+    /// anchor from the first keystroke. Esc/Ctrl+C on an empty
+    /// buffer dismisses and forwards the cancel key to the pane;
+    /// dismissal clears when focus moves to another pane and back.
+    /// A printable keystroke still auto-opens on a dismissed pane
+    /// as a half-width convenience. See Issue #40 for full
+    /// semantics.
     Always,
 }
 
