@@ -815,6 +815,15 @@ impl App {
     // ─── Key handling ─────────────────────────────────────
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<bool> {
+        // Emergency escape hatch: Ctrl+Q must always quit ccmux, even
+        // while the IME composition overlay is holding input. Checked
+        // before overlay routing so the user can never get trapped in
+        // a wedged composition mode.
+        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('q') {
+            self.should_quit = true;
+            return Ok(true);
+        }
+
         // IME composition overlay — route every relevant key into the
         // buffer until the user commits or cancels. Takes precedence
         // over rename and every other handler so composition never
@@ -1040,17 +1049,46 @@ impl App {
         if matches!(key.code, KeyCode::Enter) {
             let target_pane = overlay.target_pane;
             let buffer = std::mem::take(&mut overlay.buffer);
+
+            // Target sanity check — if the pane disappeared (close tab,
+            // shell exit, …) while the user was composing, don't
+            // silently discard their input. Keep the overlay open with
+            // the buffer restored and fall out of this frame so the
+            // user can recover. The buffer was `mem::take`'d above, so
+            // put it back.
+            let target_alive = self
+                .ws()
+                .panes
+                .get(&target_pane)
+                .map(|p| !p.exited)
+                .unwrap_or(false);
+            if !target_alive {
+                if let Some(o) = self.overlay.as_mut() {
+                    o.buffer = buffer;
+                    o.cursor = o.buffer.chars().count();
+                }
+                self.dirty = true;
+                return Ok(true);
+            }
+
+            // Target alive: close the overlay and deliver. If the
+            // paste write fails (PTY closed mid-send, very rare), the
+            // error propagates so the top-level render loop can log
+            // or surface it instead of the text being dropped
+            // silently.
             self.overlay = None;
+            let mut commit_result: Result<()> = Ok(());
             if !buffer.is_empty() {
                 let focused_before = self.ws().focused_pane_id;
                 // forward_paste_to_pty writes to the currently-focused
                 // pane, so temporarily refocus the overlay's target so
                 // the paste reaches the right pane even if focus moved.
                 self.ws_mut().focused_pane_id = target_pane;
-                let _ = self.forward_paste_to_pty(&buffer);
+                commit_result = self.forward_paste_to_pty(&buffer);
                 self.ws_mut().focused_pane_id = focused_before;
             }
             self.mark_layout_change();
+            commit_result?;
             return Ok(true);
         }
 
