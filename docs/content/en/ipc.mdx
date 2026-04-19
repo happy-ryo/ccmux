@@ -5,7 +5,7 @@ ccmux exposes a **local-only IPC** so external processes can drive a running ins
 import { Callout } from 'nextra/components'
 
 <Callout type="info">
-  The endpoint is a Unix socket (macOS / Linux) or a Named Pipe (Windows). Access is scoped to the same OS user via `CCMUX_SOCKET` / `CCMUX_TOKEN` environment variables. Any process spawned inside a ccmux pane (`claude`, a shell, a script) inherits them and can call ccmux subcommands transparently.
+  The endpoint is a Unix socket (macOS / Linux) or a Named Pipe (Windows). Access control lives at the **OS socket permission layer** — only processes running as the same user can reach it (see "Security model" below). `CCMUX_SOCKET` / `CCMUX_TOKEN` environment variables are how clients **locate** the endpoint; any process spawned inside a ccmux pane (`claude`, a shell, a script) inherits them and can call ccmux subcommands transparently.
 </Callout>
 
 ## Basic subcommands
@@ -49,6 +49,8 @@ Split a pane. You can seed the new pane with a startup command, a stable name (`
 ```bash
 ccmux split --direction vertical --command "claude" --id worker-a --role worker
 ```
+
+Target the pane to split with `--target-name <NAME>` / `--target-id <N>` / `--target-focused`. When omitted, the focused pane is split. `--direction vertical | horizontal` is required.
 
 ### `ccmux new-tab`
 
