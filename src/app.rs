@@ -597,6 +597,16 @@ pub struct App {
     /// IME overlay mode resolved from config + CLI. `Off` disables
     /// the Ctrl+; hotkey so the keystroke reaches the PTY untouched.
     pub ime_mode: crate::config::ImeMode,
+    /// In `Always` mode, the pane id where the user explicitly
+    /// dismissed (Esc with empty buffer / Ctrl+C) the auto-opened
+    /// overlay. Blocks re-open on the same focus. Cleared whenever
+    /// focus moves to a different pane so the overlay reappears the
+    /// next time the user returns.
+    always_dismissed_pane: Option<usize>,
+    /// Pane id that held focus the last time we observed it. Used
+    /// by `maybe_auto_open_always_overlay` to detect focus changes
+    /// and clear `always_dismissed_pane`.
+    last_focused_pane: Option<usize>,
 }
 
 impl App {
@@ -657,6 +667,8 @@ impl App {
             clipboard: None,
             event_bus,
             ime_mode: crate::config::ImeMode::default(),
+            always_dismissed_pane: None,
+            last_focused_pane: None,
         })
     }
 
@@ -666,6 +678,59 @@ impl App {
     /// collapsed into a single resolved value.
     pub fn apply_config(&mut self, cfg: &crate::config::Config) {
         self.ime_mode = cfg.ime.mode;
+    }
+
+    /// In `Always` mode, make sure the IME overlay is open whenever
+    /// focus rests on a non-scrolled Claude pane. This is the
+    /// JP-IME-friendly behavior: the overlay provides the IME anchor
+    /// from the moment focus lands, so the terminal's IME composes
+    /// directly into it without the user having to press Ctrl+;
+    /// first. Idempotent; safe to call on every tick.
+    ///
+    /// Dismissal: a user-initiated close on a pane (Esc/Ctrl+C with
+    /// empty buffer — see `handle_overlay_key`) records that pane in
+    /// `always_dismissed_pane` so we don't immediately re-open. The
+    /// suppression clears the next time focus moves to a different
+    /// pane; returning refreshes the overlay.
+    pub fn maybe_auto_open_always_overlay(&mut self) {
+        if self.ime_mode != crate::config::ImeMode::Always {
+            return;
+        }
+        let focused_id = self.ws().focused_pane_id;
+        let pane_focused = matches!(self.ws().focus_target, FocusTarget::Pane)
+            && self.ws().panes.contains_key(&focused_id);
+
+        // Detect focus change and clear the one-pane dismissal.
+        // "Focus moves away and comes back" means any transition that
+        // changes `focused_id`, including returning to the previously
+        // dismissed pane — the user coming back is the signal they
+        // want the overlay again.
+        if self.last_focused_pane != Some(focused_id) {
+            self.always_dismissed_pane = None;
+            self.last_focused_pane = Some(focused_id);
+        }
+
+        if !pane_focused {
+            return;
+        }
+        if self.overlay.is_some() {
+            return;
+        }
+        if self.always_dismissed_pane == Some(focused_id) {
+            return;
+        }
+        if self.rename_input.is_some() {
+            return;
+        }
+        let (is_claude, is_scrolled) = {
+            let pane = &self.ws().panes[&focused_id];
+            (pane.is_claude_running(), pane.is_scrolled_back())
+        };
+        if !is_claude || is_scrolled {
+            return;
+        }
+        self.overlay = Some(OverlayState::new(focused_id));
+        self.mark_layout_change();
     }
 
     /// Emit a [`PaneStarted`] event for the given pane id. Pulls the
@@ -916,7 +981,12 @@ impl App {
                 let focused_id = self.ws().focused_pane_id;
                 let pane_focused = matches!(self.ws().focus_target, FocusTarget::Pane)
                     && self.ws().panes.contains_key(&focused_id);
-                if pane_focused {
+                // Dismissal suppresses the key-trigger too. Otherwise
+                // "dismiss overlay to send a raw Esc, then type /" would
+                // reopen the overlay on the first shell char and trap
+                // the input again.
+                let dismissed_here = self.always_dismissed_pane == Some(focused_id);
+                if pane_focused && !dismissed_here {
                     let (is_claude, is_scrolled) = {
                         let pane = &self.ws().panes[&focused_id];
                         (pane.is_claude_running(), pane.is_scrolled_back())
@@ -1115,8 +1185,43 @@ impl App {
         if matches!(key.code, KeyCode::Esc)
             || (key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('c')))
         {
+            let is_always = self.ime_mode == crate::config::ImeMode::Always;
+            let target_pane = overlay.target_pane;
+            let buffer_empty = overlay.buffer.is_empty();
+
+            if is_always && !buffer_empty {
+                // First press on a composing overlay clears the buffer
+                // but keeps the overlay open. The user needs a second
+                // press to actually dismiss, which mirrors the common
+                // "Esc once to abort composition, twice to exit" IME
+                // expectation.
+                overlay.buffer.clear();
+                overlay.cursor = 0;
+                self.mark_layout_change();
+                return Ok(true);
+            }
+
             self.overlay = None;
             self.mark_layout_change();
+
+            if is_always {
+                // Always mode would re-open the overlay on the next
+                // tick of maybe_auto_open_always_overlay. Record the
+                // explicit dismissal so the user gets a window to
+                // interact with the pane directly (Claude Esc-to-
+                // interrupt, shell-level Ctrl+C, …). The suppression
+                // clears when focus moves away and comes back.
+                self.always_dismissed_pane = Some(target_pane);
+                // Forward the cancel key to the pane so the user's
+                // intent (interrupt Claude, send Ctrl+C to shell)
+                // reaches its real target. Only on an already-empty
+                // buffer, because a non-empty buffer was clearing
+                // composition, not interacting with the pane.
+                let focused_before = self.ws().focused_pane_id;
+                self.ws_mut().focused_pane_id = target_pane;
+                let _ = self.forward_key_to_pty(key);
+                self.ws_mut().focused_pane_id = focused_before;
+            }
             return Ok(true);
         }
 
