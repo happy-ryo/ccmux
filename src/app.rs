@@ -858,10 +858,20 @@ impl App {
         // when focused on a pane and let the user choose when to
         // invoke it — users who don't need IME just don't press
         // Ctrl+; in that pane.
-        if self.ime_mode == crate::config::ImeMode::Hotkey
-            && key.modifiers == KeyModifiers::CONTROL
-            && matches!(key.code, KeyCode::Char(';'))
-        {
+        if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char(';')) {
+            match self.ime_mode {
+                crate::config::ImeMode::Off => {
+                    // User opted out of the overlay. Don't leak a bare
+                    // ';' to the PTY either: terminals encode Ctrl+;
+                    // inconsistently, and falling through to
+                    // `key_event_to_bytes` strips the Ctrl modifier and
+                    // injects a stray semicolon into the shell. Silent
+                    // swallow matches the "off" intent — the hotkey
+                    // simply does nothing.
+                    return Ok(true);
+                }
+                crate::config::ImeMode::Hotkey => { /* fall through to overlay open */ }
+            }
             let focused_id = self.ws().focused_pane_id;
             let pane_focused = matches!(self.ws().focus_target, FocusTarget::Pane)
                 && self.ws().panes.contains_key(&focused_id);

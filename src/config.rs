@@ -64,6 +64,12 @@ impl std::str::FromStr for ImeMode {
     }
 }
 
+/// Upper bound on config file size. A real user config is at most a
+/// few hundred bytes; anything larger is either a mistake (wrong
+/// file ended up at this path) or adversarial, and we don't want to
+/// read it into memory.
+const MAX_CONFIG_BYTES: u64 = 64 * 1024;
+
 impl Config {
     /// Load the config file if present. Missing file returns
     /// defaults; malformed TOML returns defaults and prints a
@@ -75,7 +81,28 @@ impl Config {
             Some(p) => p,
             None => return Self::default(),
         };
-        let text = match std::fs::read_to_string(&path) {
+        Self::load_from(&path)
+    }
+
+    /// `load()` specialized to a caller-provided path, so tests can
+    /// point at a temp file without touching `dirs::config_dir()`.
+    pub(crate) fn load_from(path: &std::path::Path) -> Self {
+        match std::fs::metadata(path) {
+            Ok(meta) if meta.len() > MAX_CONFIG_BYTES => {
+                eprintln!(
+                    "ccmux: config {} exceeds {MAX_CONFIG_BYTES} bytes; using defaults",
+                    path.display()
+                );
+                return Self::default();
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(e) => {
+                eprintln!("ccmux: config {} stat failed: {e}", path.display());
+                return Self::default();
+            }
+        }
+        let text = match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
             Err(e) => {
@@ -205,6 +232,44 @@ mod tests {
         .unwrap();
         cfg.apply_cli_overrides(None);
         assert_eq!(cfg.ime.mode, ImeMode::Off);
+    }
+
+    #[test]
+    fn load_from_missing_file_returns_default() {
+        let tmp = std::env::temp_dir().join(format!("ccmux-missing-{}.toml", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        let cfg = Config::load_from(&tmp);
+        assert_eq!(cfg.ime.mode, ImeMode::Hotkey);
+    }
+
+    #[test]
+    fn load_from_valid_file_returns_parsed() {
+        let tmp = std::env::temp_dir().join(format!("ccmux-valid-{}.toml", std::process::id()));
+        std::fs::write(&tmp, "[ime]\nmode = \"off\"\n").unwrap();
+        let cfg = Config::load_from(&tmp);
+        std::fs::remove_file(&tmp).ok();
+        assert_eq!(cfg.ime.mode, ImeMode::Off);
+    }
+
+    #[test]
+    fn load_from_malformed_file_returns_default_and_does_not_panic() {
+        let tmp = std::env::temp_dir().join(format!("ccmux-bad-{}.toml", std::process::id()));
+        std::fs::write(&tmp, "this is = not { valid toml").unwrap();
+        let cfg = Config::load_from(&tmp);
+        std::fs::remove_file(&tmp).ok();
+        assert_eq!(cfg.ime.mode, ImeMode::Hotkey);
+    }
+
+    #[test]
+    fn load_from_oversized_file_returns_default() {
+        let tmp = std::env::temp_dir().join(format!("ccmux-big-{}.toml", std::process::id()));
+        // Write ~128 KB — above the 64 KB cap — of valid-looking TOML.
+        // The cap should short-circuit before parsing.
+        let big = format!("# {}\n[ime]\nmode = \"off\"\n", "x".repeat(130_000));
+        std::fs::write(&tmp, &big).unwrap();
+        let cfg = Config::load_from(&tmp);
+        std::fs::remove_file(&tmp).ok();
+        assert_eq!(cfg.ime.mode, ImeMode::Hotkey);
     }
 
     #[test]
