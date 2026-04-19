@@ -614,7 +614,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn coded_error_display_includes_code_prefix() {
         let e = CodedError::new(err_code::PANE_NOT_FOUND, "pane not found: Id(3)");
         let s = e.to_string();
