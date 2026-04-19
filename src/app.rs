@@ -1501,6 +1501,16 @@ impl App {
             pane.kill();
         }
 
+        // If the IME overlay targets the pane being removed, cancel it so
+        // we don't leave a modal pointing at a dead pane id.
+        if self
+            .overlay
+            .as_ref()
+            .is_some_and(|o| o.target_pane == focused)
+        {
+            self.overlay = None;
+        }
+
         // Clean up claude monitor state for this pane
         self.claude_monitor.remove(focused);
         let ws = self.ws_mut();

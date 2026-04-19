@@ -329,9 +329,14 @@ fn run_event_loop(
             // overlay row. Force-hide the cursor for the entire draw
             // transaction; ratatui will re-show and place it at the overlay
             // position via frame.set_cursor_position at flush time.
-            let overlay_open = app.overlay.is_some();
-            if overlay_open {
-                let _ = execute!(io::stdout(), crossterm::cursor::Hide);
+            // Scoped to Windows because conpty is the observed culprit; on
+            // macOS / Linux terminals this wasn't seen and gating avoids
+            // any unintended side effect.
+            #[cfg(windows)]
+            {
+                if app.overlay.is_some() {
+                    let _ = execute!(io::stdout(), crossterm::cursor::Hide);
+                }
             }
             terminal.draw(|frame| {
                 ui::render(app, frame);
