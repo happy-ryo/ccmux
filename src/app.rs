@@ -2009,6 +2009,28 @@ impl App {
     /// which is where the just-echoed character landed. Once typing
     /// stops, the anchor holds at the last tracked position — Claude's
     /// thinking-line animation can't move it after that point.
+    ///
+    /// ## Known caveat: echo race
+    ///
+    /// `write_input` stamps `last_user_input_at` synchronously, but
+    /// the PTY reader thread parses the echoed byte on its own
+    /// schedule. When `refresh_ime_anchor` runs on the next frame,
+    /// the vt100 cursor may be either at the pre-echo column or the
+    /// post-echo column depending on thread timing. The IME candidate
+    /// window can therefore land one column off for a single frame
+    /// in the worst case. Subsequent typing re-anchors, so the
+    /// steady-state position is correct; this caveat only affects the
+    /// very first frame after a keystroke.
+    ///
+    /// ## Timing window rationale
+    ///
+    /// 500 ms comfortably covers sustained human typing cadence
+    /// (200-300 ms inter-key typical, 400 ms for slow input) while
+    /// being short enough that Claude's thinking-row animation —
+    /// which runs on its own cadence — doesn't catch the window and
+    /// drag the anchor along. Not measured on slow or remote IME
+    /// stacks yet; if anchor lag is reported, this is the first knob
+    /// to tune.
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn refresh_ime_anchor(&mut self) {
         #[cfg(windows)]
