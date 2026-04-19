@@ -127,7 +127,10 @@ $ npm install -g ccmux-fork</code></pre>
 
       <h2>Differences from upstream</h2>
       <p style="color: var(--muted); font-size: 0.9rem; margin-top: -4px;">
-        Everything upstream ships with, plus these fork-only additions:
+        The fork is a strict superset of the current upstream
+        <code>master</code> — everything upstream ships is here.
+        Additions unique to the fork (compared to the shipped
+        upstream snapshot):
       </p>
       <table class="diff">
         <thead>
@@ -138,16 +141,6 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
         </thead>
         <tbody>
-          <tr>
-            <td>Split panes / tabs / file tree / preview</td>
-            <td class="mark">✓</td>
-            <td class="mark has">✓</td>
-          </tr>
-          <tr>
-            <td>External IPC control (<code>ccmux list / send / focus / split / new-tab</code>)</td>
-            <td class="mark">—</td>
-            <td class="mark has">✓</td>
-          </tr>
           <tr>
             <td>Pane lifecycle events (<code>ccmux events --timeout / --count</code>)</td>
             <td class="mark">—</td>
@@ -176,6 +169,16 @@ $ npm install -g ccmux-fork</code></pre>
           <tr>
             <td>CI matrix (Windows / macOS / Linux) with rustfmt + clippy gate</td>
             <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
+            <td>
+              Basic IPC (<code>list / send / focus / split / new-tab</code>)
+              <br /><span style="color: var(--muted); font-size: 0.85em;">
+                co-developed with upstream PR #4; not yet on upstream <code>master</code>
+              </span>
+            </td>
+            <td class="mark">pending</td>
             <td class="mark has">✓</td>
           </tr>
         </tbody>
