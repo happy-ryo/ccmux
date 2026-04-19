@@ -2190,11 +2190,15 @@ impl App {
             .map(|(row, text)| serde_json::json!({ "row": row, "text": text }))
             .collect();
 
+        // Build `pane` so `name` is omitted when the pane has no
+        // registered IPC name, matching the existing `PaneInfo`
+        // convention of omitting absent optionals.
+        let mut pane_obj = serde_json::json!({ "id": pane_id });
+        if let Some(n) = pane_name {
+            pane_obj["name"] = serde_json::Value::String(n);
+        }
         let mut payload = serde_json::json!({
-            "pane": {
-                "id": pane_id,
-                "name": pane_name,
-            },
+            "pane": pane_obj,
             "screen": {
                 "rows": rows,
                 "cols": cols,
