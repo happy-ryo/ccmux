@@ -92,6 +92,11 @@ pub enum IpcCommand {
         #[arg(long)]
         role: Option<String>,
     },
+    /// Subscribe to pane lifecycle events. Streams one JSON object per
+    /// line to stdout until the ccmux server closes the connection or
+    /// the caller sends EOF/SIGINT. Pipeable into `while read -r line`
+    /// for reactive shell scripts.
+    Events,
 }
 
 impl Cli {
@@ -176,6 +181,7 @@ impl IpcCommand {
                     role: role.clone(),
                 })
             }
+            IpcCommand::Events => Ok(Request::Subscribe),
         }
     }
 }

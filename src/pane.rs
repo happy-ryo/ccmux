@@ -35,6 +35,10 @@ pub struct Pane {
     /// `Workspace.pane_names` as the unique IPC key), `role` may repeat
     /// and may be absent. Surfaced via `ccmux list`.
     pub role: Option<String>,
+    /// Set once the App has published a `PaneExited` event for this
+    /// pane. Guards the multiple exit pathways (explicit close, tab
+    /// close, natural shell exit) so subscribers see exactly one event.
+    pub exit_event_emitted: bool,
 }
 
 impl Pane {
@@ -135,6 +139,7 @@ impl Pane {
             pending_startup: None,
             prompt_seen,
             role: None,
+            exit_event_emitted: false,
         };
 
         // Inject OSC 7 hook after shell starts

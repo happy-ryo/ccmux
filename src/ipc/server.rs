@@ -28,6 +28,7 @@ use anyhow::{Context, Result};
 use interprocess::local_socket::{prelude::*, ListenerOptions, Stream};
 
 use super::endpoint::{EndpointKind, EndpointName};
+use super::events::EventBus;
 use super::{Request, Response, APP_REPLY_TIMEOUT};
 use crate::app::AppCommand;
 
@@ -96,6 +97,7 @@ impl IpcServer {
         endpoint: EndpointName,
         command_tx: Sender<AppCommand>,
         session_token: String,
+        event_bus: EventBus,
     ) -> Result<Self> {
         let listener = bind_listener(&endpoint)
             .with_context(|| format!("bind IPC endpoint {}", endpoint.as_str()))?;
@@ -114,6 +116,7 @@ impl IpcServer {
                     token_for_thread,
                     endpoint_for_log,
                     stop_for_thread,
+                    event_bus,
                 );
                 // Signal Drop that the accept loop has returned. If the
                 // receiver is already gone (Drop finished first because
@@ -164,6 +167,7 @@ fn accept_loop(
     session_token: String,
     endpoint_for_log: String,
     stop: Arc<AtomicBool>,
+    event_bus: EventBus,
 ) {
     for conn in listener.incoming() {
         // The self-connect triggered by IpcServer::drop returns here;
@@ -188,10 +192,11 @@ fn accept_loop(
 
         let tx = command_tx.clone();
         let token = session_token.clone();
+        let bus = event_bus.clone();
         if let Err(e) = thread::Builder::new()
             .name("ccmux-ipc-worker".into())
             .spawn(move || {
-                if let Err(e) = handle_connection(conn, tx, &token) {
+                if let Err(e) = handle_connection(conn, tx, &token, bus) {
                     eprintln!("ccmux IPC: connection error: {e}");
                 }
             })
@@ -210,6 +215,7 @@ fn handle_connection(
     conn: Stream,
     command_tx: Sender<AppCommand>,
     session_token: &str,
+    event_bus: EventBus,
 ) -> Result<()> {
     // The stream is split by wrapping in BufReader for line-buffered
     // reads; writes go through BufReader::get_mut. We can't construct
@@ -261,8 +267,36 @@ fn handle_connection(
             );
         }
     };
+    if matches!(req, Request::Subscribe) {
+        // Switch this connection into event-stream mode: send the ack,
+        // then push events until the client disconnects.
+        write_response_line(reader.get_mut(), &Response::Subscribed)?;
+        return stream_events(reader.into_inner(), event_bus);
+    }
     let resp = dispatch_request(req, &command_tx);
     write_response_line(reader.get_mut(), &resp)?;
+    Ok(())
+}
+
+/// Drain events from the bus into the wire until the connection dies
+/// or the subscriber is unregistered. Called after the Subscribe ack
+/// has been written.
+fn stream_events(mut conn: Stream, event_bus: EventBus) -> Result<()> {
+    let (sub_id, rx) = event_bus.subscribe();
+    // The recv loop is bounded only by the connection's lifetime.
+    // The client can stop the stream by closing the socket, which
+    // makes the next write fail and we bail out.
+    while let Ok(event) = rx.recv() {
+        let mut json = match serde_json::to_string(&event) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        json.push('\n');
+        if conn.write_all(json.as_bytes()).is_err() || conn.flush().is_err() {
+            break;
+        }
+    }
+    event_bus.unsubscribe(sub_id);
     Ok(())
 }
 
@@ -363,6 +397,11 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
                 Err(e) => Response::err(format!("app did not respond: {e}")),
             }
         }
+        // Subscribe is handled by the connection handler directly — it
+        // switches the wire into event-stream mode rather than
+        // round-tripping through App commands. If we see it here, the
+        // handler called us by mistake; refuse rather than hang.
+        Request::Subscribe => Response::err("subscribe should be handled inline"),
     }
 }
 
