@@ -614,6 +614,59 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn coded_error_display_includes_code_prefix() {
+        let e = CodedError::new(err_code::PANE_NOT_FOUND, "pane not found: Id(3)");
+        let s = e.to_string();
+        assert!(s.contains("[pane_not_found]"), "{s}");
+        assert!(s.contains("pane not found"), "{s}");
+    }
+
+    #[test]
+    fn coded_error_uncoded_display_has_no_prefix() {
+        let e = CodedError::uncoded("plain message");
+        assert_eq!(e.to_string(), "plain message");
+    }
+
+    #[test]
+    fn coded_error_from_string_is_uncoded() {
+        let e: CodedError = String::from("boom").into();
+        assert_eq!(e.code, None);
+        assert_eq!(e.message, "boom");
+    }
+
+    #[test]
+    fn coded_error_from_str_is_uncoded() {
+        let e: CodedError = "boom".into();
+        assert_eq!(e.code, None);
+        assert_eq!(e.message, "boom");
+    }
+
+    #[test]
+    fn coded_error_into_response_preserves_code() {
+        let e = CodedError::new(err_code::SPLIT_REFUSED, "too small");
+        match e.into_response() {
+            Response::Err { message, code } => {
+                assert_eq!(message, "too small");
+                assert_eq!(code.as_deref(), Some(err_code::SPLIT_REFUSED));
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn coded_error_into_response_omits_missing_code() {
+        let e = CodedError::uncoded("no code");
+        match e.into_response() {
+            Response::Err { message, code } => {
+                assert_eq!(message, "no code");
+                assert_eq!(code, None);
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn events_dropped_meta_event_roundtrips() {
         let ev = Event::EventsDropped {
             count: 17,
