@@ -1,0 +1,104 @@
+# IME 入力 (日本語 / 中国語 / 韓国語)
+
+一部のホストターミナルの IME は **カーソル位置に候補ウィンドウを張り付ける**。ccmux のような TUI の上で Claude Code などを動かすと、アプリ (Claude Code) が自前の描画カーソルを頻繁に動かすため、ホスト IME の候補窓が 予測不能な位置に出たり、ちらついたりする。
+
+実機で確認されている症状 (メンテナの環境でのテスト結果):
+
+- **発生する**: Windows + WezTerm / zellij / その他サードパーティ製ターミナル
+- **発生しない**: Windows Terminal (Microsoft 標準)、macOS 標準の Terminal.app / iTerm2
+
+macOS / Linux 標準ターミナルでは host IME の anchor 挙動が異なり同じ問題が出ないが、Windows + 非標準ターミナルの組み合わせで日本語入力しようとすると顕著。
+
+ccmux はこの問題を **composition overlay** で解決する。画面最下部に 1 行の IME 入力欄を描画してホスト IME の anchor 位置を固定し、確定済みテキストだけを bracketed paste で pane に送る。問題のない環境 (Windows Terminal など) のユーザーは `off` モードにすれば overlay は完全に無効化される。
+
+## モード (`[ime]` / `--ime`)
+
+import { Callout } from 'nextra/components'
+
+設定ファイル (Linux: `$XDG_CONFIG_HOME/ccmux/config.toml`、デフォルト `~/.config/ccmux/config.toml` / macOS: `~/Library/Application Support/ccmux/config.toml` / Windows: `%APPDATA%\ccmux\config.toml`) または CLI で選択:
+
+```toml
+[ime]
+mode = "hotkey"   # "hotkey" | "off" | "always"
+```
+
+```bash
+ccmux --ime hotkey|off|always
+```
+
+優先順位: **CLI > config file > default**。
+
+| Value | Behavior |
+|---|---|
+| `hotkey` (デフォルト) | `Ctrl+;` で IME overlay を開く。Enter で確定 → pane に送信、Esc / Ctrl+C でキャンセル |
+| `off` | `Ctrl+;` は swallow (overlay は開かず、bare `;` も pane に漏らさない)。IME を使わない / ホストターミナル側で完結させたいユーザー向けの opt-out |
+| `always` | Claude pane にフォーカスが乗る度に overlay を自動で開き、そのままにする。IME の anchor が常にあるので **最初のキー入力から JP IME で変換可能**。Esc (空 buffer) / Ctrl+C で dismiss し、pane にそのキーを forward。別 pane から戻ると再オープン |
+
+### `hotkey` モード
+
+デフォルト。IME を使いたい時だけユーザーが明示的に起動する。
+
+1. Claude pane にフォーカス
+2. `Ctrl+;` を押す → 画面最下部に ` IME ❯ ` プロンプトが出る
+3. 日本語 / 中国語 / 韓国語を入力 (ホスト IME は overlay 位置に候補を出す)
+4. Enter で確定 → 確定文字列が bracketed paste として pane に送られる
+5. Esc / Ctrl+C でキャンセル (buffer 破棄、pane には何も送らない)
+
+overlay 中は Backspace / Left / Right / Home / End で buffer 編集可。Ctrl / Alt 系の修飾キーは overlay が swallow するので、Claude 自身のショートカットに流れない。
+
+### `off` モード
+
+`Ctrl+;` は ccmux が完全に無視する (overlay も開かない、PTY にも何も送らない)。
+
+<Callout type="info">
+  terminal によっては `Ctrl+;` が別機能にバインドされている場合があり、bare `;` が shell に漏れると混乱する。`off` モードは一切そのキーストロークを処理しない、というストリクトな挙動を選ぶ。
+</Callout>
+
+### `always` モード
+
+Claude Code `/tui fullscreen` や JP IME ヘビーユーザー向け。Claude pane にフォーカスが乗った時点で overlay が自動で開き、ホスト IME は **最初から** overlay 位置に anchor できる。
+
+**挙動詳細**:
+
+- Claude pane (ccmux が `is_claude_running()` で検出) にフォーカスが入る、または scrollback から抜けると overlay を自動起動
+- shell pane (bash / vim など) では自動起動しない — シェル操作は直接 PTY に流れる
+- `Ctrl+;` は依然として明示オープンとしても動く (既に開いていれば no-op)
+
+**dismiss セマンティクス**:
+
+| 状態 | キー | 挙動 |
+|---|---|---|
+| buffer 非空 | Esc / Ctrl+C | buffer だけクリア、overlay は開いたまま (IME の「1 回目の Esc で変換を abort」作法) |
+| buffer 空 | Esc / Ctrl+C | overlay close + そのキーを pane に forward (Claude の Esc 割込み / shell の Ctrl+C に届ける) + そのフォーカス中は自動再オープンしない |
+| 別 pane に移動 → 戻る | — | dismiss 状態クリア、次のフォーカス確立で再オープン |
+
+<Callout type="warning">
+  `always` モード中は overlay が pane 上の唯一のキー受信者になるため、`Ctrl+D` split / `Ctrl+Left/Right` フォーカス切替 / `Alt+Left/Right` タブ切替などの ccmux ショートカットは発火しない。dismiss してから使うか、これらを頻繁に使うワークフローなら `hotkey` モードに留まるのが良い。
+</Callout>
+
+## Caret flicker 対策 (Windows)
+
+ccmux が overlay を描画する際、Windows の conpty が ratatui の差分描画 (MoveTo / Print の連発) 中にハードウェアキャレットを一瞬見せてしまい、Claude の Thinking スピナーが走っているとキャレットが高速でちらつく。これは host ターミナルを問わず Windows の conpty レイヤーで発生する。ccmux は overlay が開いている間、`terminal.draw` 直前に `crossterm::cursor::Hide` を明示発行して flicker を抑える (Windows のみ、`#[cfg(windows)]` で gate)。
+
+完全消失ではなく軽減だが、実用上問題ないレベルまで改善している。残留 flicker を根治したい場合の案は Issue #37 / #38 にバックログ化されている。
+
+## プラットフォーム検証状況
+
+| 環境 | overlay 機構 | caret flicker 緩和 |
+|---|---|---|
+| Windows + WezTerm (IME 問題の主戦場) | 実機検証済 | 同左 |
+| Windows + Windows Terminal | 動作するが、この組み合わせでは元々 IME 問題が発生しないので overlay は不要 (`off` 推奨) | 同左 |
+| Windows + zellij | 実機検証済 | 同左 |
+| macOS Terminal.app / iTerm2 | 未検証 (#41) | 不要 (conpty なし) |
+| Linux ibus / fcitx5 | 未検証 (#41) | 不要 |
+
+overlay 自体は pure ratatui / crossterm 実装なので、他プラットフォームでもクロスプラットフォームで動くはずだが、各環境の IME スタックとの組み合わせは Issue #41 で追跡。
+
+## 実装の対応関係
+
+| 機能 | 関連 PR | 実装ファイル |
+|---|---|---|
+| composition overlay (基本機構) | #36 | `src/app.rs::OverlayState`, `src/ui.rs::render_ime_overlay` |
+| `[ime]` section + `--ime` flag | #39, #44 | `src/config.rs`, `src/cli.rs` |
+| `always` モード | #40, #45 | `src/app.rs::maybe_auto_open_always_overlay` |
+| Windows caret flicker 抑制 | #36 follow-ups | `src/main.rs` (cfg(windows) の Hide 呼び出し) |
