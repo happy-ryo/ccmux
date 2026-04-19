@@ -268,10 +268,18 @@ fn handle_connection(
         }
     };
     if matches!(req, Request::Subscribe) {
-        // Switch this connection into event-stream mode: send the ack,
-        // then push events until the client disconnects.
-        write_response_line(reader.get_mut(), &Response::Subscribed)?;
-        return stream_events(reader.into_inner(), event_bus);
+        // Register the subscriber *before* acking so no event emitted
+        // after `Response::Subscribed` hits the wire can be lost
+        // between the ack and `EventBus::subscribe`. The contract is
+        // "any event that occurs after the client sees Subscribed is
+        // observable", which requires the registration to happen
+        // first.
+        let (sub_id, rx) = event_bus.subscribe();
+        if let Err(e) = write_response_line(reader.get_mut(), &Response::Subscribed) {
+            event_bus.unsubscribe(sub_id);
+            return Err(e);
+        }
+        return stream_events(reader.into_inner(), event_bus, sub_id, rx);
     }
     let resp = dispatch_request(req, &command_tx);
     write_response_line(reader.get_mut(), &resp)?;
@@ -279,10 +287,16 @@ fn handle_connection(
 }
 
 /// Drain events from the bus into the wire until the connection dies
-/// or the subscriber is unregistered. Called after the Subscribe ack
-/// has been written.
-fn stream_events(mut conn: Stream, event_bus: EventBus) -> Result<()> {
-    let (sub_id, rx) = event_bus.subscribe();
+/// or the subscriber is unregistered. The subscription was already
+/// registered by `handle_connection` before the Subscribed ack was
+/// written, so any event observed from here on is part of the
+/// post-ack stream the client can rely on.
+fn stream_events(
+    mut conn: Stream,
+    event_bus: EventBus,
+    sub_id: super::events::SubId,
+    rx: std::sync::mpsc::Receiver<super::Event>,
+) -> Result<()> {
     // The recv loop is bounded only by the connection's lifetime.
     // The client can stop the stream by closing the socket, which
     // makes the next write fail and we bail out.

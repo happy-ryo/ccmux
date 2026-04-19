@@ -1989,6 +1989,31 @@ impl App {
     }
 
     pub fn shutdown(&mut self) {
+        // Surface PaneExited for every still-live pane before we tear
+        // down the workspaces, so an event-stream subscriber observes
+        // the final state consistently with the exactly-once contract.
+        // `exit_event_emitted` guards against re-emitting any pane that
+        // already exited via Ctrl+W, close_tab, or a natural shell exit.
+        let mut pending: Vec<(usize, Option<String>, Option<String>)> = Vec::new();
+        for ws in &mut self.workspaces {
+            let pane_ids: Vec<usize> = ws.panes.keys().copied().collect();
+            for pid in pane_ids {
+                let name = ws
+                    .pane_names
+                    .iter()
+                    .find(|(_, id)| **id == pid)
+                    .map(|(n, _)| n.clone());
+                if let Some(pane) = ws.panes.get_mut(&pid) {
+                    if !pane.exit_event_emitted {
+                        pane.exit_event_emitted = true;
+                        pending.push((pid, name, pane.role.clone()));
+                    }
+                }
+            }
+        }
+        for (pid, name, role) in pending {
+            self.emit_pane_exited(pid, name, role);
+        }
         for ws in &mut self.workspaces {
             ws.shutdown();
         }
