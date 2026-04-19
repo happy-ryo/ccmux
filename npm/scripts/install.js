@@ -130,20 +130,35 @@ function cleanupFile(filePath) {
   }
 }
 
-// Atomically replace `dest` with `tempDest`. The rename can fail on
-// Windows when an antivirus scanner or another process briefly holds
-// the old binary open (EBUSY / EPERM). Retry a handful of times with
-// exponential backoff before bailing out. Importantly, we move the
-// old binary to a sibling backup path first so a crash between
-// "delete old" and "install new" doesn't leave the user with no
-// binary at all — if the rename of tempDest -> dest fails, we restore
-// the backup.
-function replaceBinaryAtomically(tempDest, dest) {
-  const backup = `${dest}.bak`;
+// Replace `dest` with `tempDest`.
+//
+// Not truly atomic: on Windows a POSIX-style rename isn't available,
+// and even on Unix we run two renames back-to-back (dest -> backup,
+// then tempDest -> dest), so there is a brief window where `dest`
+// does not exist. If the process is killed inside that window the
+// user is left with no binary at the canonical path until they
+// rerun the installer.
+//
+// The sequence is still a strong improvement over the previous
+// "rm old, rename new" path because:
+//
+// - The old binary is preserved at a unique backup path for as long
+//   as the install could fail. A rename-level failure restores it.
+// - The backup path is per-install (suffix with process PID and a
+//   timestamp) so a stale `.bak` from a crashed previous run isn't
+//   clobbered, and a failed install leaves behind a file the user
+//   can inspect or restore manually.
+// - The rename can fail on Windows when an antivirus scanner or
+//   another process briefly holds the old binary open (EBUSY /
+//   EPERM / EACCES). A small bounded retry with exponential
+//   backoff (50 / 100 / 200 / 400 ms between attempts, five
+//   attempts total, ~750 ms total wait before giving up) absorbs
+//   most of that transient lock contention.
+function replaceBinaryWithBackup(tempDest, dest) {
+  const backup = `${dest}.${process.pid}.${Date.now()}.bak`;
   const hadExisting = fs.existsSync(dest);
 
   if (hadExisting) {
-    cleanupFile(backup);
     fs.renameSync(dest, backup);
   }
 
@@ -173,8 +188,6 @@ function replaceBinaryAtomically(tempDest, dest) {
       try {
         fs.renameSync(backup, dest);
       } catch (restoreErr) {
-        // Restore failed too; surface the original error but note the
-        // degraded state so the user can fix it manually.
         lastErr = new Error(
           `Failed to install new binary and failed to restore old binary.\n` +
             `  Install error: ${lastErr.message}\n` +
@@ -226,7 +239,7 @@ async function main() {
       fs.chmodSync(tempDest, 0o755);
     }
 
-    replaceBinaryAtomically(tempDest, dest);
+    replaceBinaryWithBackup(tempDest, dest);
 
     const BLUE = '\x1b[38;2;88;166;255m';
     const DIM = '\x1b[38;2;110;118;129m';
