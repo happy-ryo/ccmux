@@ -107,6 +107,25 @@ pub enum Request {
     /// [`Event`] JSON Lines until the client disconnects. No further
     /// [`Request`]s are accepted on this connection.
     Subscribe,
+    /// Snapshot the current visible screen of the target pane.
+    /// Returns the plain-text contents in row-addressable form so
+    /// orchestrators can detect prompts like "Allow this tool use?",
+    /// error banners, or mode indicators without relying on worker
+    /// self-reports.
+    ///
+    /// `lines = Some(N)` limits the response to the bottom `N` rows
+    /// of the screen grid (including blank rows — the row layout is
+    /// preserved on purpose so callers can match against fixed
+    /// positions like the status bar). `None` returns the full
+    /// visible screen. `include_cursor = true` adds a `cursor`
+    /// object to the payload.
+    Inspect {
+        target: PaneRef,
+        #[serde(default)]
+        lines: Option<usize>,
+        #[serde(default)]
+        include_cursor: bool,
+    },
 }
 
 /// Identifies a pane in a request. Names are user-friendly and stable
@@ -429,5 +448,41 @@ mod tests {
         };
         let parsed: Event = serde_json::from_str(&serde_json::to_string(&ev).unwrap()).unwrap();
         assert_eq!(parsed, ev);
+    }
+
+    #[test]
+    fn inspect_request_roundtrips_with_defaults() {
+        let r = Request::Inspect {
+            target: PaneRef::Focused,
+            lines: None,
+            include_cursor: false,
+        };
+        assert_eq!(roundtrip(&r), r);
+    }
+
+    #[test]
+    fn inspect_request_roundtrips_with_lines_and_cursor() {
+        let r = Request::Inspect {
+            target: PaneRef::Name("worker-foo".into()),
+            lines: Some(4),
+            include_cursor: true,
+        };
+        assert_eq!(roundtrip(&r), r);
+    }
+
+    #[test]
+    fn inspect_request_accepts_minimal_json() {
+        // `lines` and `include_cursor` default so a minimal
+        // `{cmd: inspect, target: ...}` must still parse.
+        let minimal = r#"{"cmd":"inspect","target":{"focused":null}}"#;
+        let parsed: Request = serde_json::from_str(minimal).unwrap();
+        match parsed {
+            Request::Inspect {
+                target: PaneRef::Focused,
+                lines: None,
+                include_cursor: false,
+            } => {}
+            other => panic!("expected Inspect defaults, got {other:?}"),
+        }
     }
 }

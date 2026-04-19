@@ -92,6 +92,25 @@ pub enum IpcCommand {
         #[arg(long)]
         role: Option<String>,
     },
+    /// Snapshot the visible screen of a pane. Returns JSON with one
+    /// entry per screen row so callers can match against fixed
+    /// positions (e.g. a status-bar row) without re-flowing blank rows.
+    Inspect {
+        /// Pane name. Defaults to the focused pane.
+        #[arg(long, conflicts_with_all = ["id", "focused"])]
+        name: Option<String>,
+        #[arg(long, conflicts_with_all = ["name", "focused"])]
+        id: Option<usize>,
+        #[arg(long, conflicts_with_all = ["name", "id"])]
+        focused: bool,
+        /// Limit to the bottom N rows of the screen grid (blank rows
+        /// preserved). Omit to return the full visible screen.
+        #[arg(long)]
+        lines: Option<usize>,
+        /// Include the cursor position and visibility in the payload.
+        #[arg(long)]
+        cursor: bool,
+    },
     /// Subscribe to pane lifecycle events. Streams one JSON object per
     /// line to stdout until the ccmux server closes the connection or
     /// one of `--timeout` / `--count` stops the drain. Pipeable into
@@ -192,6 +211,17 @@ impl IpcCommand {
                 })
             }
             IpcCommand::Events { .. } => Ok(Request::Subscribe),
+            IpcCommand::Inspect {
+                name,
+                id,
+                focused,
+                lines,
+                cursor,
+            } => Ok(Request::Inspect {
+                target: pick_ref(name, id, *focused)?,
+                lines: *lines,
+                include_cursor: *cursor,
+            }),
         }
     }
 }
@@ -530,6 +560,74 @@ mod tests {
         let cli = Cli::try_parse_from(["ccmux", "events", "--count", "3"]).unwrap();
         let req = cli.command.unwrap().to_request().unwrap();
         assert!(matches!(req, crate::ipc::Request::Subscribe));
+    }
+
+    #[test]
+    fn parses_inspect_focused_default() {
+        let cli = Cli::try_parse_from(["ccmux", "inspect"]).unwrap();
+        match cli.command {
+            Some(IpcCommand::Inspect {
+                name,
+                id,
+                focused,
+                lines,
+                cursor,
+            }) => {
+                assert!(name.is_none());
+                assert!(id.is_none());
+                assert!(!focused);
+                assert!(lines.is_none());
+                assert!(!cursor);
+            }
+            other => panic!("expected Inspect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_inspect_with_name_lines_cursor() {
+        let cli = Cli::try_parse_from([
+            "ccmux",
+            "inspect",
+            "--name",
+            "worker-foo",
+            "--lines",
+            "4",
+            "--cursor",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(IpcCommand::Inspect {
+                name,
+                lines,
+                cursor,
+                ..
+            }) => {
+                assert_eq!(name.as_deref(), Some("worker-foo"));
+                assert_eq!(lines, Some(4));
+                assert!(cursor);
+            }
+            other => panic!("expected Inspect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inspect_to_request_preserves_fields() {
+        let cli =
+            Cli::try_parse_from(["ccmux", "inspect", "--id", "7", "--lines", "2", "--cursor"])
+                .unwrap();
+        let req = cli.command.unwrap().to_request().unwrap();
+        match req {
+            crate::ipc::Request::Inspect {
+                target,
+                lines,
+                include_cursor,
+            } => {
+                assert!(matches!(target, crate::ipc::PaneRef::Id(7)));
+                assert_eq!(lines, Some(2));
+                assert!(include_cursor);
+            }
+            other => panic!("expected Inspect, got {other:?}"),
+        }
     }
 
     #[test]
