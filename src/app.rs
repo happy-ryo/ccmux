@@ -2218,82 +2218,8 @@ impl App {
                     // Keep selection visible until next click
                 }
             }
-            MouseEventKind::ScrollUp => {
-                let col = mouse.column;
-                let row = mouse.row;
-
-                if let Some(rect) = self.ws().last_file_tree_rect {
-                    if col >= rect.x
-                        && col < rect.x + rect.width
-                        && row >= rect.y
-                        && row < rect.y + rect.height
-                    {
-                        self.ws_mut().file_tree.scroll_up(3);
-                        return;
-                    }
-                }
-                if let Some(rect) = self.ws().last_preview_rect {
-                    if col >= rect.x
-                        && col < rect.x + rect.width
-                        && row >= rect.y
-                        && row < rect.y + rect.height
-                    {
-                        self.ws_mut().preview.scroll_up(3);
-                        return;
-                    }
-                }
-                let pane_rects = self.ws().last_pane_rects.clone();
-                for (pane_id, rect) in pane_rects {
-                    if col >= rect.x
-                        && col < rect.x + rect.width
-                        && row >= rect.y
-                        && row < rect.y + rect.height
-                    {
-                        if let Some(pane) = self.ws().panes.get(&pane_id) {
-                            pane.scroll_up(3);
-                        }
-                        return;
-                    }
-                }
-            }
-            MouseEventKind::ScrollDown => {
-                let col = mouse.column;
-                let row = mouse.row;
-
-                if let Some(rect) = self.ws().last_file_tree_rect {
-                    if col >= rect.x
-                        && col < rect.x + rect.width
-                        && row >= rect.y
-                        && row < rect.y + rect.height
-                    {
-                        self.ws_mut().file_tree.scroll_down(3);
-                        return;
-                    }
-                }
-                if let Some(rect) = self.ws().last_preview_rect {
-                    if col >= rect.x
-                        && col < rect.x + rect.width
-                        && row >= rect.y
-                        && row < rect.y + rect.height
-                    {
-                        self.ws_mut().preview.scroll_down(3);
-                        return;
-                    }
-                }
-                let pane_rects = self.ws().last_pane_rects.clone();
-                for (pane_id, rect) in pane_rects {
-                    if col >= rect.x
-                        && col < rect.x + rect.width
-                        && row >= rect.y
-                        && row < rect.y + rect.height
-                    {
-                        if let Some(pane) = self.ws().panes.get(&pane_id) {
-                            pane.scroll_down(3);
-                        }
-                        return;
-                    }
-                }
-            }
+            MouseEventKind::ScrollUp => self.handle_wheel(mouse.column, mouse.row, false),
+            MouseEventKind::ScrollDown => self.handle_wheel(mouse.column, mouse.row, true),
             MouseEventKind::ScrollLeft => {
                 let col = mouse.column;
                 let row = mouse.row;
@@ -2335,6 +2261,94 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Dispatch a mouse-wheel event. Routes the event to whichever
+    /// widget the cursor sits over: file tree / preview use their own
+    /// scroll API; panes either scroll their vt100 scrollback (normal
+    /// shell) or forward the wheel to the PTY as an xterm mouse report
+    /// / arrow-key fallback when running an alternate-screen TUI
+    /// (Claude Code `/tui fullscreen`, vim, less, …). See Issue #52
+    /// and `Pane::wheel_forward_bytes` for the decision table.
+    ///
+    /// `CCMUX_DISABLE_MOUSE_FORWARD=1` forces the legacy behavior
+    /// everywhere (vt100 scrollback only), as an escape hatch for
+    /// nested ccmux or terminals with mismatched mouse-protocol
+    /// encoding.
+    fn handle_wheel(&mut self, col: u16, row: u16, scroll_down: bool) {
+        if let Some(rect) = self.ws().last_file_tree_rect {
+            if col >= rect.x
+                && col < rect.x + rect.width
+                && row >= rect.y
+                && row < rect.y + rect.height
+            {
+                if scroll_down {
+                    self.ws_mut().file_tree.scroll_down(3);
+                } else {
+                    self.ws_mut().file_tree.scroll_up(3);
+                }
+                return;
+            }
+        }
+        if let Some(rect) = self.ws().last_preview_rect {
+            if col >= rect.x
+                && col < rect.x + rect.width
+                && row >= rect.y
+                && row < rect.y + rect.height
+            {
+                if scroll_down {
+                    self.ws_mut().preview.scroll_down(3);
+                } else {
+                    self.ws_mut().preview.scroll_up(3);
+                }
+                return;
+            }
+        }
+
+        let disable_forward = std::env::var("CCMUX_DISABLE_MOUSE_FORWARD")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false);
+
+        let pane_rects = self.ws().last_pane_rects.clone();
+        for (pane_id, rect) in pane_rects {
+            if !(col >= rect.x
+                && col < rect.x + rect.width
+                && row >= rect.y
+                && row < rect.y + rect.height)
+            {
+                continue;
+            }
+            // Pane content area starts one cell inside the border.
+            let local_col = col.saturating_sub(rect.x).saturating_sub(1);
+            let local_row = row.saturating_sub(rect.y).saturating_sub(1);
+
+            let bytes = if disable_forward {
+                None
+            } else {
+                self.ws()
+                    .panes
+                    .get(&pane_id)
+                    .and_then(|p| p.wheel_forward_bytes(scroll_down, local_col, local_row))
+            };
+
+            if let Some(data) = bytes {
+                if let Some(pane) = self.ws_mut().panes.get_mut(&pane_id) {
+                    // Best-effort forward — a PTY write failure here
+                    // is non-fatal (Claude Code still renders without
+                    // the wheel event reaching it).
+                    let _ = pane.write_input(&data);
+                    self.dirty = true;
+                }
+            } else if let Some(pane) = self.ws().panes.get(&pane_id) {
+                if scroll_down {
+                    pane.scroll_down(3);
+                } else {
+                    pane.scroll_up(3);
+                }
+                self.dirty = true;
+            }
+            return;
         }
     }
 
