@@ -67,19 +67,113 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 
     let show_status = app.status_bar_visible || app.rename_input.is_some();
     let status_h = if show_status { 1 } else { 0 };
+    let show_overlay = app.overlay.is_some();
+    let overlay_h = if show_overlay { 1 } else { 0 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),        // tab bar
-            Constraint::Min(1),           // main area
-            Constraint::Length(status_h), // status bar
+            Constraint::Length(1),         // tab bar
+            Constraint::Min(1),            // main area
+            Constraint::Length(overlay_h), // IME overlay row (when open)
+            Constraint::Length(status_h),  // status bar
         ])
         .split(area);
 
     render_tab_bar(app, frame, chunks[0]);
     render_main_area(app, frame, chunks[1]);
+    if show_overlay {
+        render_ime_overlay(app, frame, chunks[2]);
+    }
     if show_status {
-        render_status_bar(app, frame, chunks[2]);
+        render_status_bar(app, frame, chunks[3]);
+    }
+}
+
+// ─── IME composition overlay ──────────────────────────────
+
+fn render_ime_overlay(app: &mut App, frame: &mut Frame, area: Rect) {
+    let overlay = match app.overlay.as_ref() {
+        Some(o) => o,
+        None => return,
+    };
+    // Line layout: "  IME  > <buffer> " followed by a hint on the
+    // right side: "Enter send / Esc cancel". Fixed-width label, buffer
+    // clipped so the hint always fits.
+    let label = " IME \u{276f} ";
+    let hint = " Enter send / Esc cancel ";
+    let label_w = unicode_width::UnicodeWidthStr::width(label) as u16;
+    let hint_w = unicode_width::UnicodeWidthStr::width(hint) as u16;
+    // Available width for the buffer content (plus terminating cursor cell).
+    let budget = area.width.saturating_sub(label_w + hint_w + 1) as usize;
+    let (buf_for_display, cursor_col_in_buf): (String, u16) = {
+        // Truncate from the left if the cursor would fall outside the
+        // budget window, so the caret stays visible during long input.
+        let chars: Vec<char> = overlay.buffer.chars().collect();
+        let cursor = overlay.cursor.min(chars.len());
+        let mut start = 0usize;
+        let width_cursor: u16 = loop {
+            let slice: String = chars[start..cursor].iter().collect();
+            let w = unicode_width::UnicodeWidthStr::width(slice.as_str());
+            if w <= budget {
+                break w as u16;
+            }
+            start += 1;
+            if start >= cursor {
+                break 0;
+            }
+        };
+        let end = chars.len();
+        let mut rendered: String = chars[start..end].iter().collect();
+        while unicode_width::UnicodeWidthStr::width(rendered.as_str()) > budget {
+            rendered.pop();
+        }
+        (rendered, width_cursor)
+    };
+
+    let bg_block = Block::default().style(Style::default().bg(HEADER_BG));
+    frame.render_widget(bg_block, area);
+
+    let label_rect = Rect::new(area.x, area.y, label_w.min(area.width), 1);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            label,
+            Style::default().fg(ACCENT_CLAUDE).bg(HEADER_BG),
+        ))),
+        label_rect,
+    );
+
+    let buf_x = area.x + label_w;
+    let buf_width = area.width.saturating_sub(label_w + hint_w);
+    if buf_width > 0 {
+        let buf_rect = Rect::new(buf_x, area.y, buf_width, 1);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                buf_for_display,
+                Style::default().fg(TEXT).bg(HEADER_BG),
+            ))),
+            buf_rect,
+        );
+    }
+
+    if area.width >= hint_w {
+        let hint_rect = Rect::new(area.x + area.width - hint_w, area.y, hint_w, 1);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                hint,
+                Style::default().fg(TEXT_DIM).bg(HEADER_BG),
+            ))),
+            hint_rect,
+        );
+    }
+
+    // Place the terminal cursor inside the buffer area so the host
+    // terminal's IME attaches its candidate window here — the whole
+    // reason this widget exists. Clamp in case the buffer width is 0.
+    let cursor_x = buf_x
+        .saturating_add(cursor_col_in_buf)
+        .min(area.x + label_w + buf_width.saturating_sub(1));
+    if cursor_x < area.x + area.width {
+        frame.set_cursor_position((cursor_x, area.y));
     }
 }
 
