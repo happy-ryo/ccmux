@@ -180,9 +180,34 @@ pub enum Response {
     /// server follows this with newline-delimited [`Event`] records
     /// until the client disconnects.
     Subscribed,
-    /// Server-side failure. `message` is human-readable and not
-    /// machine-parseable; clients should match on `code` if added later.
-    Err { message: String },
+    /// Server-side failure. `message` is human-readable; `code` is a
+    /// stable short identifier for programmatic matching (see the
+    /// `err_code` module). `code` is optional for backwards
+    /// compatibility with clients built against the pre-coded protocol.
+    Err {
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+    },
+}
+
+/// Stable short identifiers for [`Response::Err::code`]. These are
+/// part of the IPC contract — rename with care; new ones can be added
+/// freely. Clients should treat unknown codes as generic errors.
+pub mod err_code {
+    /// The server is shutting down and cannot accept new commands.
+    pub const SHUTTING_DOWN: &str = "shutting_down";
+    /// The App event loop did not respond within the server-side
+    /// budget. Usually means the UI thread is wedged.
+    pub const APP_TIMEOUT: &str = "app_timeout";
+    /// Request JSON failed to parse.
+    pub const PARSE: &str = "parse";
+    /// Protocol violation (wrong message at wrong time, duplicate
+    /// hello, Subscribe reaching the one-shot dispatcher, etc.).
+    pub const PROTOCOL: &str = "protocol";
+    /// A sibling server-side invariant was violated while serializing
+    /// the response payload.
+    pub const INTERNAL: &str = "internal";
 }
 
 /// Server-pushed lifecycle event on a subscribed connection. Emitted
@@ -223,6 +248,12 @@ pub enum Event {
     /// has caused real events to be dropped. `count` is the number of
     /// events discarded since the last delivered event.
     EventsDropped { count: u64, ts_ms: u64 },
+    /// Periodic keep-alive emitted while no real events are in flight.
+    /// Its only purpose is to trigger a wire write so the server can
+    /// detect half-closed connections (client dead but OS buffer still
+    /// accepting). Clients can safely ignore it, or surface it as a
+    /// liveness indicator.
+    Heartbeat { ts_ms: u64 },
 }
 
 impl Response {
@@ -237,6 +268,13 @@ impl Response {
     pub fn err(message: impl Into<String>) -> Self {
         Response::Err {
             message: message.into(),
+            code: None,
+        }
+    }
+    pub fn err_coded(code: &'static str, message: impl Into<String>) -> Self {
+        Response::Err {
+            message: message.into(),
+            code: Some(code.to_string()),
         }
     }
 }
@@ -438,6 +476,46 @@ mod tests {
         let s = serde_json::to_string(&ev).unwrap();
         assert!(!s.contains("\"name\""), "should omit name: {s}");
         assert!(!s.contains("\"role\""), "should omit role: {s}");
+    }
+
+    #[test]
+    fn heartbeat_event_roundtrips() {
+        let ev = Event::Heartbeat { ts_ms: 123 };
+        let parsed: Event = serde_json::from_str(&serde_json::to_string(&ev).unwrap()).unwrap();
+        assert_eq!(parsed, ev);
+    }
+
+    #[test]
+    fn response_err_code_is_omitted_when_none() {
+        let r = Response::err("plain");
+        let s = serde_json::to_string(&r).unwrap();
+        assert!(!s.contains("\"code\""), "should omit code: {s}");
+    }
+
+    #[test]
+    fn response_err_coded_roundtrips() {
+        let r = Response::err_coded(err_code::PROTOCOL, "boom");
+        let s = serde_json::to_string(&r).unwrap();
+        assert!(s.contains("\"code\""), "{s}");
+        assert!(s.contains("protocol"), "{s}");
+        let parsed: Response = serde_json::from_str(&s).unwrap();
+        assert_eq!(parsed, r);
+    }
+
+    #[test]
+    fn response_err_without_code_parses_into_none() {
+        // Pre-coded-protocol clients / servers don't emit `code` at
+        // all. Confirm we round-trip their payload into Err.code = None
+        // without rejecting the message.
+        let legacy = r#"{"status":"err","message":"older peer"}"#;
+        let parsed: Response = serde_json::from_str(legacy).unwrap();
+        match parsed {
+            Response::Err { message, code } => {
+                assert_eq!(message, "older peer");
+                assert_eq!(code, None);
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
     }
 
     #[test]

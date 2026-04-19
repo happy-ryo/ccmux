@@ -79,8 +79,11 @@ fn converse(conn: Stream, request: &Request) -> Result<Response> {
         Response::Hello { session_token, .. } => {
             verify_session_token(&session_token, std::env::var(ENV_TOKEN).ok().as_deref())?;
         }
-        Response::Err { message } => {
-            return Err(anyhow!("server refused hello: {message}"));
+        Response::Err { message, code } => {
+            return Err(anyhow!(
+                "server refused hello: {}",
+                fmt_err(&message, &code)
+            ));
         }
         Response::Ok { .. } | Response::Subscribed => {
             return Err(anyhow!("unexpected response to hello"));
@@ -121,8 +124,11 @@ where
         Response::Hello { session_token, .. } => {
             verify_session_token(&session_token, std::env::var(ENV_TOKEN).ok().as_deref())?;
         }
-        Response::Err { message } => {
-            return Err(anyhow!("server refused hello: {message}"));
+        Response::Err { message, code } => {
+            return Err(anyhow!(
+                "server refused hello: {}",
+                fmt_err(&message, &code)
+            ));
         }
         _ => return Err(anyhow!("unexpected response to hello")),
     }
@@ -131,8 +137,8 @@ where
     write_request_line(reader.get_mut(), &Request::Subscribe)?;
     match read_response_line(&mut reader)? {
         Response::Subscribed => {}
-        Response::Err { message } => {
-            return Err(anyhow!("subscribe refused: {message}"));
+        Response::Err { message, code } => {
+            return Err(anyhow!("subscribe refused: {}", fmt_err(&message, &code)));
         }
         other => return Err(anyhow!("unexpected response to subscribe: {other:?}")),
     }
@@ -154,6 +160,15 @@ where
         if !on_event(event) {
             return Ok(());
         }
+    }
+}
+
+/// Render an error `message` plus optional machine-readable `code` as
+/// a single human string. Shell-visible so operators can grep by code.
+fn fmt_err(message: &str, code: &Option<String>) -> String {
+    match code {
+        Some(c) => format!("[{c}] {message}"),
+        None => message.to_string(),
     }
 }
 
