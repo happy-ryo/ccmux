@@ -690,15 +690,15 @@ mod tests {
         use std::sync::mpsc as m;
         let (tx, rx) = m::channel::<Event>();
         // Run the inner loop on a worker with a short heartbeat
-        // interval; after ~150 ms at 50 ms interval we expect at
-        // least one heartbeat line. Dropping the sender ends the
-        // loop so we can join and inspect the collected bytes.
+        // interval. Sleep long enough to cover multiple intervals
+        // with generous slack for slow CI runners (macOS in GHA has
+        // been observed not firing inside a tight 150 ms budget).
         let handle = thread::spawn(move || {
             let mut sink = Cursor::new(Vec::<u8>::new());
             stream_events_inner(&mut sink, rx, Duration::from_millis(50));
             sink.into_inner()
         });
-        thread::sleep(Duration::from_millis(150));
+        thread::sleep(Duration::from_millis(600));
         drop(tx);
         let bytes = handle.join().unwrap();
         let text = String::from_utf8(bytes).unwrap();

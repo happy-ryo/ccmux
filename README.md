@@ -66,6 +66,32 @@ ccmux
 
 Launch from any directory. The file tree shows the current working directory.
 
+## Configuration
+
+Optional. Place a TOML file at:
+
+- **Linux**: `$XDG_CONFIG_HOME/ccmux/config.toml` (default `~/.config/ccmux/config.toml`)
+- **macOS**: `~/Library/Application Support/ccmux/config.toml`
+- **Windows**: `%APPDATA%\ccmux\config.toml`
+
+Missing or malformed files fall back to defaults with a stderr warning; ccmux never fails to start because of a config issue. Unknown sections and keys are ignored for forward-compat.
+
+### `[ime]` — IME composition overlay
+
+Controls the IME overlay used for host-terminal IME input (Issue #25 / PR #36).
+
+```toml
+[ime]
+mode = "hotkey"   # "hotkey" | "off"
+```
+
+| Value | Behavior |
+|-------|----------|
+| `hotkey` (default) | `Ctrl+;` opens the IME composition overlay on a focused pane. |
+| `off` | `Ctrl+;` is swallowed silently — no overlay, no keystroke leaked to the shell. For users who don't use IME, or whose terminal already handles IME placement correctly. |
+
+The `--ime hotkey|off` CLI flag overrides the config file for a single run. Precedence is **CLI > config file > default**.
+
 ## Keybindings
 
 ### Pane mode (default)

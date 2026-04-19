@@ -1,6 +1,7 @@
 mod app;
 mod claude_monitor;
 mod cli;
+mod config;
 mod filetree;
 mod ipc;
 mod layout_config;
@@ -106,8 +107,13 @@ fn main() -> Result<()> {
     // Publish the token before spawning panes so children inherit it.
     std::env::set_var(ipc::endpoint::ENV_TOKEN, &session_token);
 
+    // Load user config + apply CLI override (CLI > file > default).
+    let mut user_config = config::Config::load();
+    user_config.apply_cli_overrides(cli.ime);
+
     // Create app (spawns the initial pane, which captures the env above).
     let mut app = app::App::new(size.height, size.width)?;
+    app.apply_config(&user_config);
 
     // Keep the server handle alive for the process lifetime; its Drop
     // impl cleans up the Unix socket file on exit.
