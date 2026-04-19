@@ -79,8 +79,11 @@ fn converse(conn: Stream, request: &Request) -> Result<Response> {
         Response::Hello { session_token, .. } => {
             verify_session_token(&session_token, std::env::var(ENV_TOKEN).ok().as_deref())?;
         }
-        Response::Err { message } => {
-            return Err(anyhow!("server refused hello: {message}"));
+        Response::Err { message, code } => {
+            return Err(anyhow!(
+                "server refused hello: {}",
+                fmt_err(&message, &code)
+            ));
         }
         Response::Ok { .. } | Response::Subscribed => {
             return Err(anyhow!("unexpected response to hello"));
@@ -121,8 +124,11 @@ where
         Response::Hello { session_token, .. } => {
             verify_session_token(&session_token, std::env::var(ENV_TOKEN).ok().as_deref())?;
         }
-        Response::Err { message } => {
-            return Err(anyhow!("server refused hello: {message}"));
+        Response::Err { message, code } => {
+            return Err(anyhow!(
+                "server refused hello: {}",
+                fmt_err(&message, &code)
+            ));
         }
         _ => return Err(anyhow!("unexpected response to hello")),
     }
@@ -131,8 +137,8 @@ where
     write_request_line(reader.get_mut(), &Request::Subscribe)?;
     match read_response_line(&mut reader)? {
         Response::Subscribed => {}
-        Response::Err { message } => {
-            return Err(anyhow!("subscribe refused: {message}"));
+        Response::Err { message, code } => {
+            return Err(anyhow!("subscribe refused: {}", fmt_err(&message, &code)));
         }
         other => return Err(anyhow!("unexpected response to subscribe: {other:?}")),
     }
@@ -149,11 +155,58 @@ where
         if trimmed.is_empty() {
             continue;
         }
-        let event: Event = serde_json::from_str(trimmed)
-            .with_context(|| format!("parse event line: {trimmed:?}"))?;
-        if !on_event(event) {
-            return Ok(());
+        // Forward-compat: skip events whose `type` tag this client
+        // doesn't know about. A future ccmux server may emit new
+        // Event variants, and older subscribers should tolerate them
+        // rather than abort the whole stream.
+        //
+        // Narrowly scoped: we first parse to a `Value`, and only the
+        // specific case of "well-formed JSON object with a string
+        // `type` we don't recognize" is dropped silently. Malformed
+        // JSON or shape mismatches on known variants still surface
+        // as errors, because hiding those would make wire bugs
+        // invisible.
+        match serde_json::from_str::<Event>(trimmed) {
+            Ok(event) => {
+                if !on_event(event) {
+                    return Ok(());
+                }
+            }
+            Err(_) => {
+                if is_unknown_event_variant(trimmed) {
+                    continue;
+                }
+                return Err(anyhow!("parse event line: {trimmed:?}"));
+            }
         }
+    }
+}
+
+/// True when `line` is valid JSON for an object whose `type` field is
+/// a string but not one of the [`Event`] variants this client knows
+/// about. Only this narrow case is swallowed by the subscribe loop;
+/// malformed JSON or wrong shapes on known variants still surface.
+fn is_unknown_event_variant(line: &str) -> bool {
+    let value: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let ty = match value.get("type").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return false,
+    };
+    !matches!(
+        ty,
+        "pane_started" | "pane_exited" | "events_dropped" | "heartbeat"
+    )
+}
+
+/// Render an error `message` plus optional machine-readable `code` as
+/// a single human string. Shell-visible so operators can grep by code.
+fn fmt_err(message: &str, code: &Option<String>) -> String {
+    match code {
+        Some(c) => format!("[{c}] {message}"),
+        None => message.to_string(),
     }
 }
 
@@ -211,6 +264,38 @@ fn read_response_line<R: BufRead>(r: &mut R) -> Result<Response> {
 mod tests {
     use super::*;
     use crate::ipc::{Direction, PaneRef};
+
+    #[test]
+    fn unknown_event_variant_is_detected() {
+        assert!(is_unknown_event_variant(
+            r#"{"type":"pane_renamed","id":1}"#
+        ));
+    }
+
+    #[test]
+    fn known_event_variant_is_not_skipped() {
+        assert!(!is_unknown_event_variant(
+            r#"{"type":"heartbeat","ts_ms":1}"#
+        ));
+        assert!(!is_unknown_event_variant(
+            r#"{"type":"pane_started","id":1,"ts_ms":1}"#
+        ));
+    }
+
+    #[test]
+    fn malformed_json_is_not_classified_as_unknown_variant() {
+        // Broken JSON must surface as an error, not be silently
+        // dropped as "unknown event".
+        assert!(!is_unknown_event_variant(r#"{"type":"heartbeat""#));
+        assert!(!is_unknown_event_variant("not json at all"));
+    }
+
+    #[test]
+    fn value_without_type_field_is_not_classified_as_unknown_variant() {
+        // A JSON object with no `type` is a shape violation on a
+        // known variant, not a forward-compat skip.
+        assert!(!is_unknown_event_variant(r#"{"id":1,"ts_ms":1}"#));
+    }
 
     #[test]
     fn write_request_line_is_newline_terminated() {

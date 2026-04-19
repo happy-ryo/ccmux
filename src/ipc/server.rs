@@ -29,7 +29,7 @@ use interprocess::local_socket::{prelude::*, ListenerOptions, Stream};
 
 use super::endpoint::{EndpointKind, EndpointName};
 use super::events::EventBus;
-use super::{Request, Response, APP_REPLY_TIMEOUT};
+use super::{err_code, Event, Request, Response, APP_REPLY_TIMEOUT};
 use crate::app::AppCommand;
 
 /// Upper bound for waiting on the accept thread during shutdown.
@@ -232,7 +232,7 @@ fn handle_connection(
         Err(e) => {
             return write_response_line(
                 reader.get_mut(),
-                &Response::err(format!("parse error on hello: {e}")),
+                &Response::err_coded(err_code::PARSE, format!("parse error on hello: {e}")),
             );
         }
     };
@@ -247,7 +247,7 @@ fn handle_connection(
         _ => {
             write_response_line(
                 reader.get_mut(),
-                &Response::err("first message must be hello"),
+                &Response::err_coded(err_code::PROTOCOL, "first message must be hello"),
             )?;
             return Ok(());
         }
@@ -263,7 +263,7 @@ fn handle_connection(
         Err(e) => {
             return write_response_line(
                 reader.get_mut(),
-                &Response::err(format!("parse error: {e}")),
+                &Response::err_coded(err_code::PARSE, format!("parse error: {e}")),
             );
         }
     };
@@ -291,27 +291,63 @@ fn handle_connection(
 /// registered by `handle_connection` before the Subscribed ack was
 /// written, so any event observed from here on is part of the
 /// post-ack stream the client can rely on.
+///
+/// If no real event shows up within [`HEARTBEAT_INTERVAL`], the loop
+/// wakes up and writes a [`Event::Heartbeat`] to the wire. Its only
+/// purpose is to force an I/O write: if the peer's read side is dead
+/// (half-close) and the OS send buffer has filled, the write fails
+/// and we unsubscribe promptly instead of holding a stale subscriber
+/// slot until the next pane lifecycle event — which may be hours
+/// away on a quiet session.
 fn stream_events(
-    mut conn: Stream,
+    conn: Stream,
     event_bus: EventBus,
     sub_id: super::events::SubId,
     rx: std::sync::mpsc::Receiver<super::Event>,
 ) -> Result<()> {
-    // The recv loop is bounded only by the connection's lifetime.
-    // The client can stop the stream by closing the socket, which
-    // makes the next write fail and we bail out.
-    while let Ok(event) = rx.recv() {
+    stream_events_inner(conn, rx, HEARTBEAT_INTERVAL);
+    event_bus.unsubscribe(sub_id);
+    Ok(())
+}
+
+/// Inner loop split out so tests can drive it with a `Vec<u8>` sink
+/// and a sub-second interval.
+fn stream_events_inner<W: Write>(
+    mut sink: W,
+    rx: std::sync::mpsc::Receiver<super::Event>,
+    heartbeat_interval: Duration,
+) {
+    loop {
+        let event = match rx.recv_timeout(heartbeat_interval) {
+            Ok(ev) => ev,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Event::Heartbeat {
+                ts_ms: now_ms_ipc(),
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        };
         let mut json = match serde_json::to_string(&event) {
             Ok(s) => s,
             Err(_) => continue,
         };
         json.push('\n');
-        if conn.write_all(json.as_bytes()).is_err() || conn.flush().is_err() {
+        if sink.write_all(json.as_bytes()).is_err() || sink.flush().is_err() {
             break;
         }
     }
-    event_bus.unsubscribe(sub_id);
-    Ok(())
+}
+
+/// How often the subscribe stream emits a keep-alive when idle.
+/// 30 s is short enough that a dropped client is released from the
+/// subscriber table before it matters, and long enough that chatty
+/// heartbeat noise in logs stays negligible.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
+fn now_ms_ipc() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn read_line_or_eof<R: BufRead>(reader: &mut R, buf: &mut String) -> Result<Option<()>> {
@@ -329,21 +365,27 @@ fn write_response_line<W: Write>(w: &mut W, resp: &Response) -> Result<()> {
 
 fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
     match req {
-        Request::Hello { .. } => Response::err("unexpected duplicate hello"),
+        Request::Hello { .. } => {
+            Response::err_coded(err_code::PROTOCOL, "unexpected duplicate hello")
+        }
         Request::List => {
             let (reply_tx, reply_rx) = oneshot::channel();
             if command_tx
                 .send(AppCommand::List { reply: reply_tx })
                 .is_err()
             {
-                return Response::err("app shutting down");
+                return Response::err_coded(err_code::SHUTTING_DOWN, "app shutting down");
             }
             match reply_rx.recv_timeout(APP_REPLY_TIMEOUT) {
                 Ok(list) => match serde_json::to_value(&list) {
                     Ok(v) => Response::ok_value(v),
-                    Err(e) => Response::err(format!("serialize pane list: {e}")),
+                    Err(e) => {
+                        Response::err_coded(err_code::INTERNAL, format!("serialize pane list: {e}"))
+                    }
                 },
-                Err(e) => Response::err(format!("app did not respond: {e}")),
+                Err(e) => {
+                    Response::err_coded(err_code::APP_TIMEOUT, format!("app did not respond: {e}"))
+                }
             }
         }
         Request::Send {
@@ -378,12 +420,14 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
                 })
                 .is_err()
             {
-                return Response::err("app shutting down");
+                return Response::err_coded(err_code::SHUTTING_DOWN, "app shutting down");
             }
             match reply_rx.recv_timeout(APP_REPLY_TIMEOUT) {
                 Ok(Ok(new_id)) => Response::ok_value(serde_json::json!({ "id": new_id })),
                 Ok(Err(msg)) => Response::err(msg),
-                Err(e) => Response::err(format!("app did not respond: {e}")),
+                Err(e) => {
+                    Response::err_coded(err_code::APP_TIMEOUT, format!("app did not respond: {e}"))
+                }
             }
         }
         Request::NewTab {
@@ -403,19 +447,23 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
                 })
                 .is_err()
             {
-                return Response::err("app shutting down");
+                return Response::err_coded(err_code::SHUTTING_DOWN, "app shutting down");
             }
             match reply_rx.recv_timeout(APP_REPLY_TIMEOUT) {
                 Ok(Ok(new_id)) => Response::ok_value(serde_json::json!({ "id": new_id })),
                 Ok(Err(msg)) => Response::err(msg),
-                Err(e) => Response::err(format!("app did not respond: {e}")),
+                Err(e) => {
+                    Response::err_coded(err_code::APP_TIMEOUT, format!("app did not respond: {e}"))
+                }
             }
         }
         // Subscribe is handled by the connection handler directly — it
         // switches the wire into event-stream mode rather than
         // round-tripping through App commands. If we see it here, the
         // handler called us by mistake; refuse rather than hang.
-        Request::Subscribe => Response::err("subscribe should be handled inline"),
+        Request::Subscribe => {
+            Response::err_coded(err_code::PROTOCOL, "subscribe should be handled inline")
+        }
         Request::Inspect {
             target,
             lines,
@@ -431,12 +479,14 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
                 })
                 .is_err()
             {
-                return Response::err("app shutting down");
+                return Response::err_coded(err_code::SHUTTING_DOWN, "app shutting down");
             }
             match reply_rx.recv_timeout(APP_REPLY_TIMEOUT) {
                 Ok(Ok(payload)) => Response::ok_value(payload),
                 Ok(Err(msg)) => Response::err(msg),
-                Err(e) => Response::err(format!("app did not respond: {e}")),
+                Err(e) => {
+                    Response::err_coded(err_code::APP_TIMEOUT, format!("app did not respond: {e}"))
+                }
             }
         }
     }
@@ -451,12 +501,15 @@ fn forward_unit(
 ) -> Response {
     let (reply_tx, reply_rx) = oneshot::channel();
     if command_tx.send(build(reply_tx)).is_err() {
-        return Response::err("app shutting down");
+        return Response::err_coded(err_code::SHUTTING_DOWN, "app shutting down");
     }
     match reply_rx.recv_timeout(APP_REPLY_TIMEOUT) {
         Ok(Ok(_)) => Response::ok_unit(),
+        // App-originated error strings pass through uncoded for now —
+        // plumbing a stable code through AppCommand replies is a
+        // follow-up (see Issue #28 non-goals).
         Ok(Err(msg)) => Response::err(msg),
-        Err(e) => Response::err(format!("app did not respond: {e}")),
+        Err(e) => Response::err_coded(err_code::APP_TIMEOUT, format!("app did not respond: {e}")),
     }
 }
 
@@ -524,7 +577,7 @@ mod tests {
         );
         handle.join().unwrap();
         match resp {
-            Response::Err { message } => assert!(message.contains("pane not found")),
+            Response::Err { message, .. } => assert!(message.contains("pane not found")),
             other => panic!("expected Err, got {other:?}"),
         }
     }
@@ -611,12 +664,54 @@ mod tests {
     }
 
     #[test]
+    fn forward_unit_shutting_down_is_coded() {
+        // Drop the receiver to simulate the App having shut down; the
+        // send should fail and the error must carry the SHUTTING_DOWN
+        // code, not just a free-form message.
+        let (tx, rx) = mpsc::channel::<AppCommand>();
+        drop(rx);
+        let resp = dispatch_request(
+            Request::Focus {
+                target: PaneRef::Focused,
+            },
+            &tx,
+        );
+        match resp {
+            Response::Err { code, .. } => {
+                assert_eq!(code.as_deref(), Some(err_code::SHUTTING_DOWN))
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stream_events_emits_heartbeat_when_idle() {
+        use std::io::Cursor;
+        use std::sync::mpsc as m;
+        let (tx, rx) = m::channel::<Event>();
+        // Run the inner loop on a worker with a short heartbeat
+        // interval; after ~150 ms at 50 ms interval we expect at
+        // least one heartbeat line. Dropping the sender ends the
+        // loop so we can join and inspect the collected bytes.
+        let handle = thread::spawn(move || {
+            let mut sink = Cursor::new(Vec::<u8>::new());
+            stream_events_inner(&mut sink, rx, Duration::from_millis(50));
+            sink.into_inner()
+        });
+        thread::sleep(Duration::from_millis(150));
+        drop(tx);
+        let bytes = handle.join().unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("\"heartbeat\""), "no heartbeat in {text:?}");
+    }
+
+    #[test]
     fn dispatch_refuses_second_hello() {
         // Duplicate hello after handshake should be an error path.
         let (tx, _rx) = mpsc::channel::<AppCommand>();
         let resp = dispatch_request(Request::Hello { client_pid: 1 }, &tx);
         match resp {
-            Response::Err { message } => assert!(message.contains("hello")),
+            Response::Err { message, .. } => assert!(message.contains("hello")),
             other => panic!("expected Err, got {other:?}"),
         }
     }

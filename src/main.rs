@@ -207,7 +207,13 @@ fn run_ipc_client(cmd: &cli::IpcCommand) -> Result<()> {
             // These are handshake replies, never command responses.
             Err(anyhow::anyhow!("unexpected control response to command"))
         }
-        ipc::Response::Err { message } => Err(anyhow::anyhow!("{message}")),
+        ipc::Response::Err { message, code } => {
+            if let Some(c) = code {
+                Err(anyhow::anyhow!("[{c}] {message}"))
+            } else {
+                Err(anyhow::anyhow!("{message}"))
+            }
+        }
     }
 }
 
