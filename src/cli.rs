@@ -94,9 +94,19 @@ pub enum IpcCommand {
     },
     /// Subscribe to pane lifecycle events. Streams one JSON object per
     /// line to stdout until the ccmux server closes the connection or
-    /// the caller sends EOF/SIGINT. Pipeable into `while read -r line`
-    /// for reactive shell scripts.
-    Events,
+    /// one of `--timeout` / `--count` stops the drain. Pipeable into
+    /// `while read -r line` for reactive shell scripts.
+    Events {
+        /// Stop after this duration (e.g. "2s", "500ms", "1m"). If
+        /// unset the stream continues until the server closes the
+        /// connection.
+        #[arg(long)]
+        timeout: Option<humantime::Duration>,
+        /// Stop after receiving this many events. `EventsDropped`
+        /// meta-events count toward this budget. If unset no cap.
+        #[arg(long)]
+        count: Option<usize>,
+    },
 }
 
 impl Cli {
@@ -181,7 +191,7 @@ impl IpcCommand {
                     role: role.clone(),
                 })
             }
-            IpcCommand::Events => Ok(Request::Subscribe),
+            IpcCommand::Events { .. } => Ok(Request::Subscribe),
         }
     }
 }
@@ -474,6 +484,67 @@ mod tests {
                 assert_eq!(role.as_deref(), Some("leader"));
             }
             other => panic!("expected NewTab, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_events_without_limits() {
+        let cli = Cli::try_parse_from(["ccmux", "events"]).unwrap();
+        match cli.command {
+            Some(IpcCommand::Events { timeout, count }) => {
+                assert!(timeout.is_none());
+                assert!(count.is_none());
+            }
+            other => panic!("expected Events, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_events_with_timeout_and_count() {
+        let cli =
+            Cli::try_parse_from(["ccmux", "events", "--timeout", "2s", "--count", "5"]).unwrap();
+        match cli.command {
+            Some(IpcCommand::Events { timeout, count }) => {
+                assert_eq!(count, Some(5));
+                let d: std::time::Duration = timeout.expect("timeout").into();
+                assert_eq!(d, std::time::Duration::from_secs(2));
+            }
+            other => panic!("expected Events, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_events_with_millisecond_timeout() {
+        let cli = Cli::try_parse_from(["ccmux", "events", "--timeout", "500ms"]).unwrap();
+        match cli.command {
+            Some(IpcCommand::Events { timeout, .. }) => {
+                let d: std::time::Duration = timeout.expect("timeout").into();
+                assert_eq!(d, std::time::Duration::from_millis(500));
+            }
+            other => panic!("expected Events, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn events_to_request_is_subscribe() {
+        let cli = Cli::try_parse_from(["ccmux", "events", "--count", "3"]).unwrap();
+        let req = cli.command.unwrap().to_request().unwrap();
+        assert!(matches!(req, crate::ipc::Request::Subscribe));
+    }
+
+    #[test]
+    fn accepts_count_zero_at_parse_time() {
+        // `--count 0` must parse (no clap-level `value_parser` restricts
+        // it) so that `run_ipc_client` can short-circuit it as a true
+        // no-op. Runtime short-circuit behavior is enforced by the
+        // early-return in `main.rs::run_ipc_client` and is not covered
+        // by this parse-level test.
+        let cli = Cli::try_parse_from(["ccmux", "events", "--count", "0"]).unwrap();
+        match cli.command {
+            Some(IpcCommand::Events { count, .. }) => {
+                assert_eq!(count, Some(0));
+            }
+            other => panic!("expected Events, got {other:?}"),
         }
     }
 }
