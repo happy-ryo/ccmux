@@ -188,14 +188,24 @@ impl Pane {
             self.exited = true;
             return Ok(());
         }
-        // Record that user input was just routed into this PTY. The UI
-        // uses this on Windows to keep the IME candidate anchor pinned
-        // to the typing position rather than Claude's thinking-line
-        // cursor. Called for every byte pattern (per-key bursts,
-        // bracketed paste, skill-queued commands); a skill-driven
-        // command moves the anchor briefly but that's acceptable —
-        // the next real user keystroke will re-anchor immediately.
+        // Record that user input was just routed into this PTY, and
+        // snapshot the current vt100 cursor *right now* as the IME
+        // candidate anchor on Windows.
+        //
+        // Capturing at write-time (not on a later frame) is important:
+        // Claude Code's thinking-row spinner updates asynchronously
+        // from the PTY reader thread, so by the next render frame
+        // (16 ms later) the vt100 cursor has often already jumped to
+        // the status row. Reading the cursor here instead gives us
+        // "the column the user was typing at, pre-echo" — the echoed
+        // character lands one cell to the right, which is still next
+        // to the anchor, so the host terminal's IME candidate window
+        // stays attached to the typing line.
         self.last_user_input_at = Some(std::time::Instant::now());
+        #[cfg(windows)]
+        if let Ok(parser) = self.parser.lock() {
+            self.ime_anchor = Some(parser.screen().cursor_position());
+        }
         Ok(())
     }
 
