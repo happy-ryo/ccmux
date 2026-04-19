@@ -115,6 +115,7 @@ fn main() -> Result<()> {
         ipc_endpoint.clone(),
         app.command_tx.clone(),
         session_token.clone(),
+        app.event_bus.clone(),
     ) {
         Ok(server) => Some(server),
         Err(e) => {
@@ -172,6 +173,22 @@ fn main() -> Result<()> {
 fn run_ipc_client(cmd: &cli::IpcCommand) -> Result<()> {
     let endpoint = ipc::endpoint::endpoint_from_env()
         .map_err(|e| anyhow::anyhow!("{e}; run this from inside a ccmux pane"))?;
+
+    // `events` uses the subscription path (long-lived stream), not the
+    // single-shot request/response path.
+    if matches!(cmd, cli::IpcCommand::Events) {
+        return ipc::client::subscribe_events(&endpoint, |event| {
+            if let Ok(s) = serde_json::to_string(&event) {
+                println!("{s}");
+                // Flush after each line so the output is usable
+                // as a pipe source (`ccmux events | while read …`).
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+            }
+            true
+        });
+    }
+
     let request = cmd.to_request()?;
     let response = ipc::client::send_request(&endpoint, &request)?;
     match response {
@@ -187,10 +204,9 @@ fn run_ipc_client(cmd: &cli::IpcCommand) -> Result<()> {
             }
             Ok(())
         }
-        ipc::Response::Hello { .. } => {
-            // Hello should only appear as the handshake reply, never
-            // as a top-level command response.
-            Err(anyhow::anyhow!("server returned hello to a command"))
+        ipc::Response::Hello { .. } | ipc::Response::Subscribed => {
+            // These are handshake replies, never command responses.
+            Err(anyhow::anyhow!("unexpected control response to command"))
         }
         ipc::Response::Err { message } => Err(anyhow::anyhow!("{message}")),
     }

@@ -14,7 +14,7 @@ use interprocess::local_socket::{prelude::*, Stream};
 use subtle::ConstantTimeEq;
 
 use super::endpoint::{EndpointName, ENV_TOKEN};
-use super::{Request, Response, RESPONSE_TIMEOUT};
+use super::{Event, Request, Response, RESPONSE_TIMEOUT};
 
 /// Send a single request to the endpoint and return the response.
 ///
@@ -82,8 +82,8 @@ fn converse(conn: Stream, request: &Request) -> Result<Response> {
         Response::Err { message } => {
             return Err(anyhow!("server refused hello: {message}"));
         }
-        Response::Ok { .. } => {
-            return Err(anyhow!("unexpected ok response to hello"));
+        Response::Ok { .. } | Response::Subscribed => {
+            return Err(anyhow!("unexpected response to hello"));
         }
     }
 
@@ -91,6 +91,70 @@ fn converse(conn: Stream, request: &Request) -> Result<Response> {
     write_request_line(reader.get_mut(), request)?;
     let resp = read_response_line(&mut reader)?;
     Ok(resp)
+}
+
+/// Open a long-lived connection, complete the handshake, send
+/// [`Request::Subscribe`], then stream [`Event`]s into `on_event`
+/// until either the server closes the connection, the callback
+/// returns `false`, or an I/O error occurs.
+///
+/// Unlike [`send_request`], this function blocks on the caller's
+/// thread for the full lifetime of the stream. Callers that want a
+/// finite stream should wrap it in a thread or return `false` from
+/// `on_event` when done.
+pub fn subscribe_events<F>(endpoint: &EndpointName, mut on_event: F) -> Result<()>
+where
+    F: FnMut(Event) -> bool,
+{
+    let name = make_connection_name(endpoint)?;
+    let conn =
+        Stream::connect(name).with_context(|| format!("connect to {}", endpoint.as_str()))?;
+    let mut reader = BufReader::new(conn);
+
+    // Handshake (same as converse).
+    let hello = Request::Hello {
+        client_pid: std::process::id(),
+    };
+    write_request_line(reader.get_mut(), &hello)?;
+    let hello_resp = read_response_line(&mut reader)?;
+    match hello_resp {
+        Response::Hello { session_token, .. } => {
+            verify_session_token(&session_token, std::env::var(ENV_TOKEN).ok().as_deref())?;
+        }
+        Response::Err { message } => {
+            return Err(anyhow!("server refused hello: {message}"));
+        }
+        _ => return Err(anyhow!("unexpected response to hello")),
+    }
+
+    // Switch into event-stream mode.
+    write_request_line(reader.get_mut(), &Request::Subscribe)?;
+    match read_response_line(&mut reader)? {
+        Response::Subscribed => {}
+        Response::Err { message } => {
+            return Err(anyhow!("subscribe refused: {message}"));
+        }
+        other => return Err(anyhow!("unexpected response to subscribe: {other:?}")),
+    }
+
+    // Stream events as JSON Lines until EOF or callback stops.
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            return Ok(());
+        }
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let event: Event = serde_json::from_str(trimmed)
+            .with_context(|| format!("parse event line: {trimmed:?}"))?;
+        if !on_event(event) {
+            return Ok(());
+        }
+    }
 }
 
 fn write_request_line<W: Write>(w: &mut W, req: &Request) -> Result<()> {

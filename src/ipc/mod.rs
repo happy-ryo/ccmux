@@ -47,7 +47,10 @@ pub(crate) const RESPONSE_TIMEOUT: Duration =
 
 pub mod client;
 pub mod endpoint;
+pub mod events;
 pub mod server;
+
+pub use events::EventBus;
 
 /// One IPC call from a client to the running ccmux instance.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -99,6 +102,11 @@ pub enum Request {
         #[serde(default)]
         role: Option<String>,
     },
+    /// Switch the connection to live event stream mode. After the
+    /// server acknowledges with [`Response::Subscribed`], it emits
+    /// [`Event`] JSON Lines until the client disconnects. No further
+    /// [`Request`]s are accepted on this connection.
+    Subscribe,
 }
 
 /// Identifies a pane in a request. Names are user-friendly and stable
@@ -149,9 +157,53 @@ pub enum Response {
         server_pid: u32,
         session_token: String,
     },
+    /// Ack that the connection has entered event-stream mode. The
+    /// server follows this with newline-delimited [`Event`] records
+    /// until the client disconnects.
+    Subscribed,
     /// Server-side failure. `message` is human-readable and not
     /// machine-parseable; clients should match on `code` if added later.
     Err { message: String },
+}
+
+/// Server-pushed lifecycle event on a subscribed connection. Emitted
+/// as one JSON object per line after the server has acknowledged
+/// [`Request::Subscribe`] with [`Response::Subscribed`].
+///
+/// Delivery is **best-effort**: slow subscribers may miss events,
+/// in which case the server synthesizes an [`Event::EventsDropped`]
+/// meta-event. Consumers that need exact state should reconcile
+/// with [`Request::List`] after reacting to a gap.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Event {
+    /// Emitted when a pane has been added to the active workspace.
+    /// `name` is populated if the pane was given a stable IPC name
+    /// (layout `id` or `ccmux split --id`). `role` is the free-form
+    /// label set via Phase 1 mechanisms.
+    PaneStarted {
+        id: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
+        ts_ms: u64,
+    },
+    /// Emitted exactly once per pane id when it is removed from the
+    /// workspace (user-initiated close, tab close, or the underlying
+    /// shell exiting).
+    PaneExited {
+        id: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
+        ts_ms: u64,
+    },
+    /// Meta-event synthesized by the server when a slow subscriber
+    /// has caused real events to be dropped. `count` is the number of
+    /// events discarded since the last delivered event.
+    EventsDropped { count: u64, ts_ms: u64 },
 }
 
 impl Response {
@@ -330,5 +382,52 @@ mod tests {
             role: Some("leader".into()),
         };
         assert_eq!(roundtrip(&r), r);
+    }
+
+    #[test]
+    fn subscribe_request_roundtrips() {
+        assert_eq!(roundtrip(&Request::Subscribe), Request::Subscribe);
+    }
+
+    #[test]
+    fn subscribed_response_roundtrips() {
+        let parsed: Response =
+            serde_json::from_str(&serde_json::to_string(&Response::Subscribed).unwrap()).unwrap();
+        assert_eq!(parsed, Response::Subscribed);
+    }
+
+    #[test]
+    fn pane_started_event_roundtrips() {
+        let ev = Event::PaneStarted {
+            id: 3,
+            name: Some("foreman".into()),
+            role: Some("foreman".into()),
+            ts_ms: 1_700_000_000_000,
+        };
+        let parsed: Event = serde_json::from_str(&serde_json::to_string(&ev).unwrap()).unwrap();
+        assert_eq!(parsed, ev);
+    }
+
+    #[test]
+    fn pane_exited_event_omits_optional_fields_when_none() {
+        let ev = Event::PaneExited {
+            id: 5,
+            name: None,
+            role: None,
+            ts_ms: 42,
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(!s.contains("\"name\""), "should omit name: {s}");
+        assert!(!s.contains("\"role\""), "should omit role: {s}");
+    }
+
+    #[test]
+    fn events_dropped_meta_event_roundtrips() {
+        let ev = Event::EventsDropped {
+            count: 17,
+            ts_ms: 1,
+        };
+        let parsed: Event = serde_json::from_str(&serde_json::to_string(&ev).unwrap()).unwrap();
+        assert_eq!(parsed, ev);
     }
 }

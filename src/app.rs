@@ -494,6 +494,8 @@ pub struct App {
     pub claude_monitor: crate::claude_monitor::ClaudeMonitor,
     // Reusable clipboard handle (lazy-initialized)
     clipboard: Option<arboard::Clipboard>,
+    // Pane lifecycle event bus shared with IPC subscribers.
+    pub event_bus: crate::ipc::EventBus,
 }
 
 impl App {
@@ -508,6 +510,17 @@ impl App {
         let name = dir_name(&cwd);
 
         let ws = Workspace::new(name, cwd, 1, pane_rows, pane_cols, event_tx.clone())?;
+
+        let event_bus = crate::ipc::EventBus::new();
+        // Initial pane already exists at this point; emit its
+        // PaneStarted so subscribers joining immediately after App
+        // construction see it.
+        event_bus.emit(crate::ipc::Event::PaneStarted {
+            id: 1,
+            name: None,
+            role: None,
+            ts_ms: crate::ipc::events::now_ms(),
+        });
 
         Ok(Self {
             workspaces: vec![ws],
@@ -540,7 +553,39 @@ impl App {
             },
             claude_monitor: crate::claude_monitor::ClaudeMonitor::new(),
             clipboard: None,
+            event_bus,
         })
+    }
+
+    /// Emit a [`PaneStarted`] event for the given pane id. Pulls the
+    /// current name/role from the active workspace so subscribers
+    /// receive the metadata that was just attached.
+    fn emit_pane_started(&self, pane_id: usize) {
+        let ws = self.ws();
+        let name = ws
+            .pane_names
+            .iter()
+            .find(|(_, id)| **id == pane_id)
+            .map(|(n, _)| n.clone());
+        let role = ws.panes.get(&pane_id).and_then(|p| p.role.clone());
+        self.event_bus.emit(crate::ipc::Event::PaneStarted {
+            id: pane_id,
+            name,
+            role,
+            ts_ms: crate::ipc::events::now_ms(),
+        });
+    }
+
+    /// Emit a [`PaneExited`] event. Expects the caller to have already
+    /// set `Pane.exit_event_emitted = true` (or to be about to remove
+    /// the pane) so the event is exactly-once.
+    fn emit_pane_exited(&self, pane_id: usize, name: Option<String>, role: Option<String>) {
+        self.event_bus.emit(crate::ipc::Event::PaneExited {
+            id: pane_id,
+            name,
+            role,
+            ts_ms: crate::ipc::events::now_ms(),
+        });
     }
 
     /// Copy text to clipboard, reusing the handle if available.
@@ -993,6 +1038,7 @@ impl App {
         let ws = Workspace::new(name, cwd, pane_id, 10, 40, self.event_tx.clone())?;
         self.workspaces.push(ws);
         self.active_tab = self.workspaces.len() - 1;
+        self.emit_pane_started(pane_id);
         Ok(())
     }
 
@@ -1000,15 +1046,40 @@ impl App {
         if self.workspaces.len() <= 1 {
             return;
         }
-        // Clean up claude monitor state for all panes in this tab
-        let pane_ids: Vec<usize> = self.workspaces[index].panes.keys().copied().collect();
-        for pane_id in pane_ids {
-            self.claude_monitor.remove(pane_id);
+
+        // Snapshot (pane_id, name, role) for each not-yet-emitted pane
+        // in this tab. We mark them as emitted *before* the actual
+        // workspace removal so the natural-exit detection in the event
+        // loop can't race us and double-fire.
+        let mut to_emit: Vec<(usize, Option<String>, Option<String>)> = Vec::new();
+        {
+            let ws = &mut self.workspaces[index];
+            let pane_ids: Vec<usize> = ws.panes.keys().copied().collect();
+            for pid in &pane_ids {
+                let name = ws
+                    .pane_names
+                    .iter()
+                    .find(|(_, id)| **id == *pid)
+                    .map(|(n, _)| n.clone());
+                if let Some(pane) = ws.panes.get_mut(pid) {
+                    if !pane.exit_event_emitted {
+                        pane.exit_event_emitted = true;
+                        to_emit.push((*pid, name, pane.role.clone()));
+                    }
+                }
+            }
+            for pid in pane_ids {
+                self.claude_monitor.remove(pid);
+            }
         }
+
         self.workspaces[index].shutdown();
         self.workspaces.remove(index);
         if self.active_tab >= self.workspaces.len() {
             self.active_tab = self.workspaces.len() - 1;
+        }
+        for (pid, name, role) in to_emit {
+            self.emit_pane_exited(pid, name, role);
         }
     }
 
@@ -1092,6 +1163,7 @@ impl App {
         ws.focused_pane_id = new_id;
 
         self.mark_layout_change();
+        self.emit_pane_started(new_id);
         Ok(())
     }
 
@@ -1164,6 +1236,23 @@ impl App {
         let pane_ids = ws.layout.collect_pane_ids();
         let current_idx = pane_ids.iter().position(|&id| id == focused);
 
+        // Capture PaneExited metadata before the removal. If a prior
+        // path (e.g. natural shell exit) already emitted, we skip.
+        let exited_meta: Option<(Option<String>, Option<String>)> = {
+            let name = ws
+                .pane_names
+                .iter()
+                .find(|(_, id)| **id == focused)
+                .map(|(n, _)| n.clone());
+            match ws.panes.get_mut(&focused) {
+                Some(pane) if !pane.exit_event_emitted => {
+                    pane.exit_event_emitted = true;
+                    Some((name, pane.role.clone()))
+                }
+                _ => None,
+            }
+        };
+
         ws.layout.remove_pane(focused);
 
         if let Some(mut pane) = ws.panes.remove(&focused) {
@@ -1187,6 +1276,9 @@ impl App {
         }
 
         self.mark_layout_change();
+        if let Some((name, role)) = exited_meta {
+            self.emit_pane_exited(focused, name, role);
+        }
     }
 
     /// Cycle focus forward: FileTree → Preview → Pane1 → Pane2 → ... → FileTree
@@ -1837,11 +1929,24 @@ impl App {
             had_events = true;
             match event {
                 AppEvent::PtyEof(pane_id) => {
+                    let mut exit_meta: Option<(Option<String>, Option<String>)> = None;
                     for ws in &mut self.workspaces {
                         if let Some(pane) = ws.panes.get_mut(&pane_id) {
                             pane.exited = true;
+                            if !pane.exit_event_emitted {
+                                pane.exit_event_emitted = true;
+                                let name = ws
+                                    .pane_names
+                                    .iter()
+                                    .find(|(_, id)| **id == pane_id)
+                                    .map(|(n, _)| n.clone());
+                                exit_meta = Some((name, pane.role.clone()));
+                            }
                             break;
                         }
+                    }
+                    if let Some((name, role)) = exit_meta {
+                        self.emit_pane_exited(pane_id, name, role);
                     }
                 }
                 AppEvent::CwdChanged(pane_id, new_cwd) => {
@@ -1884,6 +1989,31 @@ impl App {
     }
 
     pub fn shutdown(&mut self) {
+        // Surface PaneExited for every still-live pane before we tear
+        // down the workspaces, so an event-stream subscriber observes
+        // the final state consistently with the exactly-once contract.
+        // `exit_event_emitted` guards against re-emitting any pane that
+        // already exited via Ctrl+W, close_tab, or a natural shell exit.
+        let mut pending: Vec<(usize, Option<String>, Option<String>)> = Vec::new();
+        for ws in &mut self.workspaces {
+            let pane_ids: Vec<usize> = ws.panes.keys().copied().collect();
+            for pid in pane_ids {
+                let name = ws
+                    .pane_names
+                    .iter()
+                    .find(|(_, id)| **id == pid)
+                    .map(|(n, _)| n.clone());
+                if let Some(pane) = ws.panes.get_mut(&pid) {
+                    if !pane.exit_event_emitted {
+                        pane.exit_event_emitted = true;
+                        pending.push((pid, name, pane.role.clone()));
+                    }
+                }
+            }
+        }
+        for (pid, name, role) in pending {
+            self.emit_pane_exited(pid, name, role);
+        }
         for ws in &mut self.workspaces {
             ws.shutdown();
         }
