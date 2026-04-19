@@ -284,22 +284,40 @@ impl Pane {
     ) -> Option<Vec<u8>> {
         let parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
         let screen = parser.screen();
-        if !screen.alternate_screen() {
-            return None;
-        }
-        match screen.mouse_protocol_mode() {
-            vt100::MouseProtocolMode::None => Some(if scroll_down {
-                b"\x1b[B".to_vec()
-            } else {
-                b"\x1b[A".to_vec()
-            }),
+        let alt = screen.alternate_screen();
+        let mode = screen.mouse_protocol_mode();
+        let encoding = screen.mouse_protocol_encoding();
+
+        // Decision order matters: an app that enabled mouse reporting
+        // expects the wheel even if it hasn't entered the alt screen.
+        // Claude Code's `/tui fullscreen` is exactly this case — it
+        // sets MouseProtocolMode::AnyMotion (DECSET 1003) without
+        // switching to the alternate screen buffer, so gating on
+        // `alternate_screen()` alone silently drops the event.
+        //
+        // - mouse reporting on  → encode wheel report in the app's
+        //   chosen protocol (works for both in-place TUIs like Claude
+        //   /tui and classic alt-screen TUIs like vim).
+        // - mouse reporting off + alt screen → xterm-style arrow
+        //   fallback so `less` and friends still move their cursor.
+        // - mouse reporting off + normal screen → None, let the caller
+        //   scroll vt100 scrollback (normal shell history).
+        match mode {
+            vt100::MouseProtocolMode::None => {
+                if alt {
+                    Some(if scroll_down {
+                        b"\x1b[B".to_vec()
+                    } else {
+                        b"\x1b[A".to_vec()
+                    })
+                } else {
+                    None
+                }
+            }
             _ => {
                 let button: u8 = if scroll_down { 65 } else { 64 };
                 Some(encode_mouse_wheel_report(
-                    button,
-                    local_col,
-                    local_row,
-                    screen.mouse_protocol_encoding(),
+                    button, local_col, local_row, encoding,
                 ))
             }
         }
