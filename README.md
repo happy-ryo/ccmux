@@ -82,13 +82,14 @@ Controls the IME overlay used for host-terminal IME input (Issue #25 / PR #36).
 
 ```toml
 [ime]
-mode = "hotkey"   # "hotkey" | "off"
+mode = "hotkey"   # "hotkey" | "off" | "always"
 ```
 
 | Value | Behavior |
 |-------|----------|
 | `hotkey` (default) | `Ctrl+;` opens the IME composition overlay on a focused pane. |
 | `off` | `Ctrl+;` is swallowed silently — no overlay, no keystroke leaked to the shell. For users who don't use IME, or whose terminal already handles IME placement correctly. |
+| `always` | In a focused Claude pane, any printable key automatically opens the overlay and seeds it with that first character. Ctrl / Alt / navigation / function keys still pass through to the pane. Scrolled-back panes are exempt so scrollback shortcuts keep working. `Ctrl+;` also still opens the overlay explicitly. |
 
 The `--ime hotkey|off` CLI flag overrides the config file for a single run. Precedence is **CLI > config file > default**.
 

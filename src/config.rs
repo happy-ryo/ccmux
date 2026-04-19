@@ -40,6 +40,12 @@ pub enum ImeMode {
     /// and the overlay is never opened. For users who don't use IME
     /// or prefer their terminal's own IME handling.
     Off,
+    /// The overlay opens automatically when a printable key is
+    /// pressed in a focused Claude pane that isn't scrolled back.
+    /// The triggering keystroke lands in the overlay buffer as the
+    /// first character, so the user doesn't see a dropped key. See
+    /// Issue #40 for full semantics.
+    Always,
 }
 
 impl fmt::Display for ImeMode {
@@ -47,6 +53,7 @@ impl fmt::Display for ImeMode {
         match self {
             ImeMode::Hotkey => f.write_str("hotkey"),
             ImeMode::Off => f.write_str("off"),
+            ImeMode::Always => f.write_str("always"),
         }
     }
 }
@@ -57,8 +64,9 @@ impl std::str::FromStr for ImeMode {
         match s {
             "hotkey" => Ok(ImeMode::Hotkey),
             "off" => Ok(ImeMode::Off),
+            "always" => Ok(ImeMode::Always),
             other => Err(format!(
-                "invalid ime mode: {other:?} (expected hotkey | off)"
+                "invalid ime mode: {other:?} (expected hotkey | off | always)"
             )),
         }
     }
@@ -197,15 +205,27 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_ime_mode_value() {
-        let err = toml::from_str::<Config>(
+    fn parses_minimal_ime_always() {
+        let cfg: Config = toml::from_str(
             r#"
             [ime]
             mode = "always"
             "#,
         )
+        .unwrap();
+        assert_eq!(cfg.ime.mode, ImeMode::Always);
+    }
+
+    #[test]
+    fn rejects_unknown_ime_mode_value() {
+        let err = toml::from_str::<Config>(
+            r#"
+            [ime]
+            mode = "banana"
+            "#,
+        )
         .unwrap_err();
-        assert!(err.to_string().contains("always") || err.to_string().contains("variant"));
+        assert!(err.to_string().contains("banana") || err.to_string().contains("variant"));
     }
 
     #[test]
@@ -277,6 +297,7 @@ mod tests {
         use std::str::FromStr;
         assert_eq!(ImeMode::from_str("hotkey").unwrap(), ImeMode::Hotkey);
         assert_eq!(ImeMode::from_str("off").unwrap(), ImeMode::Off);
-        assert!(ImeMode::from_str("always").is_err());
+        assert_eq!(ImeMode::from_str("always").unwrap(), ImeMode::Always);
+        assert!(ImeMode::from_str("banana").is_err());
     }
 }

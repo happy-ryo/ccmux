@@ -870,7 +870,12 @@ impl App {
                     // simply does nothing.
                     return Ok(true);
                 }
-                crate::config::ImeMode::Hotkey => { /* fall through to overlay open */ }
+                crate::config::ImeMode::Hotkey | crate::config::ImeMode::Always => {
+                    // `always` still honors the explicit hotkey — users
+                    // should be able to open the overlay deliberately
+                    // before typing (e.g. when they know the first
+                    // character belongs in IME).
+                }
             }
             let focused_id = self.ws().focused_pane_id;
             let pane_focused = matches!(self.ws().focus_target, FocusTarget::Pane)
@@ -885,6 +890,33 @@ impl App {
             // Fall through when focus is on the file tree / preview;
             // Ctrl+; in those contexts has no meaning and shouldn't
             // open an overlay attached to a hidden target.
+        }
+
+        // Always-on IME: a printable key in a focused Claude pane
+        // auto-opens the overlay and absorbs the first character, so
+        // the user can type JP text without a hotkey dance. Gated to
+        // Claude panes (bash / vim shouldn't hijack Enter+text), and
+        // disabled when the pane is scrolled back so scrollback key
+        // shortcuts still work.
+        if self.ime_mode == crate::config::ImeMode::Always {
+            if let Some(ch) = always_on_trigger_char(&key) {
+                let focused_id = self.ws().focused_pane_id;
+                let pane_focused = matches!(self.ws().focus_target, FocusTarget::Pane)
+                    && self.ws().panes.contains_key(&focused_id);
+                if pane_focused {
+                    let (is_claude, is_scrolled) = {
+                        let pane = &self.ws().panes[&focused_id];
+                        (pane.is_claude_running(), pane.is_scrolled_back())
+                    };
+                    if is_claude && !is_scrolled {
+                        let mut overlay = OverlayState::new(focused_id);
+                        overlay.insert_char(ch);
+                        self.overlay = Some(overlay);
+                        self.mark_layout_change();
+                        return Ok(true);
+                    }
+                }
+            }
         }
 
         // Ctrl+Q — quit
@@ -2715,6 +2747,31 @@ pub fn key_event_to_bytes_pub(key: &KeyEvent) -> Option<Vec<u8>> {
     key_event_to_bytes(key)
 }
 
+/// For IME `always` mode: return `Some(ch)` if pressing this key in
+/// a focused Claude pane should auto-open the overlay and seed it
+/// with `ch`. Anything else (Ctrl-modifier, Alt-modifier, navigation
+/// keys, Enter, Backspace, Esc, function keys, …) is NOT a trigger —
+/// those keep their existing pass-through meaning for the pane.
+///
+/// We deliberately let plain SHIFT through because capital letters
+/// and shifted symbols are still printable text the user would want
+/// composed in the overlay.
+fn always_on_trigger_char(key: &KeyEvent) -> Option<char> {
+    // Ctrl / Alt / Super / Meta → not a plain printable press.
+    let ignore_mods = KeyModifiers::CONTROL
+        | KeyModifiers::ALT
+        | KeyModifiers::SUPER
+        | KeyModifiers::HYPER
+        | KeyModifiers::META;
+    if key.modifiers.intersects(ignore_mods) {
+        return None;
+    }
+    match key.code {
+        KeyCode::Char(c) => Some(c),
+        _ => None,
+    }
+}
+
 /// Convert a crossterm KeyEvent into bytes suitable for PTY input.
 fn key_event_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -2787,6 +2844,73 @@ fn key_event_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mk_key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, mods)
+    }
+
+    #[test]
+    fn always_on_trigger_plain_char_fires() {
+        let k = mk_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert_eq!(always_on_trigger_char(&k), Some('a'));
+    }
+
+    #[test]
+    fn always_on_trigger_shift_char_fires() {
+        // Shift keeps printable text (capital letters, shifted symbols).
+        let k = mk_key(KeyCode::Char('A'), KeyModifiers::SHIFT);
+        assert_eq!(always_on_trigger_char(&k), Some('A'));
+    }
+
+    #[test]
+    fn always_on_trigger_ctrl_does_not_fire() {
+        let k = mk_key(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(always_on_trigger_char(&k), None);
+    }
+
+    #[test]
+    fn always_on_trigger_alt_does_not_fire() {
+        let k = mk_key(KeyCode::Char('x'), KeyModifiers::ALT);
+        assert_eq!(always_on_trigger_char(&k), None);
+    }
+
+    #[test]
+    fn always_on_trigger_enter_does_not_fire() {
+        let k = mk_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(always_on_trigger_char(&k), None);
+    }
+
+    #[test]
+    fn always_on_trigger_backspace_does_not_fire() {
+        let k = mk_key(KeyCode::Backspace, KeyModifiers::NONE);
+        assert_eq!(always_on_trigger_char(&k), None);
+    }
+
+    #[test]
+    fn always_on_trigger_arrow_does_not_fire() {
+        let k = mk_key(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(always_on_trigger_char(&k), None);
+    }
+
+    #[test]
+    fn always_on_trigger_esc_does_not_fire() {
+        let k = mk_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(always_on_trigger_char(&k), None);
+    }
+
+    #[test]
+    fn always_on_trigger_function_key_does_not_fire() {
+        let k = mk_key(KeyCode::F(1), KeyModifiers::NONE);
+        assert_eq!(always_on_trigger_char(&k), None);
+    }
+
+    #[test]
+    fn always_on_trigger_unicode_fires() {
+        // Wide character typical of JP IME-produced input reaching
+        // ccmux (if the host passes it as Char rather than a paste).
+        let k = mk_key(KeyCode::Char('あ'), KeyModifiers::NONE);
+        assert_eq!(always_on_trigger_char(&k), Some('あ'));
+    }
 
     #[test]
     fn test_layout_single_pane() {
