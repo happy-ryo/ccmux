@@ -258,6 +258,53 @@ impl Pane {
         parser.screen().bracketed_paste()
     }
 
+    /// Decide how a mouse-wheel event at `(local_col, local_row)` — pane
+    /// content-area coordinates, 0-origin — should be handled when the
+    /// pane is in alternate-screen mode. Returns:
+    ///
+    /// * `Some(bytes)` when the caller should forward those bytes to
+    ///   the PTY instead of scrolling the vt100 scrollback. Two sub-
+    ///   cases:
+    ///   - If the application enabled mouse reporting (e.g. Claude
+    ///     Code `/tui`, vim with `set mouse=a`), the bytes are an
+    ///     xterm mouse report encoded in whatever protocol the app
+    ///     selected (SGR / UTF-8 / Default).
+    ///   - If the app is alt-screen but did NOT enable mouse
+    ///     reporting (e.g. `less`), the bytes are an arrow-key escape
+    ///     so the wheel still moves the cursor, mirroring xterm /
+    ///     WezTerm behavior.
+    /// * `None` when the pane is **not** in alternate screen — the
+    ///   caller falls back to the normal `scroll_up` / `scroll_down`
+    ///   path that walks the vt100 scrollback.
+    pub fn wheel_forward_bytes(
+        &self,
+        scroll_down: bool,
+        local_col: u16,
+        local_row: u16,
+    ) -> Option<Vec<u8>> {
+        let parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
+        let screen = parser.screen();
+        if !screen.alternate_screen() {
+            return None;
+        }
+        match screen.mouse_protocol_mode() {
+            vt100::MouseProtocolMode::None => Some(if scroll_down {
+                b"\x1b[B".to_vec()
+            } else {
+                b"\x1b[A".to_vec()
+            }),
+            _ => {
+                let button: u8 = if scroll_down { 65 } else { 64 };
+                Some(encode_mouse_wheel_report(
+                    button,
+                    local_col,
+                    local_row,
+                    screen.mouse_protocol_encoding(),
+                ))
+            }
+        }
+    }
+
     /// Check if Claude Code is running in this pane (by window title).
     pub fn is_claude_running(&self) -> bool {
         if let Ok(t) = self.title.lock() {
@@ -313,6 +360,62 @@ impl Pane {
 impl Drop for Pane {
     fn drop(&mut self) {
         self.kill();
+    }
+}
+
+/// Encode a mouse-wheel report for the given xterm protocol encoding.
+///
+/// `button` is the xterm button code (64 = wheel up, 65 = wheel down).
+/// `col` / `row` are pane-local content-area coordinates, **0-origin**
+/// — the encoder converts to the 1-origin form on the wire.
+///
+/// Supports SGR (recommended, CSI < ... M), UTF-8-based, and the
+/// legacy "Default" encoding. The Default form truncates coordinates
+/// past 223 because each cell is transmitted as `coord + 32` in a
+/// single byte — this is an xterm-era limitation and mirrors
+/// upstream terminals (WezTerm, Alacritty) behavior.
+pub fn encode_mouse_wheel_report(
+    button: u8,
+    col: u16,
+    row: u16,
+    encoding: vt100::MouseProtocolEncoding,
+) -> Vec<u8> {
+    let c1 = col.saturating_add(1);
+    let r1 = row.saturating_add(1);
+    match encoding {
+        vt100::MouseProtocolEncoding::Sgr => format!("\x1b[<{button};{c1};{r1}M").into_bytes(),
+        vt100::MouseProtocolEncoding::Utf8 => {
+            let mut v: Vec<u8> = vec![0x1b, b'[', b'M', button.saturating_add(32)];
+            encode_utf8_coord(&mut v, c1);
+            encode_utf8_coord(&mut v, r1);
+            v
+        }
+        vt100::MouseProtocolEncoding::Default => {
+            let col_byte = c1.saturating_add(32).min(255) as u8;
+            let row_byte = r1.saturating_add(32).min(255) as u8;
+            vec![
+                0x1b,
+                b'[',
+                b'M',
+                button.saturating_add(32),
+                col_byte,
+                row_byte,
+            ]
+        }
+    }
+}
+
+fn encode_utf8_coord(out: &mut Vec<u8>, coord: u16) {
+    // xterm UTF-8 mouse reporting: emit the coordinate + 32 as a
+    // UTF-8-encoded code point. Values up to 2015 fit.
+    let code = coord.saturating_add(32) as u32;
+    if code < 0x80 {
+        out.push(code as u8);
+    } else {
+        // Two-byte UTF-8 for values in [0x80, 0x7FF].
+        let c = code.min(0x7FF);
+        out.push(0xC0 | ((c >> 6) as u8));
+        out.push(0x80 | ((c & 0x3F) as u8));
     }
 }
 
@@ -586,6 +689,50 @@ fn detect_shell_unix() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wheel_report_sgr_up_matches_xterm_format() {
+        // xterm SGR wheel up: CSI < 64 ; col ; row M (1-origin coords)
+        let bytes = encode_mouse_wheel_report(64, 9, 4, vt100::MouseProtocolEncoding::Sgr);
+        assert_eq!(bytes, b"\x1b[<64;10;5M");
+    }
+
+    #[test]
+    fn wheel_report_sgr_down_matches_xterm_format() {
+        let bytes = encode_mouse_wheel_report(65, 0, 0, vt100::MouseProtocolEncoding::Sgr);
+        assert_eq!(bytes, b"\x1b[<65;1;1M");
+    }
+
+    #[test]
+    fn wheel_report_default_encoding_uses_single_byte_plus_32() {
+        // Legacy xterm: ESC [ M button+32 col+33 row+33 (1-origin + 32
+        // offset = col 0 -> 33, row 0 -> 33).
+        let bytes = encode_mouse_wheel_report(64, 0, 0, vt100::MouseProtocolEncoding::Default);
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 96, 33, 33]);
+    }
+
+    #[test]
+    fn wheel_report_default_truncates_past_223() {
+        // coord 300 + 32 offset = 332, clamped to 255 so the legacy
+        // byte doesn't wrap. This preserves xterm's well-known cap.
+        let bytes = encode_mouse_wheel_report(65, 300, 300, vt100::MouseProtocolEncoding::Default);
+        assert_eq!(bytes[0..4], [0x1b, b'[', b'M', 97]);
+        assert_eq!(bytes[4], 255);
+        assert_eq!(bytes[5], 255);
+    }
+
+    #[test]
+    fn wheel_report_utf8_multi_byte_for_wide_cols() {
+        // col=100 -> 1-origin 101, +32 = 133 (0x85) which must be
+        // encoded as 2-byte UTF-8, not a raw 0x85 byte.
+        let bytes = encode_mouse_wheel_report(64, 100, 0, vt100::MouseProtocolEncoding::Utf8);
+        assert_eq!(bytes[0..4], [0x1b, b'[', b'M', 96]);
+        // 133 as UTF-8: 0xC2 0x85
+        assert_eq!(bytes[4], 0xC2);
+        assert_eq!(bytes[5], 0x85);
+        // row=0 -> 1-origin 1, +32 = 33 (0x21), single byte
+        assert_eq!(bytes[6], 33);
+    }
 
     #[test]
     fn test_detect_shell_returns_valid_path() {
