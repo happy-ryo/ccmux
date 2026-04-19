@@ -45,5 +45,7 @@ cargo run            # Run the app
 ## Fork & Branching
 このリポジトリは `Shin-sibainu/ccmux` のフォーク。ブランチ運用 (main = 独自本流 / master = 上流ミラー) と上流同期手順は `BRANCHING.md` を参照。上流取り込みや逆 PR の作業時は `.claude/skills/upstream-sync/` Skill が自動発動する。
 
+**上流への逆 PR はユーザーからの明示的な指示がない限り提案・実行しない。** フォークで実装した機能について「汎用性があるので上流還元候補」といったラベルを umbrella Issue に残すのは OK だが、タスクの次候補として「upstream PR を出す」を勝手に積まない。上流の受け入れタイミングに依存して進捗が止まるのを避けるため、フォーク内の独自開発に集中する方針。
+
 ## Workflow Rules
 - **Every implementation must be reviewed by the evaluator agent** before reporting done. This is a Rust TUI app, so Playwright MCP is not available — the evaluator should perform static review (diff analysis, edge cases, logic correctness, key conflict checks, layout math consistency).
