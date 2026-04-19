@@ -2,12 +2,12 @@
 
 Some host terminals anchor the IME candidate window to the hardware cursor. When Claude Code (or any other TUI) runs inside ccmux and repaints aggressively, the candidate window ends up flicking to random positions on screen.
 
-Observed in practice:
+Observed in practice (verified on the maintainer's setups):
 
 - **Reproduces**: Windows + WezTerm / zellij / other third-party terminals.
-- **Does not reproduce (or is mild)**: Windows Terminal (the Microsoft default), macOS Terminal.app, iTerm2.
+- **Does not reproduce**: Windows Terminal (the Microsoft default), macOS Terminal.app, iTerm2.
 
-macOS and Linux native terminals anchor IME differently and don't show the problem, but the combination of Windows + a non-default terminal produces very visible candidate-window drift while composing JP / CN / KR text.
+macOS and Linux native terminals anchor IME differently and don't show the problem. The combination of Windows + a non-default terminal produces very visible candidate-window drift while composing JP / CN / KR text.
 
 ccmux solves this with a **composition overlay**: a single-row text input drawn at the bottom of the screen that gives the host IME a stable anchor, and commits the confirmed text back to the pane via bracketed paste. Users on environments where the problem doesn't reproduce can disable the overlay entirely with `off` mode.
 
@@ -15,7 +15,7 @@ ccmux solves this with a **composition overlay**: a single-row text input drawn 
 
 import { Callout } from 'nextra/components'
 
-Configure via file (`~/.config/ccmux/config.toml` / macOS `~/Library/Application Support/ccmux/config.toml` / Windows `%APPDATA%\ccmux\config.toml`) or CLI:
+Configure via file (Linux: `$XDG_CONFIG_HOME/ccmux/config.toml`, default `~/.config/ccmux/config.toml` / macOS: `~/Library/Application Support/ccmux/config.toml` / Windows: `%APPDATA%\ccmux\config.toml`) or CLI:
 
 ```toml
 [ime]
@@ -87,7 +87,7 @@ This mitigates but does not fully eliminate the flicker. Follow-ups for a full f
 | Environment | Overlay mechanism | Caret flicker mitigation |
 |---|---|---|
 | Windows + WezTerm (primary target) | Verified | Same |
-| Windows + Windows Terminal | Works, but the IME drift problem is mild here to begin with | Same |
+| Windows + Windows Terminal | Works, but this combo doesn't exhibit the IME drift problem in the first place — `off` is a fine choice | Same |
 | Windows + zellij | Verified | Same |
 | macOS Terminal.app / iTerm2 | Unverified (#41) | Not needed (no conpty) |
 | Linux ibus / fcitx5 | Unverified (#41) | Not needed |
