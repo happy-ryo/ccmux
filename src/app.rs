@@ -917,6 +917,7 @@ impl App {
         if key.modifiers == KeyModifiers::ALT && key.code == KeyCode::Right {
             if !self.workspaces.is_empty() {
                 self.active_tab = (self.active_tab + 1) % self.workspaces.len();
+                self.overlay = None;
             }
             return Ok(true);
         }
@@ -929,6 +930,7 @@ impl App {
                 } else {
                     self.active_tab - 1
                 };
+                self.overlay = None;
             }
             return Ok(true);
         }
@@ -948,6 +950,7 @@ impl App {
                 if let Some(digit) = c.to_digit(10) {
                     if digit >= 1 && (digit as usize) <= self.workspaces.len() {
                         self.active_tab = (digit as usize) - 1;
+                        self.overlay = None;
                         return Ok(true);
                     }
                 }
@@ -1280,6 +1283,7 @@ impl App {
         let ws = Workspace::new(name, cwd, pane_id, 10, 40, self.event_tx.clone())?;
         self.workspaces.push(ws);
         self.active_tab = self.workspaces.len() - 1;
+        self.overlay = None;
         self.emit_pane_started(pane_id);
         Ok(())
     }
@@ -1315,10 +1319,23 @@ impl App {
             }
         }
 
+        // If the overlay targets a pane in the tab being closed, cancel it.
+        let overlay_in_tab = self
+            .overlay
+            .as_ref()
+            .is_some_and(|o| self.workspaces[index].panes.contains_key(&o.target_pane));
+        if overlay_in_tab {
+            self.overlay = None;
+        }
+
         self.workspaces[index].shutdown();
         self.workspaces.remove(index);
+        let prev_active = self.active_tab;
         if self.active_tab >= self.workspaces.len() {
             self.active_tab = self.workspaces.len() - 1;
+        }
+        if prev_active != self.active_tab {
+            self.overlay = None;
         }
         for (pid, name, role) in to_emit {
             self.emit_pane_exited(pid, name, role);
@@ -1690,6 +1707,9 @@ impl App {
                                 if prev_idx == tab_idx
                                     && now.duration_since(prev_t).as_millis() < 500
                         );
+                        if self.active_tab != tab_idx {
+                            self.overlay = None;
+                        }
                         self.active_tab = tab_idx;
                         if is_double {
                             self.rename_input = Some(String::new());
