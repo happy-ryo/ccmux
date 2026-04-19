@@ -465,6 +465,7 @@ fn render_panes(app: &mut App, frame: &mut Frame, area: Rect) {
     let focused_id = app.ws().focused_pane_id;
     let focus_target = app.ws().focus_target;
     let selection = app.selection.clone();
+    let overlay_active = app.overlay.is_some();
     for (pane_id, rect) in rects {
         if let Some(pane) = app.ws().panes.get(&pane_id) {
             let is_focused = pane_id == focused_id && focus_target == FocusTarget::Pane;
@@ -472,7 +473,15 @@ fn render_panes(app: &mut App, frame: &mut Frame, area: Rect) {
                 |s| matches!(s.target, crate::app::SelectionTarget::Pane(id) if id == pane_id),
             );
             let claude_state = app.claude_monitor.state(pane_id);
-            render_single_pane(pane, is_focused, pane_sel, &claude_state, frame, rect);
+            render_single_pane(
+                pane,
+                is_focused,
+                pane_sel,
+                &claude_state,
+                overlay_active,
+                frame,
+                rect,
+            );
         }
     }
 }
@@ -482,6 +491,7 @@ fn render_single_pane(
     is_focused: bool,
     selection: Option<&crate::app::TextSelection>,
     claude_state: &crate::claude_monitor::ClaudeState,
+    overlay_active: bool,
     frame: &mut Frame,
     area: Rect,
 ) {
@@ -606,7 +616,7 @@ fn render_single_pane(
             .alignment(Alignment::Center);
         frame.render_widget(msg, inner);
     } else {
-        render_terminal_content(pane, is_focused, selection, frame, inner);
+        render_terminal_content(pane, is_focused, selection, overlay_active, frame, inner);
     }
 }
 
@@ -614,6 +624,7 @@ fn render_terminal_content(
     pane: &crate::pane::Pane,
     is_focused: bool,
     selection: Option<&crate::app::TextSelection>,
+    overlay_active: bool,
     frame: &mut Frame,
     area: Rect,
 ) {
@@ -678,7 +689,8 @@ fn render_terminal_content(
     // Show cursor when focused.
     // For non-Claude panes, respect the PTY's hide_cursor request.
     // For Claude Code, always show because Claude relies on the terminal cursor.
-    let show_cursor = is_focused && (!screen.hide_cursor() || pane.is_claude_running());
+    let show_cursor =
+        !overlay_active && is_focused && (!screen.hide_cursor() || pane.is_claude_running());
     if show_cursor {
         let cursor = screen.cursor_position();
         // For Claude Code, shift cursor 1 column left because Claude draws its own
