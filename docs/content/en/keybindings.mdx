@@ -31,6 +31,7 @@ When a terminal pane is focused:
 | `Alt+T` / `Ctrl+T` | New tab |
 | `Alt+R` | Rename tab (session only) |
 | `Alt+S` | Toggle status bar |
+| `Ctrl+;` | Open the IME composition overlay (only when mode is `hotkey` / `always`; see [IME Input](/docs/en/ime)) |
 | `Ctrl+F` | Focus file tree |
 | `Ctrl+P` | Swap preview/terminal layout |
 | `Tab` | Forwarded to shell (tab completion) |
@@ -82,3 +83,26 @@ Some keys are reserved by ccmux and won't be forwarded to the shell:
 | `Ctrl+E` | Horizontal split | Use `End` key for end-of-line |
 | `Ctrl+F` | File tree | Use `/` for search in less/vim |
 | `Ctrl+W` | Close (multi-pane only) | Works in single pane mode |
+| `Ctrl+;` | IME overlay (mode = `hotkey` / `always`) | Start ccmux with `--ime off` to disable the overlay and swallow the keystroke |
+
+## Mouse Wheel
+
+Wheel events route based on the hovered pane's live state (ccmux 0.5.7-fork.2 and later):
+
+| Pane state | Behavior |
+|---|---|
+| Plain shell (`bash` prompt, etc.) | Scroll the vt100 scrollback by 3 rows (walk history) |
+| Mouse reporting enabled (Claude Code `/tui fullscreen`, `vim` with `set mouse=a`, `lazygit`, …) | Forward as an xterm mouse report to the PTY; the app handles the wheel itself |
+| Alt-screen but mouse reporting disabled (`less`, …) | Forward `Up` / `Down` arrow keys — same fallback as xterm / WezTerm |
+
+### Escape hatch
+
+`CCMUX_DISABLE_MOUSE_FORWARD=1` reverts the pane branch to the legacy vt100-scrollback-only behavior everywhere. Useful for nested ccmux sessions or terminals whose mouse-protocol encoding disagrees with vt100's inference.
+
+```bash
+CCMUX_DISABLE_MOUSE_FORWARD=1 ccmux
+```
+
+### File tree / Preview
+
+When the cursor hovers the file tree or preview panel instead of a pane, the wheel scrolls that panel by 3 entries regardless of the pane state above.
