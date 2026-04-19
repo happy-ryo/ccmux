@@ -2,16 +2,27 @@
 
 ## 概要
 
-ccmux は約 2,800 行の Rust コードで、6 つのモジュールで構成されています：
+ccmux は約 11,000 行の Rust コードで、以下のモジュール構成:
 
 ```
 src/
-├── main.rs       # エントリーポイント、イベントループ、panic hook
-├── app.rs        # ワークスペース/タブ状態、レイアウトツリー、入力処理
-├── pane.rs       # PTY 管理、vt100 エミュレーション、シェル検出
-├── ui.rs         # ratatui 描画、テーマ、レイアウト
-├── filetree.rs   # ファイルツリー走査、ナビゲーション
-└── preview.rs    # シンタックスハイライト付きファイルプレビュー
+├── main.rs          # エントリーポイント、イベントループ、panic hook、raw mode setup
+├── app.rs           # ワークスペース/タブ状態、レイアウトツリー、入力処理、AppCommand dispatch
+├── pane.rs          # PTY 管理、vt100 エミュレーション、シェル検出、マウスホイール変換
+├── ui.rs            # ratatui 描画、テーマ、レイアウト、IME overlay、IME caret flicker 対策
+├── filetree.rs      # ファイルツリー走査、ナビゲーション
+├── preview.rs       # シンタックスハイライト付きファイルプレビュー
+├── cli.rs           # clap ベースのサブコマンド定義 (list/send/events/inspect 等)
+├── config.rs        # $XDG_CONFIG_HOME/ccmux/config.toml パーサ、[ime] 設定
+├── claude_monitor.rs# Claude Code の JSONL セッション監視 (プログレスバー等)
+├── layout_config.rs # ccmux-layouts/*.toml のマルチペインレイアウト
+├── version_check.rs # 起動時の新バージョンチェック (GitHub Releases)
+└── ipc/             # 外部クライアント向け IPC (下記セクション)
+    ├── mod.rs       # Request / Response / Event / CodedError / err_code 定数
+    ├── endpoint.rs  # Unix socket / Windows Named Pipe のエンドポイント解決
+    ├── events.rs    # EventBus (bounded channel + EventsDropped meta event)
+    ├── server.rs    # accept loop + worker threads + subscribe/half-close
+    └── client.rs    # CLI から IPC サーバーへ接続 + subscribe_events
 ```
 
 ## ターミナルエミュレーション
@@ -56,6 +67,43 @@ enum LayoutNode {
 3. **PTY リサイズ** — サイズが変わった時のみ更新（キャッシュ）
 4. **セル単位描画** — vt100 スクリーンバッファを読み、ゼロアロケーションで ratatui セルにマッピング
 5. **選択オーバーレイ** — 選択テキストに青いハイライトを適用
+
+## IPC レイヤー
+
+ccmux は起動時に Unix socket (`$XDG_RUNTIME_DIR/ccmux/<pid>.sock`) または Windows Named Pipe (`\\.\pipe\ccmux-<pid>`) をバインドし、同一ユーザーのプロセスから subcommand を受け付ける。詳細な使い方は [IPC](/docs/ipc) を、コード上の分担は以下を参照。
+
+### メッセージ型 (`src/ipc/mod.rs`)
+
+- **`Request`**: クライアント → サーバー。`Hello` / `List` / `Send` / `Focus` / `Split` / `NewTab` / `Inspect` / `Subscribe` の enum variant。
+- **`Response`**: サーバー → クライアント。`Ok { data }` / `Hello { server_pid, session_token }` / `Subscribed` / `Err { message, code }`。`code` は `err_code` モジュールで安定名 (shutting_down / pane_not_found / io_error 等) を公開。
+- **`Event`**: subscribe ストリームで流れる `pane_started` / `pane_exited` / `events_dropped` / `heartbeat`。
+- **`CodedError`**: App 層のエラーキャリア。`AppCommand` の reply 型が `Result<T, CodedError>` で、サーバーが `into_response()` で wire Response に変換。
+
+### スレッドモデル (`src/ipc/server.rs`)
+
+```
+accept thread ─────┐
+(listener loop)    │
+                   ↓ spawn per conn
+                worker thread
+                   │
+                   ├─ one-shot: dispatch_request ─→ App via mpsc
+                   │                                (App は毎フレーム drain)
+                   └─ subscribe: stream_events
+                      (EventBus::subscribe → loop with 30s heartbeat)
+```
+
+- accept thread は 1 本、プロセスライフタイムで blocked。shutdown は `self.stop` フラグ + self-connect で wake
+- 各接続は short-lived worker で捌かれ、slow client が accept をブロックしない
+- App への dispatch は `Sender<AppCommand>` + `oneshot::channel()` + `recv_timeout(5s)` で、UI スレッドが wedged でも worker が永遠にハングしない
+
+### EventBus (`src/ipc/events.rs`)
+
+bounded channel で subscriber を束ねる broker。slow subscriber には `EventsDropped { count, ts_ms }` meta event を合成して欠落数を通知。subscribe ストリームは 30 秒おきに `Heartbeat { ts_ms }` を wire write して、半クローズされた相手を早期検出する。
+
+### セキュリティモデル
+
+same-user local IPC。アクセス制御は **OS socket permission** に任せる (Unix は `XDG_RUNTIME_DIR` の 0700、Windows は Named Pipe のセッションスコープ)。`CCMUX_TOKEN` / `CCMUX_SOCKET` 環境変数はクライアントがエンドポイントを特定するための指標で、秘匿のための秘密鍵ではない。`CCMUX_TOKEN` は PID 再利用によって別 ccmux インスタンスへ誤接続することを防ぐための session token として機能する。
 
 ## パフォーマンス
 

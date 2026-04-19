@@ -2,16 +2,27 @@
 
 ## Overview
 
-ccmux is ~2,800 lines of Rust, organized into 6 modules:
+ccmux is ~11,000 lines of Rust, organized as follows:
 
 ```
 src/
-├── main.rs       # Entry point, event loop, panic hook
-├── app.rs        # Workspace/tab state, layout tree, input handling
-├── pane.rs       # PTY management, vt100 emulation, shell detection
-├── ui.rs         # ratatui rendering, theme, layout
-├── filetree.rs   # File tree scanning, navigation
-└── preview.rs    # File preview with syntax highlighting
+├── main.rs           # Entry point, event loop, panic hook, raw-mode setup
+├── app.rs            # Workspace/tab state, layout tree, input handling, AppCommand dispatch
+├── pane.rs           # PTY management, vt100 emulation, shell detection, mouse-wheel translation
+├── ui.rs             # ratatui rendering, theme, layout, IME overlay, caret-flicker mitigation
+├── filetree.rs       # File tree scanning, navigation
+├── preview.rs        # Syntax-highlighted file preview
+├── cli.rs            # clap-based subcommand definitions (list/send/events/inspect/…)
+├── config.rs         # Parser for $XDG_CONFIG_HOME/ccmux/config.toml, [ime] settings
+├── claude_monitor.rs # Claude Code JSONL session monitor (progress bars, etc.)
+├── layout_config.rs  # Multi-pane layouts from ccmux-layouts/*.toml
+├── version_check.rs  # Startup new-version check against GitHub Releases
+└── ipc/              # External-client IPC (see section below)
+    ├── mod.rs        # Request / Response / Event / CodedError / err_code constants
+    ├── endpoint.rs   # Unix socket / Windows Named Pipe endpoint resolution
+    ├── events.rs     # EventBus (bounded channel + EventsDropped meta event)
+    ├── server.rs     # accept loop + worker threads + subscribe/half-close
+    └── client.rs     # CLI-side connect + subscribe_events
 ```
 
 ## Terminal Emulation
@@ -56,6 +67,43 @@ This naturally supports recursive splitting and makes layout calculation straigh
 3. **PTY resize** — Update PTY size only if it changed (cached)
 4. **Cell-by-cell rendering** — Read vt100 screen buffer, map to ratatui cells with zero heap allocation
 5. **Selection overlay** — Apply blue highlight on selected text
+
+## IPC Layer
+
+On startup ccmux binds a Unix socket (`$XDG_RUNTIME_DIR/ccmux/<pid>.sock`) or a Windows Named Pipe (`\\.\pipe\ccmux-<pid>`) and accepts subcommands from same-user processes. For user-facing details see the [IPC page](/docs/en/ipc); the code breakdown is below.
+
+### Message types (`src/ipc/mod.rs`)
+
+- **`Request`**: client → server. `Hello` / `List` / `Send` / `Focus` / `Split` / `NewTab` / `Inspect` / `Subscribe`.
+- **`Response`**: server → client. `Ok { data }` / `Hello { server_pid, session_token }` / `Subscribed` / `Err { message, code }`. The `code` is a stable identifier from the `err_code` module (shutting_down, pane_not_found, io_error, …).
+- **`Event`**: flows over the subscribe stream. `pane_started` / `pane_exited` / `events_dropped` / `heartbeat`.
+- **`CodedError`**: App-layer error carrier. `AppCommand` replies are `Result<T, CodedError>` and the server turns them into wire `Response`s via `into_response()`.
+
+### Thread model (`src/ipc/server.rs`)
+
+```
+accept thread ─────┐
+(listener loop)    │
+                   ↓ spawn per conn
+                worker thread
+                   │
+                   ├─ one-shot: dispatch_request → App via mpsc
+                   │                              (App drains every frame)
+                   └─ subscribe: stream_events
+                      (EventBus::subscribe → loop with 30 s heartbeat)
+```
+
+- A single accept thread lives for the process lifetime, blocked in `Listener::incoming()`. Shutdown flips `self.stop` and self-connects to unblock it.
+- Each connection runs on a short-lived worker so a slow client can't starve accept.
+- Dispatch to the App uses `Sender<AppCommand>` + `oneshot::channel()` + `recv_timeout(5s)`; even a wedged UI thread can't hang a worker forever.
+
+### EventBus (`src/ipc/events.rs`)
+
+A broker over a bounded channel. Slow subscribers are notified of drops via a synthetic `EventsDropped { count, ts_ms }` meta event; the subscribe stream emits a `Heartbeat { ts_ms }` every 30 seconds so half-closed peers are detected by the next failing write instead of lingering for hours on quiet workspaces.
+
+### Security model
+
+Same-user local IPC. Access control is delegated to **OS socket permissions** (Unix: `$XDG_RUNTIME_DIR` mode 0700; Windows: the Named Pipe's session scope). `CCMUX_TOKEN` / `CCMUX_SOCKET` environment variables are how clients *locate* the endpoint — not secrets, not an auth boundary. `CCMUX_TOKEN` specifically defends against PID reuse: a stale socket path inherited by a child shell pointing at a different ccmux PID would fail the token check and refuse to act.
 
 ## Performance
 
