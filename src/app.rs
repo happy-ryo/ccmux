@@ -1216,11 +1216,14 @@ impl App {
                 // intent (interrupt Claude, send Ctrl+C to shell)
                 // reaches its real target. Only on an already-empty
                 // buffer, because a non-empty buffer was clearing
-                // composition, not interacting with the pane.
+                // composition, not interacting with the pane. Propagate
+                // the write error (same policy as the Enter-commit
+                // path) instead of silently swallowing it.
                 let focused_before = self.ws().focused_pane_id;
                 self.ws_mut().focused_pane_id = target_pane;
-                let _ = self.forward_key_to_pty(key);
+                let forward_result = self.forward_key_to_pty(key);
                 self.ws_mut().focused_pane_id = focused_before;
+                forward_result?;
             }
             return Ok(true);
         }
@@ -3067,6 +3070,59 @@ mod tests {
             KeyModifiers::CONTROL | KeyModifiers::SHIFT,
         );
         assert_eq!(always_on_trigger_char(&k), None);
+    }
+
+    #[test]
+    fn always_mode_dismissal_and_refocus_cycle() {
+        // Exercises the dismissed_pane / last_focused_pane state
+        // machine without touching any PTY or UI: we manipulate the
+        // App's focus fields directly and only assert on the
+        // auto-open-gating logic inside
+        // maybe_auto_open_always_overlay. Non-Claude shells fail the
+        // `is_claude_running` gate, so the overlay itself never
+        // actually opens here — instead we cover focus-change
+        // dismissal clearing, idempotency on stable focus, and
+        // suppression persistence until focus moves.
+        let mut app = App::new(40, 80).expect("App::new");
+        app.ime_mode = crate::config::ImeMode::Always;
+
+        let pane_a = app.ws().focused_pane_id;
+
+        // Seed a dismissal on the currently-focused pane.
+        app.always_dismissed_pane = Some(pane_a);
+        app.last_focused_pane = Some(pane_a);
+
+        // Re-invoking on the same focus must not clear the dismissal.
+        app.maybe_auto_open_always_overlay();
+        assert_eq!(
+            app.always_dismissed_pane,
+            Some(pane_a),
+            "dismissal should persist while focus doesn't move"
+        );
+
+        // Simulate focus moving to a different pane (the pane need
+        // not actually exist for the dismissal-clear logic; the
+        // method bails out before touching `panes` when the pane id
+        // is unknown, but the clear runs first).
+        app.ws_mut().focused_pane_id = pane_a + 100;
+        app.maybe_auto_open_always_overlay();
+        assert_eq!(
+            app.always_dismissed_pane, None,
+            "focus change should clear the dismissal"
+        );
+    }
+
+    #[test]
+    fn always_mode_noop_when_disabled() {
+        let mut app = App::new(40, 80).expect("App::new");
+        // Default mode is Hotkey; auto-open must never run.
+        let pane_a = app.ws().focused_pane_id;
+        app.always_dismissed_pane = Some(pane_a);
+        app.maybe_auto_open_always_overlay();
+        // Dismissal is not touched — the method short-circuits on
+        // `ime_mode != Always` without observing or clearing state.
+        assert_eq!(app.always_dismissed_pane, Some(pane_a));
+        assert!(app.overlay.is_none());
     }
 
     #[test]
