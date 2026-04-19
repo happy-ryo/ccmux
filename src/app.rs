@@ -1996,6 +1996,48 @@ impl App {
         had_events
     }
 
+    /// Refresh the Windows IME candidate anchor on the focused pane so
+    /// the cursor we report to crossterm tracks the user's typing
+    /// position rather than Claude Code's temporary thinking-line
+    /// moves. A no-op on non-Windows builds — other OSes' IME
+    /// frameworks aren't driven by the terminal cursor the way TSF
+    /// on Windows is.
+    ///
+    /// Policy: after each keystroke is written, `write_input` stamps
+    /// `last_user_input_at`. While typing is still recent (under
+    /// [`IME_ANCHOR_TYPING_WINDOW`]) we track the live vt100 cursor,
+    /// which is where the just-echoed character landed. Once typing
+    /// stops, the anchor holds at the last tracked position — Claude's
+    /// thinking-line animation can't move it after that point.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn refresh_ime_anchor(&mut self) {
+        #[cfg(windows)]
+        {
+            use std::time::Duration;
+            const IME_ANCHOR_TYPING_WINDOW: Duration = Duration::from_millis(500);
+
+            let focused_id = self.ws().focused_pane_id;
+            let ws = self.ws_mut();
+            let pane = match ws.panes.get_mut(&focused_id) {
+                Some(p) => p,
+                None => return,
+            };
+            let typing_recent = pane
+                .last_user_input_at
+                .map(|t| t.elapsed() < IME_ANCHOR_TYPING_WINDOW)
+                .unwrap_or(false);
+            if !typing_recent {
+                // Keep the previously captured anchor (or leave it None
+                // if we've never seen input). The IME frozen-in-place
+                // behavior is intentional.
+                return;
+            }
+            if let Ok(parser) = pane.parser.lock() {
+                pane.ime_anchor = Some(parser.screen().cursor_position());
+            }
+        }
+    }
+
     pub fn shutdown(&mut self) {
         // Surface PaneExited for every still-live pane before we tear
         // down the workspaces, so an event-stream subscriber observes

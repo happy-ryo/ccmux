@@ -586,7 +586,19 @@ fn render_terminal_content(
     // For Claude Code, always show because Claude relies on the terminal cursor.
     let show_cursor = is_focused && (!screen.hide_cursor() || pane.is_claude_running());
     if show_cursor {
+        // On Windows, prefer the IME candidate anchor so the host
+        // terminal's IME (e.g. Japanese/Chinese composition) keeps
+        // its candidate window near the user's typing location. The
+        // vt100 cursor may have moved to a Claude thinking/status
+        // row while the user is composing; reporting that position
+        // to crossterm would let the IME candidate jump with it.
+        // Falls back to the vt100 cursor when no anchor has been
+        // established (e.g. before any user input, or on non-Windows).
+        #[cfg(windows)]
+        let cursor = pane.ime_anchor.unwrap_or_else(|| screen.cursor_position());
+        #[cfg(not(windows))]
         let cursor = screen.cursor_position();
+
         // For Claude Code, shift cursor 1 column left because Claude draws its own
         // block character at the cursor position, and the PTY cursor would otherwise
         // appear one column after with a visible gap.

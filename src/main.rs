@@ -321,6 +321,11 @@ fn run_event_loop(
         // Only render when something changed (and no cooldown is active)
         if app.dirty && app.paste_cooldown == 0 && app.resize_cooldown == 0 {
             app.dirty = false;
+            // Refresh the Windows IME candidate anchor before rendering so
+            // the cursor we report to crossterm reflects the most recent
+            // typing position rather than whatever row Claude moved its
+            // vt100 cursor to. No-op on non-Windows builds.
+            app.refresh_ime_anchor();
             terminal.draw(|frame| {
                 ui::render(app, frame);
             })?;

@@ -39,6 +39,20 @@ pub struct Pane {
     /// pane. Guards the multiple exit pathways (explicit close, tab
     /// close, natural shell exit) so subscribers see exactly one event.
     pub exit_event_emitted: bool,
+    /// Wall-clock moment of the most recent user input written into
+    /// this pane's PTY. Used on Windows to hold the IME candidate
+    /// anchor at the user's typing position while Claude Code
+    /// temporarily moves the vt100 cursor to its thinking/status
+    /// row. `None` means no user input has been routed to this pane
+    /// yet, so the anchor logic falls back to the live vt100 cursor.
+    pub last_user_input_at: Option<std::time::Instant>,
+    /// Screen (row, col) — the IME candidate anchor the UI reports to
+    /// crossterm on Windows. Refreshed to the current vt100 cursor on
+    /// frames where the user is actively typing (see
+    /// `last_user_input_at`) and held otherwise. On non-Windows
+    /// builds this field is present but unused — keeping it
+    /// unconditional keeps the struct layout simple.
+    pub ime_anchor: Option<(u16, u16)>,
 }
 
 impl Pane {
@@ -140,6 +154,8 @@ impl Pane {
             prompt_seen,
             role: None,
             exit_event_emitted: false,
+            last_user_input_at: None,
+            ime_anchor: None,
         };
 
         // Inject OSC 7 hook after shell starts
@@ -170,7 +186,16 @@ impl Pane {
         }
         if self.writer.write_all(data).is_err() || self.writer.flush().is_err() {
             self.exited = true;
+            return Ok(());
         }
+        // Record that user input was just routed into this PTY. The UI
+        // uses this on Windows to keep the IME candidate anchor pinned
+        // to the typing position rather than Claude's thinking-line
+        // cursor. Called for every byte pattern (per-key bursts,
+        // bracketed paste, skill-queued commands); a skill-driven
+        // command moves the anchor briefly but that's acceptable —
+        // the next real user keystroke will re-anchor immediately.
+        self.last_user_input_at = Some(std::time::Instant::now());
         Ok(())
     }
 
