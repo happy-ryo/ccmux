@@ -1,0 +1,104 @@
+# IME Input (Japanese / Chinese / Korean)
+
+Some host terminals anchor the IME candidate window to the hardware cursor. When Claude Code (or any other TUI) runs inside ccmux and repaints aggressively, the candidate window ends up flicking to random positions on screen.
+
+Observed in practice:
+
+- **Reproduces**: Windows + WezTerm / zellij / other third-party terminals.
+- **Does not reproduce (or is mild)**: Windows Terminal (the Microsoft default), macOS Terminal.app, iTerm2.
+
+macOS and Linux native terminals anchor IME differently and don't show the problem, but the combination of Windows + a non-default terminal produces very visible candidate-window drift while composing JP / CN / KR text.
+
+ccmux solves this with a **composition overlay**: a single-row text input drawn at the bottom of the screen that gives the host IME a stable anchor, and commits the confirmed text back to the pane via bracketed paste. Users on environments where the problem doesn't reproduce can disable the overlay entirely with `off` mode.
+
+## Modes (`[ime]` / `--ime`)
+
+import { Callout } from 'nextra/components'
+
+Configure via file (`~/.config/ccmux/config.toml` / macOS `~/Library/Application Support/ccmux/config.toml` / Windows `%APPDATA%\ccmux\config.toml`) or CLI:
+
+```toml
+[ime]
+mode = "hotkey"   # "hotkey" | "off" | "always"
+```
+
+```bash
+ccmux --ime hotkey|off|always
+```
+
+Precedence: **CLI > config file > default**.
+
+| Value | Behavior |
+|---|---|
+| `hotkey` (default) | `Ctrl+;` opens the overlay. Enter commits, Esc / Ctrl+C cancels |
+| `off` | `Ctrl+;` is swallowed — no overlay, no bare `;` leaks to the pane. An opt-out for users who don't compose IME inside ccmux |
+| `always` | The overlay is opened automatically whenever focus rests on a Claude pane. The IME anchor is **always available**, so the first JP keystroke already composes into the overlay. Esc / Ctrl+C with an empty buffer dismisses, forwards the key to the pane, and stays dismissed until focus leaves and returns |
+
+### `hotkey` mode
+
+Default. The user invokes the overlay explicitly.
+
+1. Focus a Claude pane.
+2. Press `Ctrl+;` — a ` IME ❯ ` prompt appears at the bottom row.
+3. Type JP / CN / KR (the host IME anchors its candidate window to the overlay row).
+4. Press `Enter` — the confirmed text is forwarded to the pane as a bracketed paste.
+5. `Esc` / `Ctrl+C` cancels (buffer discarded, nothing sent to the pane).
+
+While the overlay is open, Backspace / Left / Right / Home / End edit the buffer. Ctrl / Alt modifier combinations are swallowed by the overlay so they don't leak to Claude's own shortcuts.
+
+### `off` mode
+
+`Ctrl+;` is ignored entirely — no overlay, nothing forwarded to the PTY.
+
+<Callout type="info">
+  Some terminals bind `Ctrl+;` to something else, and letting a bare `;` leak to the shell surprises users. `off` mode picks the strict behavior: the keystroke is neither opened as an overlay nor forwarded.
+</Callout>
+
+### `always` mode
+
+For Claude Code `/tui fullscreen` and JP IME heavy users. The overlay opens automatically the moment focus lands on a Claude pane, so the host IME can anchor **from the very first keystroke**.
+
+**Behavior**:
+
+- When focus enters a Claude pane (detected via `is_claude_running()`) and the pane is not scrolled back, the overlay auto-opens.
+- Shell panes (bash / vim / …) never auto-open; direct PTY input still works there.
+- `Ctrl+;` still opens the overlay explicitly (no-op if already open).
+
+**Dismissal semantics**:
+
+| State | Key | Behavior |
+|---|---|---|
+| Non-empty buffer | Esc / Ctrl+C | Clear the buffer, keep the overlay open (matches the "first Esc aborts composition" IME muscle memory) |
+| Empty buffer | Esc / Ctrl+C | Close the overlay, forward the cancel key to the pane (so Claude's Esc-to-interrupt / shell Ctrl+C still works), and stay dismissed while focus remains on this pane |
+| Switch panes and back | — | Dismissal cleared; the overlay auto-opens again on the next focus |
+
+<Callout type="warning">
+  While the overlay is open it owns every keystroke, so ccmux shortcuts like `Ctrl+D` (split) / `Ctrl+Left/Right` (focus cycle) / `Alt+Left/Right` (tab nav) do **not** fire. Dismiss first, or stay on `hotkey` if you use these shortcuts often.
+</Callout>
+
+## Caret flicker mitigation (Windows)
+
+Independent of the host terminal, Windows' conpty layer exposes the hardware caret during ratatui's diff paint (a rapid burst of MoveTo / Print commands). While Claude's Thinking spinner dirties cells every frame, the caret ends up flicking between the Thinking row and the overlay row. ccmux explicitly issues `crossterm::cursor::Hide` right before each `terminal.draw` while the overlay is open, gated with `#[cfg(windows)]`. ratatui re-shows and places the cursor at the overlay position at flush time.
+
+This mitigates but does not fully eliminate the flicker. Follow-ups for a full fix (pane freeze / render throttle during overlay) live in Issues #37 / #38.
+
+## Platform verification
+
+| Environment | Overlay mechanism | Caret flicker mitigation |
+|---|---|---|
+| Windows + WezTerm (primary target) | Verified | Same |
+| Windows + Windows Terminal | Works, but the IME drift problem is mild here to begin with | Same |
+| Windows + zellij | Verified | Same |
+| macOS Terminal.app / iTerm2 | Unverified (#41) | Not needed (no conpty) |
+| Linux ibus / fcitx5 | Unverified (#41) | Not needed |
+
+The overlay itself is pure ratatui / crossterm and should work cross-platform; the outstanding work is verifying each platform's IME stack in combination with it (Issue #41).
+
+## Implementation map
+
+| Feature | PR | Source |
+|---|---|---|
+| composition overlay mechanism | #36 | `src/app.rs::OverlayState`, `src/ui.rs::render_ime_overlay` |
+| `[ime]` section + `--ime` flag | #39, #44 | `src/config.rs`, `src/cli.rs` |
+| `always` mode | #40, #45 | `src/app.rs::maybe_auto_open_always_overlay` |
+| Windows caret flicker mitigation | #36 follow-ups | `src/main.rs` (cfg(windows) `Hide`) |
