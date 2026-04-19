@@ -57,6 +57,27 @@
       code {
         font-family: "SF Mono", Menlo, Consolas, monospace;
       }
+      h2 {
+        font-size: 1.1rem;
+        margin: 32px 0 12px;
+        font-weight: 600;
+      }
+      table.diff {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.92rem;
+      }
+      table.diff th, table.diff td {
+        text-align: left;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--border);
+      }
+      table.diff th {
+        color: var(--muted);
+        font-weight: 500;
+      }
+      table.diff td.has { color: var(--accent); }
+      table.diff td.mark { text-align: center; width: 4.2rem; }
       ul.links {
         list-style: none;
         padding: 0;
@@ -103,6 +124,62 @@
       </p>
       <pre><code>$ npm uninstall -g ccmux-cli
 $ npm install -g ccmux-fork</code></pre>
+
+      <h2>Differences from upstream</h2>
+      <p style="color: var(--muted); font-size: 0.9rem; margin-top: -4px;">
+        Everything upstream ships with, plus these fork-only additions:
+      </p>
+      <table class="diff">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th class="mark">Upstream</th>
+            <th class="mark">Fork</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Split panes / tabs / file tree / preview</td>
+            <td class="mark">✓</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
+            <td>External IPC control (<code>ccmux list / send / focus / split / new-tab</code>)</td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
+            <td>Pane lifecycle events (<code>ccmux events --timeout / --count</code>)</td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
+            <td>Screen snapshot API (<code>ccmux inspect</code>)</td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
+            <td>IME composition overlay (JP / CN / KR on Windows + third-party terminals)</td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
+            <td>Mouse wheel forwarding to alt-screen TUIs (Claude <code>/tui</code>, vim, lazygit)</td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
+            <td>Stable IPC error codes + heartbeat half-close detection</td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
+            <td>CI matrix (Windows / macOS / Linux) with rustfmt + clippy gate</td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+        </tbody>
+      </table>
 
       <ul class="links">
         <li>→ <a href="./docs/">Documentation</a></li>
