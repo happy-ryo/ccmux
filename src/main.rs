@@ -321,6 +321,18 @@ fn run_event_loop(
         // Only render when something changed (and no cooldown is active)
         if app.dirty && app.paste_cooldown == 0 && app.resize_cooldown == 0 {
             app.dirty = false;
+            // While the IME overlay is open, Claude's thinking spinner keeps
+            // dirtying cells inside the pane. ratatui-crossterm paints those
+            // diffs by emitting MoveTo+Print without hiding the cursor, and
+            // Windows Terminal/conpty leaks those cursor moves to the host
+            // caret — producing rapid flicker between the pane and the
+            // overlay row. Force-hide the cursor for the entire draw
+            // transaction; ratatui will re-show and place it at the overlay
+            // position via frame.set_cursor_position at flush time.
+            let overlay_open = app.overlay.is_some();
+            if overlay_open {
+                let _ = execute!(io::stdout(), crossterm::cursor::Hide);
+            }
             terminal.draw(|frame| {
                 ui::render(app, frame);
             })?;
