@@ -29,6 +29,34 @@ pub struct Cli {
     #[arg(long, value_name = "MODE", value_enum)]
     pub ime: Option<crate::config::ImeMode>,
 
+    /// Suppress pane repaints while the IME composition overlay is
+    /// open (Issue #37 / #82 Phase 2). PTY output keeps flowing into
+    /// the vt100 parser in the background; the screen just stops
+    /// updating, so Claude's thinking spinner can't flicker the
+    /// overlay. Panes catch up instantly when the overlay closes.
+    /// Overrides `[ime] freeze_panes_on_overlay` in config.toml.
+    /// Pass `--ime-freeze-panes=false` to force-disable a config
+    /// value of `true`.
+    #[arg(
+        long,
+        value_name = "BOOL",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
+    pub ime_freeze_panes: Option<bool>,
+
+    /// While `--ime-freeze-panes` is active, force a single repaint
+    /// every `<MS>` milliseconds so body-content progress (Claude
+    /// writing new lines, shell output scrolling) stays visible
+    /// through an open overlay. `0` (default) keeps the freeze
+    /// pure — the screen stops updating until the overlay closes.
+    /// Non-zero values are clamped to at least 100 ms. Has no
+    /// effect while freeze is disabled. Overrides `[ime]
+    /// overlay_catchup_ms` in config.toml.
+    #[arg(long, value_name = "MS")]
+    pub ime_overlay_catchup_ms: Option<u64>,
+
     /// Minimum columns each child pane must retain after a vertical
     /// split. Splits that would produce a narrower child are refused.
     /// A value of `0` is clamped to `1` at runtime to avoid degenerate
@@ -726,6 +754,36 @@ mod tests {
     fn ime_flag_is_optional() {
         let cli = Cli::try_parse_from(["ccmux"]).unwrap();
         assert_eq!(cli.ime, None);
+    }
+
+    #[test]
+    fn ime_freeze_panes_defaults_to_none() {
+        let cli = Cli::try_parse_from(["ccmux"]).unwrap();
+        assert_eq!(cli.ime_freeze_panes, None);
+    }
+
+    #[test]
+    fn ime_freeze_panes_bare_flag_means_true() {
+        let cli = Cli::try_parse_from(["ccmux", "--ime-freeze-panes"]).unwrap();
+        assert_eq!(cli.ime_freeze_panes, Some(true));
+    }
+
+    #[test]
+    fn ime_freeze_panes_explicit_false_overrides_config() {
+        let cli = Cli::try_parse_from(["ccmux", "--ime-freeze-panes=false"]).unwrap();
+        assert_eq!(cli.ime_freeze_panes, Some(false));
+    }
+
+    #[test]
+    fn ime_overlay_catchup_ms_defaults_to_none() {
+        let cli = Cli::try_parse_from(["ccmux"]).unwrap();
+        assert_eq!(cli.ime_overlay_catchup_ms, None);
+    }
+
+    #[test]
+    fn parses_ime_overlay_catchup_ms_override() {
+        let cli = Cli::try_parse_from(["ccmux", "--ime-overlay-catchup-ms", "3000"]).unwrap();
+        assert_eq!(cli.ime_overlay_catchup_ms, Some(3000));
     }
 
     #[test]

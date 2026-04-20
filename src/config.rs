@@ -26,7 +26,29 @@ pub struct Config {
 #[serde(default)]
 pub struct ImeConfig {
     pub mode: ImeMode,
+    /// When `true`, pane repaints driven by PTY output are suppressed
+    /// while the IME composition overlay is open (Issue #37 / #82
+    /// Phase 2). vt100 parsers keep advancing in the background, so
+    /// panes catch up instantly when the overlay closes. Off by
+    /// default because it's a user-visible behavior change (the
+    /// screen literally stops updating during composition) even
+    /// though it's the intended way to kill overlay flicker on hosts
+    /// where `overlay_poll_ms` throttling alone isn't enough.
+    pub freeze_panes_on_overlay: bool,
+    /// When [`ImeConfig::freeze_panes_on_overlay`] is true, optionally
+    /// force a single repaint every `overlay_catchup_ms` milliseconds
+    /// so the user sees body-content progress (Claude writing new
+    /// lines, shell output scrolling) periodically without the
+    /// continuous flicker of unthrottled repaints. `0` disables the
+    /// periodic catch-up and gives a pure freeze. Non-zero values are
+    /// clamped to [`MIN_OVERLAY_CATCHUP_MS`] at apply time.
+    pub overlay_catchup_ms: u64,
 }
+
+/// Floor for `overlay_catchup_ms` when non-zero. Below this the
+/// periodic repaint becomes a near-continuous storm that defeats the
+/// point of freezing in the first place.
+pub const MIN_OVERLAY_CATCHUP_MS: u64 = 100;
 
 /// How Ctrl+; behaves in a focused pane.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, clap::ValueEnum)]
@@ -139,9 +161,26 @@ impl Config {
     /// Apply an optional CLI override on top of the loaded config.
     /// `None` leaves the field untouched, mirroring the precedence
     /// "CLI > file > default".
-    pub fn apply_cli_overrides(&mut self, ime_mode: Option<ImeMode>) {
+    pub fn apply_cli_overrides(
+        &mut self,
+        ime_mode: Option<ImeMode>,
+        freeze_panes_on_overlay: Option<bool>,
+        overlay_catchup_ms: Option<u64>,
+    ) {
         if let Some(mode) = ime_mode {
             self.ime.mode = mode;
+        }
+        if let Some(freeze) = freeze_panes_on_overlay {
+            self.ime.freeze_panes_on_overlay = freeze;
+        }
+        if let Some(ms) = overlay_catchup_ms {
+            self.ime.overlay_catchup_ms = ms;
+        }
+        // Clamp any non-zero value regardless of origin so the main
+        // loop never sees a sub-floor interval.
+        if self.ime.overlay_catchup_ms != 0 && self.ime.overlay_catchup_ms < MIN_OVERLAY_CATCHUP_MS
+        {
+            self.ime.overlay_catchup_ms = MIN_OVERLAY_CATCHUP_MS;
         }
     }
 }
@@ -243,7 +282,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(Some(ImeMode::Off));
+        cfg.apply_cli_overrides(Some(ImeMode::Off), None, None);
         assert_eq!(cfg.ime.mode, ImeMode::Off);
     }
 
@@ -256,7 +295,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(None);
+        cfg.apply_cli_overrides(None, None, None);
         assert_eq!(cfg.ime.mode, ImeMode::Off);
     }
 
@@ -296,6 +335,82 @@ mod tests {
         let cfg = Config::load_from(&tmp);
         std::fs::remove_file(&tmp).ok();
         assert_eq!(cfg.ime.mode, ImeMode::Hotkey);
+    }
+
+    #[test]
+    fn freeze_panes_defaults_to_false() {
+        let cfg = Config::default();
+        assert!(!cfg.ime.freeze_panes_on_overlay);
+    }
+
+    #[test]
+    fn parses_freeze_panes_from_toml() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [ime]
+            freeze_panes_on_overlay = true
+            "#,
+        )
+        .unwrap();
+        assert!(cfg.ime.freeze_panes_on_overlay);
+    }
+
+    #[test]
+    fn cli_freeze_panes_beats_file() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [ime]
+            freeze_panes_on_overlay = true
+            "#,
+        )
+        .unwrap();
+        cfg.apply_cli_overrides(None, Some(false), None);
+        assert!(!cfg.ime.freeze_panes_on_overlay);
+
+        let mut cfg2 = Config::default();
+        cfg2.apply_cli_overrides(None, Some(true), None);
+        assert!(cfg2.ime.freeze_panes_on_overlay);
+    }
+
+    #[test]
+    fn overlay_catchup_ms_defaults_to_zero() {
+        let cfg = Config::default();
+        assert_eq!(cfg.ime.overlay_catchup_ms, 0);
+    }
+
+    #[test]
+    fn parses_overlay_catchup_ms_from_toml() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [ime]
+            overlay_catchup_ms = 2500
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.ime.overlay_catchup_ms, 2500);
+    }
+
+    #[test]
+    fn cli_overlay_catchup_ms_beats_file_and_clamps_below_floor() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [ime]
+            overlay_catchup_ms = 500
+            "#,
+        )
+        .unwrap();
+        cfg.apply_cli_overrides(None, None, Some(3000));
+        assert_eq!(cfg.ime.overlay_catchup_ms, 3000);
+
+        let mut cfg2 = Config::default();
+        // Non-zero sub-floor value must be clamped up.
+        cfg2.apply_cli_overrides(None, None, Some(10));
+        assert_eq!(cfg2.ime.overlay_catchup_ms, MIN_OVERLAY_CATCHUP_MS);
+
+        // Zero must stay zero (means "disabled").
+        let mut cfg3 = Config::default();
+        cfg3.apply_cli_overrides(None, None, Some(0));
+        assert_eq!(cfg3.ime.overlay_catchup_ms, 0);
     }
 
     #[test]

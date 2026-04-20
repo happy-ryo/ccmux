@@ -123,7 +123,7 @@ fn main() -> Result<()> {
 
     // Load user config + apply CLI override (CLI > file > default).
     let mut user_config = config::Config::load();
-    user_config.apply_cli_overrides(cli.ime);
+    user_config.apply_cli_overrides(cli.ime, cli.ime_freeze_panes, cli.ime_overlay_catchup_ms);
 
     // Create app (spawns the initial pane, which captures the env above).
     let mut app = app::App::new(size.height, size.width)?;
@@ -353,6 +353,11 @@ fn run_event_loop(
         // so the host terminal's IME has an anchor from the start.
         // Idempotent and cheap.
         app.maybe_auto_open_always_overlay();
+
+        // Phase 2 (#37) catch-up: when freeze+catch-up is enabled,
+        // periodically force a single repaint so body content stays
+        // visible through an open overlay. No-op otherwise.
+        app.maybe_tick_overlay_catchup();
 
         // Only render when something changed (and no cooldown is active)
         if app.dirty && app.paste_cooldown == 0 && app.resize_cooldown == 0 {
