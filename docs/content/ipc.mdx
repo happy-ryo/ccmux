@@ -17,10 +17,17 @@ import { Callout } from 'nextra/components'
 ```bash
 $ ccmux list
 [
-  { "id": 1, "name": "secretary", "role": "leader", "focused": true },
-  { "id": 2, "name": "worker-foo", "role": "worker", "focused": false }
+  { "id": 1, "name": "secretary", "role": "leader", "focused": true,
+    "x": 0, "y": 0, "width": 80, "height": 24 },
+  { "id": 2, "name": "worker-foo", "role": "worker", "focused": false,
+    "x": 80, "y": 0, "width": 80, "height": 24 }
 ]
 ```
+
+`x` / `y` / `width` / `height` は「最後に描画された時点」での pane の矩形
+（ターミナル左上 = `(0, 0)`、単位はセル）。まだ一度も描画されていない
+場合や layout 更新の直前は `0` が入ることがある。既存 consumer は新
+フィールドを無視しても動作する。
 
 ### `ccmux send`
 

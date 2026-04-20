@@ -2671,14 +2671,21 @@ impl App {
                 for (name, id) in &ws.pane_names {
                     name_by_id.insert(*id, name.clone());
                 }
+                let rect_by_id: HashMap<usize, Rect> =
+                    ws.last_pane_rects.iter().copied().collect();
                 let mut infos: Vec<PaneInfo> = Vec::new();
                 for id in ws.layout.collect_pane_ids() {
                     let role = ws.panes.get(&id).and_then(|p| p.role.clone());
+                    let rect = rect_by_id.get(&id).copied().unwrap_or_default();
                     infos.push(PaneInfo {
                         id,
                         name: name_by_id.get(&id).cloned(),
                         role,
                         focused: id == focused,
+                        x: rect.x,
+                        y: rect.y,
+                        width: rect.width,
+                        height: rect.height,
                     });
                 }
                 let _ = reply.send(infos);
@@ -4047,6 +4054,94 @@ mod tests {
         assert_eq!(role.as_deref(), Some("tab-role"));
 
         app.shutdown();
+    }
+
+    #[test]
+    fn list_command_includes_rect_from_last_pane_rects() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+        app.ws_mut().last_pane_rects = vec![(
+            pane_id,
+            Rect {
+                x: 2,
+                y: 3,
+                width: 50,
+                height: 20,
+            },
+        )];
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        app.handle_app_command(AppCommand::List { reply: reply_tx });
+        let infos = reply_rx.recv().expect("list reply");
+
+        assert_eq!(infos.len(), 1);
+        let info = &infos[0];
+        assert_eq!(info.id, pane_id);
+        assert!(info.focused);
+        assert_eq!(info.x, 2);
+        assert_eq!(info.y, 3);
+        assert_eq!(info.width, 50);
+        assert_eq!(info.height, 20);
+    }
+
+    #[test]
+    fn list_command_ignores_stale_rect_entries_for_removed_panes() {
+        // Entries in last_pane_rects for pane ids that are no longer
+        // in the layout must not leak into the response. Output is
+        // keyed off layout.collect_pane_ids(), so a stale rect for a
+        // nonexistent id should simply be dropped.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+        let ghost_id = pane_id.wrapping_add(9999);
+        app.ws_mut().last_pane_rects = vec![
+            (
+                pane_id,
+                Rect {
+                    x: 1,
+                    y: 2,
+                    width: 10,
+                    height: 5,
+                },
+            ),
+            (
+                ghost_id,
+                Rect {
+                    x: 100,
+                    y: 100,
+                    width: 100,
+                    height: 100,
+                },
+            ),
+        ];
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        app.handle_app_command(AppCommand::List { reply: reply_tx });
+        let infos = reply_rx.recv().expect("list reply");
+
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].id, pane_id);
+        assert_eq!(infos[0].width, 10);
+        assert!(
+            infos.iter().all(|i| i.id != ghost_id),
+            "stale rect for removed pane leaked into list"
+        );
+    }
+
+    #[test]
+    fn list_command_zero_rect_when_pane_not_in_last_pane_rects() {
+        let mut app = App::new(40, 80).expect("App::new");
+        app.ws_mut().last_pane_rects.clear();
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        app.handle_app_command(AppCommand::List { reply: reply_tx });
+        let infos = reply_rx.recv().expect("list reply");
+
+        assert_eq!(infos.len(), 1);
+        let info = &infos[0];
+        assert_eq!(info.x, 0);
+        assert_eq!(info.y, 0);
+        assert_eq!(info.width, 0);
+        assert_eq!(info.height, 0);
     }
 
     #[test]

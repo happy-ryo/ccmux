@@ -17,10 +17,18 @@ List every pane in the active tab:
 ```bash
 $ ccmux list
 [
-  { "id": 1, "name": "secretary", "role": "leader", "focused": true },
-  { "id": 2, "name": "worker-foo", "role": "worker", "focused": false }
+  { "id": 1, "name": "secretary", "role": "leader", "focused": true,
+    "x": 0, "y": 0, "width": 80, "height": 24 },
+  { "id": 2, "name": "worker-foo", "role": "worker", "focused": false,
+    "x": 80, "y": 0, "width": 80, "height": 24 }
 ]
 ```
+
+`x` / `y` / `width` / `height` are the pane's last known on-screen
+rectangle in cells (terminal origin = `(0, 0)`). They fall back to `0`
+before the first render, so treat zeros as "not yet drawn" rather than
+"zero-sized pane". Older clients that don't know about these fields can
+safely ignore them.
 
 ### `ccmux send`
 

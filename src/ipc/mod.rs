@@ -164,6 +164,20 @@ pub struct PaneInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     pub focused: bool,
+    /// Last known on-screen column of the pane's top-left corner
+    /// (terminal origin = 0). `0` when the pane has not been drawn yet.
+    #[serde(default)]
+    pub x: u16,
+    /// Last known on-screen row of the pane's top-left corner.
+    /// `0` when the pane has not been drawn yet.
+    #[serde(default)]
+    pub y: u16,
+    /// Last known rendered width in columns. `0` if not yet rendered.
+    #[serde(default)]
+    pub width: u16,
+    /// Last known rendered height in rows. `0` if not yet rendered.
+    #[serde(default)]
+    pub height: u16,
 }
 
 /// Server reply to one [`Request`].
@@ -505,6 +519,10 @@ mod tests {
             name: None,
             role: None,
             focused: false,
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
         };
         let s = serde_json::to_string(&info).unwrap();
         assert!(!s.contains("role"), "unexpected role field: {s}");
@@ -517,10 +535,50 @@ mod tests {
             name: Some("president".into()),
             role: Some("leader".into()),
             focused: true,
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
         };
         let parsed: PaneInfo =
             serde_json::from_str(&serde_json::to_string(&info).unwrap()).unwrap();
         assert_eq!(parsed, info);
+    }
+
+    #[test]
+    fn pane_info_rect_fields_roundtrip() {
+        let info = PaneInfo {
+            id: 7,
+            name: Some("editor".into()),
+            role: None,
+            focused: false,
+            x: 3,
+            y: 1,
+            width: 120,
+            height: 40,
+        };
+        let s = serde_json::to_string(&info).unwrap();
+        assert!(s.contains("\"x\":3"), "missing x: {s}");
+        assert!(s.contains("\"y\":1"), "missing y: {s}");
+        assert!(s.contains("\"width\":120"), "missing width: {s}");
+        assert!(s.contains("\"height\":40"), "missing height: {s}");
+        let parsed: PaneInfo = serde_json::from_str(&s).unwrap();
+        assert_eq!(parsed, info);
+    }
+
+    #[test]
+    fn pane_info_without_rect_fields_deserializes_to_zero() {
+        // Older clients may emit JSON without x/y/width/height. Serde
+        // defaults should fill those with 0 so the type stays
+        // backward-compatible with pre-#80 payloads.
+        let legacy = r#"{"id":2,"focused":true}"#;
+        let parsed: PaneInfo = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.id, 2);
+        assert!(parsed.focused);
+        assert_eq!(parsed.x, 0);
+        assert_eq!(parsed.y, 0);
+        assert_eq!(parsed.width, 0);
+        assert_eq!(parsed.height, 0);
     }
 
     #[test]
