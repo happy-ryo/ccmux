@@ -244,6 +244,18 @@ $ npm install -g ccmux-fork</code></pre>
             <td class="mark has">✓</td>
           </tr>
           <tr>
+            <td>
+              Stable IPC error codes
+              <br /><span style="color: var(--muted); font-size: 0.85em;">
+                every IPC reply carries a machine-readable code
+                (<code>PANE_NOT_FOUND</code>, <code>AMBIGUOUS_TARGET</code>, …)
+                so script callers can branch without string-matching
+              </span>
+            </td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
             <td>Mouse wheel forwarding to alt-screen TUIs (Claude <code>/tui</code>, vim, lazygit)</td>
             <td class="mark">—</td>
             <td class="mark has">✓</td>
