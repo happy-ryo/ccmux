@@ -1775,10 +1775,7 @@ impl App {
     /// then either remove it from its tab or, if it's the last pane of
     /// a non-last tab, close the whole tab. Refuses with `LAST_PANE`
     /// when closing would empty the only remaining workspace.
-    fn handle_close(
-        &mut self,
-        target: &PaneRef,
-    ) -> std::result::Result<usize, ipc::CodedError> {
+    fn handle_close(&mut self, target: &PaneRef) -> std::result::Result<usize, ipc::CodedError> {
         let (ws_index, pane_id) = self.resolve_pane_across_workspaces(target).ok_or_else(|| {
             ipc::CodedError::new(
                 ipc::err_code::PANE_NOT_FOUND,

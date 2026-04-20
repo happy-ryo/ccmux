@@ -413,9 +413,9 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
                 return Response::err_coded(err_code::SHUTTING_DOWN, "app shutting down");
             }
             match reply_rx.recv_timeout(APP_REPLY_TIMEOUT) {
-                Ok(Ok(closed_id)) => Response::ok_value(
-                    serde_json::json!({ "id": closed_id, "closed": true }),
-                ),
+                Ok(Ok(closed_id)) => {
+                    Response::ok_value(serde_json::json!({ "id": closed_id, "closed": true }))
+                }
                 Ok(Err(err)) => err.into_response(),
                 Err(e) => {
                     Response::err_coded(err_code::APP_TIMEOUT, format!("app did not respond: {e}"))
