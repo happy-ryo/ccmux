@@ -24,11 +24,13 @@ $ ccmux list
 ]
 ```
 
-`x` / `y` / `width` / `height` are the pane's last known on-screen
-rectangle in cells (terminal origin = `(0, 0)`). They fall back to `0`
-before the first render, so treat zeros as "not yet drawn" rather than
-"zero-sized pane". Older clients that don't know about these fields can
-safely ignore them.
+`x` / `y` / `width` / `height` describe the pane's rectangle on the
+terminal grid (origin `(0, 0)`, cells). The rect is refreshed after
+each layout computation and again after each draw, and it accounts for
+the file-tree / preview sidebars. Before the first layout pass (e.g.
+right after startup) all four fields are `0`, so treat zeros as
+"not yet placed" rather than "zero-sized pane". Clients that don't
+know about these fields can safely ignore them.
 
 ### `ccmux send`
 

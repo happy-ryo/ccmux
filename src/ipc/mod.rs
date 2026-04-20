@@ -164,18 +164,19 @@ pub struct PaneInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     pub focused: bool,
-    /// Last known on-screen column of the pane's top-left corner
-    /// (terminal origin = 0). `0` when the pane has not been drawn yet.
+    /// Terminal column of the pane's top-left corner (origin = 0).
+    /// Reflects the current layout including file-tree / preview
+    /// sidebar offsets. `0` before the first layout pass.
     #[serde(default)]
     pub x: u16,
-    /// Last known on-screen row of the pane's top-left corner.
-    /// `0` when the pane has not been drawn yet.
+    /// Terminal row of the pane's top-left corner (origin = 0).
+    /// `0` before the first layout pass.
     #[serde(default)]
     pub y: u16,
-    /// Last known rendered width in columns. `0` if not yet rendered.
+    /// Pane width in columns. `0` before the first layout pass.
     #[serde(default)]
     pub width: u16,
-    /// Last known rendered height in rows. `0` if not yet rendered.
+    /// Pane height in rows. `0` before the first layout pass.
     #[serde(default)]
     pub height: u16,
 }

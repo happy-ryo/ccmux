@@ -841,9 +841,14 @@ impl App {
         let preview_w = if has_preview { preview_w_nom } else { 0 };
         let pane_w = cols.saturating_sub(tree_w).saturating_sub(preview_w);
 
-        // x/y exact values don't matter for calculate_rects' sub-areas,
-        // only width/height propagate into the recursive split sizes.
-        let pane_area = Rect::new(0, tab_h, pane_w, main_h);
+        // Mirror ui::render_main_area's chunk ordering so the cached
+        // rects reflect actual on-screen positions (not just sizes).
+        // The IPC `list` response and mouse hit-testing both read x/y
+        // from last_pane_rects, so getting the origin right matters
+        // here even between renders. Chunk order there is:
+        //   [tree?] [preview(if swapped)?] [panes] [preview(if !swapped)?]
+        let pane_x = tree_w + if self.layout_swapped { preview_w } else { 0 };
+        let pane_area = Rect::new(pane_x, tab_h, pane_w, main_h);
         let rects = self.ws().layout.calculate_rects(pane_area);
 
         let mut any_changed = false;
@@ -4082,6 +4087,40 @@ mod tests {
         assert_eq!(info.y, 3);
         assert_eq!(info.width, 50);
         assert_eq!(info.height, 20);
+    }
+
+    #[test]
+    fn relayout_panes_caches_rect_origin_accounting_for_sidebar() {
+        // Before #80, relayout_panes() used Rect::new(0, tab_h, ...)
+        // because only width/height mattered for PTY sizing. Now that
+        // `ccmux list` also exposes x/y from the same cache, the
+        // origin must match ui::render_main_area's chunk order (tree
+        // on the left, preview on the swapped side) — otherwise a
+        // List call between a layout change and the next draw would
+        // return x=0 for a pane that's actually rendered past the
+        // file-tree sidebar.
+        let mut app = App::new(40, 120).expect("App::new");
+        app.last_term_size = (120, 40);
+        // Turn on the file tree (default is off in App::new).
+        app.ws_mut().file_tree_visible = true;
+        let tree_w = app.file_tree_width;
+        assert!(tree_w > 0, "file tree width should be non-zero");
+
+        app.relayout_panes();
+
+        let pane_id = app.ws().focused_pane_id;
+        let rect = app
+            .ws()
+            .last_pane_rects
+            .iter()
+            .find(|(id, _)| *id == pane_id)
+            .map(|(_, r)| *r)
+            .expect("relayout should populate rect for focused pane");
+        assert_eq!(
+            rect.x, tree_w,
+            "pane origin must sit past the file-tree sidebar"
+        );
+        assert_eq!(rect.y, 1, "pane origin must sit below the tab strip");
     }
 
     #[test]
