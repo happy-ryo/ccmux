@@ -174,22 +174,70 @@ $ npm install -g ccmux-fork</code></pre>
         </thead>
         <tbody>
           <tr>
-            <td>Pane lifecycle events (<code>ccmux events --timeout / --count</code>)</td>
-            <td class="mark">—</td>
-            <td class="mark has">✓</td>
-          </tr>
-          <tr>
-            <td>Screen snapshot API (<code>ccmux inspect</code>)</td>
+            <td>
+              Centered multi-line IME composition overlay (JP / CN / KR on Windows + third-party terminals)
+              <br /><span style="color: var(--muted); font-size: 0.85em;">
+                <code>Alt+Enter</code> to send, <code>Enter</code> for newline,
+                host IME candidate window anchors to the caret
+              </span>
+            </td>
             <td class="mark">—</td>
             <td class="mark has">✓</td>
           </tr>
           <tr>
             <td>
-              IME composition overlay (JP / CN / KR on Windows + third-party terminals)
+              Pane freeze + periodic catch-up during IME composition
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                centered multi-line box, <code>Alt+Enter</code> send,
-                <code>--ime-freeze-panes</code> + <code>--ime-overlay-catchup-ms</code>
-                eliminate caret flicker during composition
+                <code>--ime-freeze-panes</code> suppresses PTY-driven repaints;
+                <code>--ime-overlay-catchup-ms</code> reintroduces a single
+                periodic repaint so streaming output stays visible
+              </span>
+            </td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
+            <td>
+              Pane lifecycle events (<code>ccmux events --timeout / --count</code>)
+              <br /><span style="color: var(--muted); font-size: 0.85em;">
+                subscribe to <code>PaneStarted</code> / <code>PaneExited</code> as
+                newline-delimited JSON, with heartbeat-based half-close detection
+                and stable error codes
+              </span>
+            </td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
+            <td>
+              Screen snapshot + layout inspection
+              <br /><span style="color: var(--muted); font-size: 0.85em;">
+                <code>ccmux inspect</code> returns a row-by-row JSON snapshot;
+                <code>ccmux list</code> now includes each pane's rect so external
+                tools can match by on-screen position
+              </span>
+            </td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
+            <td>
+              Configurable minimum pane size
+              <br /><span style="color: var(--muted); font-size: 0.85em;">
+                <code>--min-pane-width</code> / <code>--min-pane-height</code>
+                override the 20×5 default so layouts that need tighter
+                splits no longer have to patch the source
+              </span>
+            </td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
+            <td>
+              <code>ccmux close</code> subcommand
+              <br /><span style="color: var(--muted); font-size: 0.85em;">
+                terminate a pane from a script; refuses on the last pane of
+                the last tab so you can't accidentally kill the session
               </span>
             </td>
             <td class="mark">—</td>
@@ -197,11 +245,6 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>Mouse wheel forwarding to alt-screen TUIs (Claude <code>/tui</code>, vim, lazygit)</td>
-            <td class="mark">—</td>
-            <td class="mark has">✓</td>
-          </tr>
-          <tr>
-            <td>Stable IPC error codes + heartbeat half-close detection</td>
             <td class="mark">—</td>
             <td class="mark has">✓</td>
           </tr>
