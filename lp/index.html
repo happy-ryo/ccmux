@@ -60,7 +60,10 @@
         border-radius: 6px;
         padding: 12px 16px;
         overflow-x: auto;
-        font-size: 0.95rem;
+        /* Keep install / migration snippets compact even at the
+           150 % root — full-size monospace (~23 px) was chunky
+           enough to hurt scan-ability. */
+        font-size: 0.8rem;
       }
       code {
         font-family: "SF Mono", Menlo, Consolas, monospace;
@@ -142,6 +145,18 @@
       nav.lang .sep {
         color: var(--border);
         margin: 0 6px;
+      }
+      /* Narrow viewports: the diff table's "mark" columns use a
+         fixed rem width, so at 150 % root they crowd the feature
+         column on phones. Dial the table's own font-size and the
+         mark-column width down under 640 px so sub-note text
+         wraps cleanly without pushing the marks off-screen, and
+         soft-break long tokens in the feature column for labels
+         without many natural break points. */
+      @media (max-width: 640px) {
+        table.diff { font-size: 0.78rem; }
+        table.diff td.mark { width: 3rem; }
+        table.diff td { overflow-wrap: anywhere; word-break: break-word; }
       }
     </style>
   </head>

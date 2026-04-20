@@ -58,7 +58,10 @@
         border-radius: 6px;
         padding: 12px 16px;
         overflow-x: auto;
-        font-size: 0.95rem;
+        /* 150 % root 下でも install / migration スニペットを
+           コンパクトに保つ。通常の monospace (~23 px) は視認性
+           より存在感が勝ちすぎた。 */
+        font-size: 0.8rem;
       }
       code {
         font-family: "SF Mono", Menlo, Consolas, monospace;
@@ -140,6 +143,16 @@
       nav.lang .sep {
         color: var(--border);
         margin: 0 6px;
+      }
+      /* 狭いビューポート用: diff テーブルの「印」列が rem 固定幅
+         なので、150 % root ではスマホ画面で feature 列を圧迫する。
+         640 px 以下でテーブル本体の font-size と印列の幅を控えめ
+         にし、さらに feature 列は長い英文字列も折り返せるように
+         soft-break を有効化。 */
+      @media (max-width: 640px) {
+        table.diff { font-size: 0.78rem; }
+        table.diff td.mark { width: 3rem; }
+        table.diff td { overflow-wrap: anywhere; word-break: break-word; }
       }
     </style>
   </head>
