@@ -96,7 +96,7 @@ mode = "hotkey"   # "hotkey" | "off"
 
 | Value | Behavior |
 |-------|----------|
-| `hotkey` (default) | `Ctrl+;` opens the IME composition overlay on a focused pane. |
+| `hotkey` (default) | `Ctrl+;` opens the IME composition overlay on a focused pane. `Alt+;` and `Alt+I` are accepted as fallbacks for terminals that swallow `Ctrl+;` (WSL under Windows Terminal, VS Code terminal on Linux, etc.). |
 | `off` | `Ctrl+;` is swallowed silently — no overlay, no keystroke leaked to the shell. For users who don't use IME, or whose terminal already handles IME placement correctly. |
 
 The `--ime hotkey\|off` CLI flag overrides the config file for a single run. Precedence is **CLI > config file > default**.
@@ -163,7 +163,7 @@ The overlay opens as a centered multi-line composition box. Host-terminal IME ca
 | `Ctrl+F` | Toggle file tree |
 | `Ctrl+P` | Swap preview/terminal layout |
 | `Ctrl+Right/Left` | Cycle focus (sidebar, preview, panes) |
-| `Ctrl+;` | Open IME composition overlay (centered multi-line — see below) |
+| `Ctrl+;` / `Alt+;` / `Alt+I` | Open IME composition overlay (centered multi-line — see below). `Alt+;` and `Alt+I` are fallbacks for terminals where `Ctrl+;` is intercepted (Windows Terminal + WSL, VS Code terminal on Linux, some tmux configs). |
 | `Ctrl+Q` | Quit |
 
 ### File tree mode (after `Ctrl+F`)
