@@ -225,50 +225,17 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         None => return Ok(false),
     };
 
-    // Cancel (Esc or Ctrl+C).
+    // Cancel (Esc or Ctrl+C). Buffer is discarded; the overlay
+    // closes and focus returns to the pane. The pre-removal
+    // `Always` mode used to redirect the cancel key to the target
+    // pane here so Claude's Esc-to-interrupt still worked, but the
+    // Hotkey-only flow requires an explicit user action to open the
+    // overlay in the first place, so we just cancel cleanly.
     if matches!(key.code, KeyCode::Esc)
         || (key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('c')))
     {
-        let is_always = app.ime_mode == crate::config::ImeMode::Always;
-        let target_pane = overlay.target_pane;
-        let buffer_empty = overlay.buffer.is_empty();
-
-        if is_always && !buffer_empty {
-            // First press on a composing overlay clears the buffer
-            // but keeps the overlay open. The user needs a second
-            // press to actually dismiss, which mirrors the common
-            // "Esc once to abort composition, twice to exit" IME
-            // expectation.
-            overlay.buffer.clear();
-            overlay.cursor = 0;
-            app.mark_layout_change();
-            return Ok(true);
-        }
-
         app.overlay = None;
         app.mark_layout_change();
-
-        if is_always {
-            // Always mode would re-open the overlay on the next
-            // tick of maybe_auto_open_always_overlay. Record the
-            // explicit dismissal so the user gets a window to
-            // interact with the pane directly (Claude Esc-to-
-            // interrupt, shell-level Ctrl+C, …). The suppression
-            // clears when focus moves away and comes back.
-            app.always_dismissed_pane = Some(target_pane);
-            // Forward the cancel key to the pane so the user's
-            // intent (interrupt Claude, send Ctrl+C to shell)
-            // reaches its real target. Only on an already-empty
-            // buffer, because a non-empty buffer was clearing
-            // composition, not interacting with the pane. Propagate
-            // the write error (same policy as the Enter-commit
-            // path) instead of silently swallowing it.
-            let focused_before = app.ws().focused_pane_id;
-            app.ws_mut().focused_pane_id = target_pane;
-            let forward_result = app.forward_key_to_pty(key);
-            app.ws_mut().focused_pane_id = focused_before;
-            forward_result?;
-        }
         return Ok(true);
     }
 

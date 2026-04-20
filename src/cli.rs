@@ -735,9 +735,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_ime_mode_always() {
-        let cli = Cli::try_parse_from(["ccmux", "--ime", "always"]).unwrap();
-        assert_eq!(cli.ime, Some(crate::config::ImeMode::Always));
+    fn rejects_ime_mode_always() {
+        // `always` was removed — clap must reject the value.
+        assert!(Cli::try_parse_from(["ccmux", "--ime", "always"]).is_err());
     }
 
     #[test]
