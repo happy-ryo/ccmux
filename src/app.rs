@@ -3254,6 +3254,141 @@ mod tests {
     }
 
     #[test]
+    fn freeze_panes_still_repaints_on_pty_eof() {
+        // State-changing events must punch through the freeze: PtyEof
+        // flips `pane.exited` and emits PaneExited, which in turn
+        // changes the pane chrome (title dim-out, etc.), so the user
+        // needs to see it even mid-composition.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_a = app.ws().focused_pane_id;
+        app.ime_freeze_panes_on_overlay = true;
+        app.overlay = Some(crate::input::overlay::OverlayState::new(pane_a));
+        app.dirty = false;
+
+        app.event_tx
+            .send(AppEvent::PtyEof(pane_a))
+            .expect("send PtyEof");
+        app.drain_pty_events();
+
+        assert!(
+            app.dirty,
+            "PtyEof must dirty the app even under freeze — pane chrome changes"
+        );
+    }
+
+    #[test]
+    fn freeze_panes_still_repaints_on_cwd_changed() {
+        // CwdChanged rewrites the workspace name and rebuilds the
+        // file-tree sidebar; a frozen overlay must not starve those
+        // UI-chrome updates.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_a = app.ws().focused_pane_id;
+        app.ime_freeze_panes_on_overlay = true;
+        app.overlay = Some(crate::input::overlay::OverlayState::new(pane_a));
+        app.dirty = false;
+
+        // temp_dir() is canonicalizable and is_dir() on every tier-1
+        // platform, so the CwdChanged handler will take the full
+        // "update" branch instead of the early `continue`.
+        let tmp = std::env::temp_dir();
+        app.event_tx
+            .send(AppEvent::CwdChanged(pane_a, tmp))
+            .expect("send CwdChanged");
+        app.drain_pty_events();
+
+        assert!(
+            app.dirty,
+            "CwdChanged must dirty the app even under freeze — sidebar/tab label depend on it"
+        );
+    }
+
+    #[test]
+    fn freeze_panes_mixed_batch_repaints_when_any_state_change_present() {
+        // A single drain pass may pick up both a spinner PtyOutput
+        // and a concurrent PtyEof; the state change must win so the
+        // user isn't left with a stale pane title while the overlay
+        // is open.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_a = app.ws().focused_pane_id;
+        app.ime_freeze_panes_on_overlay = true;
+        app.overlay = Some(crate::input::overlay::OverlayState::new(pane_a));
+        app.dirty = false;
+
+        app.event_tx
+            .send(AppEvent::PtyOutput(pane_a))
+            .expect("send PtyOutput");
+        app.event_tx
+            .send(AppEvent::PtyEof(pane_a))
+            .expect("send PtyEof");
+        app.drain_pty_events();
+
+        assert!(
+            app.dirty,
+            "mixed batch with any state-changing event must repaint"
+        );
+    }
+
+    #[test]
+    fn overlay_catchup_noop_when_freeze_disabled() {
+        // Catch-up is gated on freeze being on — otherwise the main
+        // loop is already repainting at the overlay poll rate, and
+        // an extra forced repaint would be redundant. Verify the
+        // freeze-off short-circuit holds even with an elapsed timer.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_a = app.ws().focused_pane_id;
+        app.ime_freeze_panes_on_overlay = false;
+        app.ime_overlay_catchup_ms = 100;
+        app.overlay = Some(crate::input::overlay::OverlayState::new(pane_a));
+        app.dirty = false;
+        app.last_overlay_repaint = Some(Instant::now() - std::time::Duration::from_millis(500));
+
+        app.maybe_tick_overlay_catchup();
+
+        assert!(
+            !app.dirty,
+            "catch-up must not fire when freeze is disabled, even if interval elapsed"
+        );
+    }
+
+    #[test]
+    fn overlay_catchup_timer_reanchors_on_reopen_cycle() {
+        // Close then re-open: the timer state from the previous
+        // session must not carry over, or the first tick after
+        // re-open could fire a catch-up with 0 ms elapsed.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_a = app.ws().focused_pane_id;
+        app.ime_freeze_panes_on_overlay = true;
+        app.ime_overlay_catchup_ms = 500;
+
+        // Simulate a prior session that advanced the timer.
+        app.overlay = Some(crate::input::overlay::OverlayState::new(pane_a));
+        app.maybe_tick_overlay_catchup();
+        assert!(app.last_overlay_repaint.is_some());
+
+        // Close the overlay; next tick should clear the timer.
+        app.overlay = None;
+        app.maybe_tick_overlay_catchup();
+        assert!(
+            app.last_overlay_repaint.is_none(),
+            "closing the overlay must clear the catch-up anchor"
+        );
+
+        // Re-open and tick: first tick of the new session should
+        // anchor WITHOUT painting, even though wall-time elapsed.
+        app.overlay = Some(crate::input::overlay::OverlayState::new(pane_a));
+        app.dirty = false;
+        app.maybe_tick_overlay_catchup();
+        assert!(
+            !app.dirty,
+            "first tick of a fresh re-open must not force a repaint"
+        );
+        assert!(
+            app.last_overlay_repaint.is_some(),
+            "first tick of a fresh re-open must re-anchor"
+        );
+    }
+
+    #[test]
     fn freeze_panes_off_still_repaints_on_pty_output() {
         // Sanity: with freeze disabled the legacy behavior is
         // preserved — PtyOutput dirties the app even while the
