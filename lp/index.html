@@ -100,6 +100,22 @@
         border-top: 1px solid var(--border);
         width: 100%;
       }
+      figure.hero {
+        margin: 24px 0 32px;
+      }
+      figure.hero img {
+        width: 100%;
+        height: auto;
+        display: block;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+      }
+      figure.hero figcaption {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 0.85rem;
+        line-height: 1.5;
+      }
     </style>
   </head>
   <body>
@@ -110,6 +126,22 @@
         <a href="https://github.com/Shin-sibainu/ccmux">Shin-sibainu/ccmux</a>
         with independent development. Installs as <code>ccmux-fork</code> on npm.
       </p>
+
+      <figure class="hero">
+        <img
+          src="./ime-overlay.png"
+          alt="Centered IME composition overlay in the middle of the terminal with a Japanese conversion candidate window anchored right under the caret; two Claude panes stay frozen behind it"
+        />
+        <figcaption>
+          Centered multi-line IME composition overlay — fork-exclusive.
+          The host terminal's IME candidate window anchors to the
+          caret inside the box, so Japanese / Chinese / Korean
+          composition stops chasing Claude's moving cursor. Press
+          <code>Alt+Enter</code> to send, <code>Enter</code> for a
+          newline, pair with <code>--ime-freeze-panes</code> to
+          silence background flicker.
+        </figcaption>
+      </figure>
 
       <p>
         This fork periodically syncs upstream changes while developing
@@ -152,7 +184,14 @@ $ npm install -g ccmux-fork</code></pre>
             <td class="mark has">✓</td>
           </tr>
           <tr>
-            <td>IME composition overlay (JP / CN / KR on Windows + third-party terminals)</td>
+            <td>
+              IME composition overlay (JP / CN / KR on Windows + third-party terminals)
+              <br /><span style="color: var(--muted); font-size: 0.85em;">
+                centered multi-line box, <code>Alt+Enter</code> send,
+                <code>--ime-freeze-panes</code> + <code>--ime-overlay-catchup-ms</code>
+                eliminate caret flicker during composition
+              </span>
+            </td>
             <td class="mark">—</td>
             <td class="mark has">✓</td>
           </tr>
