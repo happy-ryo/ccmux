@@ -1149,11 +1149,15 @@ impl App {
 
         match (key.modifiers, key.code) {
             (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
-                self.split_focused_pane(SplitDirection::Vertical)?;
+                if let Some(new_id) = self.split_focused_pane(SplitDirection::Vertical)? {
+                    self.emit_pane_started(new_id);
+                }
                 Ok(true)
             }
             (KeyModifiers::CONTROL, KeyCode::Char('e')) => {
-                self.split_focused_pane(SplitDirection::Horizontal)?;
+                if let Some(new_id) = self.split_focused_pane(SplitDirection::Horizontal)? {
+                    self.emit_pane_started(new_id);
+                }
                 Ok(true)
             }
             (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
@@ -1573,9 +1577,18 @@ impl App {
     const MIN_PANE_WIDTH: u16 = 20;
     const MIN_PANE_HEIGHT: u16 = 5;
 
-    fn split_focused_pane(&mut self, direction: SplitDirection) -> Result<()> {
+    /// Create a new pane by splitting the focused one. Returns the new
+    /// pane id on success, or `None` when the split was refused because
+    /// the workspace is at `MAX_PANES` or the focused pane is too
+    /// small to halve.
+    ///
+    /// **Does not emit `PaneStarted`.** Callers are responsible for
+    /// firing the event after they've attached metadata (name, role) so
+    /// subscribers see the pane with its final identity — otherwise the
+    /// event races the metadata and lands with `name: None, role: None`.
+    fn split_focused_pane(&mut self, direction: SplitDirection) -> Result<Option<usize>> {
         if self.ws().layout.pane_count() >= Self::MAX_PANES {
-            return Ok(());
+            return Ok(None);
         }
 
         if let Some(&(_, rect)) = self
@@ -1587,12 +1600,12 @@ impl App {
             match direction {
                 SplitDirection::Vertical => {
                     if rect.width / 2 < Self::MIN_PANE_WIDTH {
-                        return Ok(());
+                        return Ok(None);
                     }
                 }
                 SplitDirection::Horizontal => {
                     if rect.height / 2 < Self::MIN_PANE_HEIGHT {
-                        return Ok(());
+                        return Ok(None);
                     }
                 }
             }
@@ -1617,8 +1630,7 @@ impl App {
         ws.focused_pane_id = new_id;
 
         self.mark_layout_change();
-        self.emit_pane_started(new_id);
-        Ok(())
+        Ok(Some(new_id))
     }
 
     /// Apply a multi-pane layout to the active workspace.
@@ -1671,10 +1683,19 @@ impl App {
                     DirectionSpec::Vertical => SplitDirection::Vertical,
                     DirectionSpec::Horizontal => SplitDirection::Horizontal,
                 };
-                self.split_focused_pane(split_dir)?;
-                let new_pane_id = self.ws().focused_pane_id;
+                let new_pane_id = self.split_focused_pane(split_dir)?.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "layout split refused (too small or MAX_PANES) while applying layout"
+                    )
+                })?;
+                // Recurse into both subtrees first — the leaves attach
+                // name/role to their pane ids — then emit PaneStarted
+                // so subscribers see the new pane with its final
+                // identity (the initial pane was already emitted by
+                // App::new; only the freshly-split one needs it here).
                 self.apply_layout_node(first, target_pane_id)?;
                 self.apply_layout_node(second, new_pane_id)?;
+                self.emit_pane_started(new_pane_id);
                 Ok(())
             }
         }
@@ -2910,19 +2931,25 @@ impl App {
             ipc::Direction::Vertical => SplitDirection::Vertical,
             ipc::Direction::Horizontal => SplitDirection::Horizontal,
         };
-        self.split_focused_pane(split_dir)
-            .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?;
-        let new_pane_id = self.ws().focused_pane_id;
-        // split_focused_pane is a no-op (keeps focus) when the pane is
-        // too small or the workspace is already at MAX_PANES; detect
-        // that by checking whether focus actually advanced.
-        if new_pane_id == target_pane_id {
-            self.ws_mut().focused_pane_id = prev_focus;
-            return Err(ipc::CodedError::new(
-                ipc::err_code::SPLIT_REFUSED,
-                "split refused (max panes reached or pane too small)",
-            ));
-        }
+        let new_pane_id = match self
+            .split_focused_pane(split_dir)
+            .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?
+        {
+            Some(id) => id,
+            None => {
+                // Refused (too small or MAX_PANES). Restore focus so
+                // the refusal is invisible to the caller state.
+                self.ws_mut().focused_pane_id = prev_focus;
+                return Err(ipc::CodedError::new(
+                    ipc::err_code::SPLIT_REFUSED,
+                    "split refused (max panes reached or pane too small)",
+                ));
+            }
+        };
+        // Attach name/role/command BEFORE emitting PaneStarted so
+        // subscribers see the final identity. Otherwise the event races
+        // the metadata and lands with `name: None, role: None`, breaking
+        // consumers that filter on `.name == "<stable>"`.
         if let Some(pane) = self.ws_mut().panes.get_mut(&new_pane_id) {
             if let Some(cmd) = command {
                 pane.queue_startup_command(&cmd);
@@ -2936,6 +2963,7 @@ impl App {
                 self.ws_mut().pane_names.insert(name, new_pane_id);
             }
         }
+        self.emit_pane_started(new_pane_id);
         Ok(new_pane_id)
     }
 }
