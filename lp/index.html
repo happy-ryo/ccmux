@@ -21,6 +21,12 @@
         --code-bg: #161b22;
       }
       * { box-sizing: border-box; }
+      /* Bump the root size by 50 % so the whole page reads
+         comfortably at a glance — every other size in this
+         stylesheet is in `rem` or inherits from `body`, so one knob
+         scales headings, body copy, the diff table, and the
+         footer together. */
+      html { font-size: 150%; }
       html, body { margin: 0; padding: 0; }
       body {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,

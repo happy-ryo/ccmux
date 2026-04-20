@@ -21,6 +21,10 @@
         --code-bg: #161b22;
       }
       * { box-sizing: border-box; }
+      /* ルートサイズを 150 % に拡大。このファイル内の各サイズは
+         rem 指定か body からの継承なので、1 箇所いじれば H1 から
+         diff テーブル、フッターまで比率を保って拡大される。 */
+      html { font-size: 150%; }
       html, body { margin: 0; padding: 0; }
       body {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
