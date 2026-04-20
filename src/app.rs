@@ -391,9 +391,12 @@ pub struct Workspace {
     pub focused_pane_id: usize,
     /// Stable human-friendly name → pane id map, populated by layout
     /// files (Phase 2) and by IPC `Split { id: Some(name), .. }` calls
-    /// (Phase 3). Never shrinks automatically; closing a pane leaves the
-    /// name entry dangling and `resolve_pane_ref_impl` treats it as
-    /// unknown.
+    /// (Phase 3). Entries are removed when the referenced pane is
+    /// closed (see `remove_pane_from_layout` and `close_tab`) so a
+    /// subsequent split can reuse the same name. Natural-exit PTY EOF
+    /// leaves the entry until the pane is explicitly reaped — callers
+    /// should treat an entry whose pane id is absent from `panes` as
+    /// stale (which `resolve_pane_ref_impl` already does).
     pub pane_names: HashMap<String, usize>,
     pub file_tree: FileTree,
     pub file_tree_visible: bool,
@@ -1512,6 +1515,8 @@ impl App {
             self.overlay = None;
         }
 
+        // `pane_names` is dropped alongside the workspace, so we don't
+        // need to retain() like `remove_pane_from_layout` does.
         self.workspaces[index].shutdown();
         self.workspaces.remove(index);
         let prev_active = self.active_tab;
@@ -1521,6 +1526,12 @@ impl App {
         if prev_active != self.active_tab {
             self.overlay = None;
         }
+        // Relayout the (possibly new) active tab so its rects are
+        // recomputed and a repaint is scheduled. Needed when close_tab
+        // is invoked from a non-key-driven path (IPC close on the last
+        // pane of a non-last tab) since otherwise the render loop
+        // wouldn't observe any dirty flag.
+        self.mark_layout_change();
         for (pid, name, role) in to_emit {
             self.emit_pane_exited(pid, name, role);
         }
@@ -1763,7 +1774,15 @@ impl App {
         }
 
         if ws_index == self.active_tab {
+            // Active tab: full relayout so the remaining panes resize
+            // into the freed space.
             self.mark_layout_change();
+        } else {
+            // Background tab: no geometry change to the visible layout,
+            // but the tab strip and pane-count indicators still need a
+            // repaint, and `ccmux list` must reflect the new state on
+            // the very next tick.
+            self.dirty = true;
         }
         if let Some((name, role)) = exited_meta {
             self.emit_pane_exited(pane_id, name, role);
@@ -3639,6 +3658,164 @@ mod tests {
         );
         assert_eq!(ws.layout.pane_count(), 1);
         assert_eq!(ws.focused_pane_id, left_id);
+
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_close_in_background_tab_marks_dirty_and_updates_list() {
+        // Cover the Codex review bug: closing a pane that lives in a
+        // non-active workspace must still schedule a render and make
+        // the pane disappear from subsequent `ccmux list` snapshots on
+        // the freshly-touched tab. Prior to the fix the dirty flag
+        // stayed low because `mark_layout_change` was gated on the
+        // active tab.
+        let cfg = crate::layout_config::LayoutConfig {
+            version: 1,
+            name: "bg-close".into(),
+            root: crate::layout_config::LayoutNodeSpec::Split {
+                direction: crate::layout_config::DirectionSpec::Vertical,
+                ratio: 0.5,
+                first: Box::new(make_pane_spec("bg-left")),
+                second: Box::new(make_pane_spec("bg-right")),
+            },
+        };
+        let mut app = App::new(40, 80).expect("App::new");
+        app.apply_layout(&cfg).expect("apply_layout");
+
+        // The 2-pane layout lives in workspace 0. Open a second tab so
+        // workspace 0 becomes a background tab; the new tab (index 1)
+        // becomes active with a single fresh pane.
+        app.new_tab().expect("new_tab");
+        assert_eq!(app.active_tab, 1);
+        let active_focus_before = app.ws().focused_pane_id;
+
+        // Clear the dirty flag set by new_tab so we can attribute the
+        // next mutation to `handle_close` only.
+        app.dirty = false;
+
+        let bg_right_id = app.workspaces[0]
+            .pane_names
+            .get("bg-right")
+            .copied()
+            .expect("bg-right registered");
+
+        let closed = app
+            .handle_close(&ipc::PaneRef::Id(bg_right_id))
+            .expect("close bg-right");
+        assert_eq!(closed, bg_right_id);
+
+        assert!(
+            app.dirty,
+            "close on a background workspace must schedule a repaint"
+        );
+        assert!(
+            !app.workspaces[0].panes.contains_key(&bg_right_id),
+            "bg-right must be gone from workspace 0"
+        );
+        // Active tab must be untouched.
+        assert_eq!(app.active_tab, 1);
+        assert_eq!(app.ws().focused_pane_id, active_focus_before);
+
+        app.shutdown();
+    }
+
+    #[test]
+    fn close_releases_pane_name_for_reuse() {
+        // After close, the stable name must be available again so a
+        // subsequent `ccmux split --id same-name` doesn't collide with
+        // a dangling entry.
+        let cfg = crate::layout_config::LayoutConfig {
+            version: 1,
+            name: "reuse".into(),
+            root: crate::layout_config::LayoutNodeSpec::Split {
+                direction: crate::layout_config::DirectionSpec::Vertical,
+                ratio: 0.5,
+                first: Box::new(make_pane_spec("keeper")),
+                second: Box::new(make_pane_spec("victim")),
+            },
+        };
+        let mut app = App::new(40, 80).expect("App::new");
+        app.apply_layout(&cfg).expect("apply_layout");
+
+        let victim_id_before = *app.ws().pane_names.get("victim").expect("registered");
+        app.handle_close(&ipc::PaneRef::Name("victim".into()))
+            .expect("close victim");
+        assert!(!app.ws().pane_names.contains_key("victim"));
+
+        // Split again asking for the same name; handle_split must
+        // succeed and the new pane id must be different from the old.
+        let new_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                Some("victim".into()),
+                None,
+            )
+            .expect("split with reused name");
+        assert_ne!(new_id, victim_id_before);
+        assert_eq!(
+            app.ws().pane_names.get("victim").copied(),
+            Some(new_id),
+            "pane_names must point at the freshly-created pane, not the dead one"
+        );
+
+        app.shutdown();
+    }
+
+    #[test]
+    fn close_after_natural_exit_does_not_double_emit() {
+        // The EOF detection path and the CLI close path both guard on
+        // `Pane.exit_event_emitted`, so a subscriber must see at most
+        // one `PaneExited` per pane id regardless of order. We can't
+        // drive a real EOF in a unit test, but we can simulate the
+        // race by flipping the flag manually before calling
+        // `handle_close` — exercising the same guard the natural-exit
+        // path would have used.
+        let cfg = crate::layout_config::LayoutConfig {
+            version: 1,
+            name: "race".into(),
+            root: crate::layout_config::LayoutNodeSpec::Split {
+                direction: crate::layout_config::DirectionSpec::Vertical,
+                ratio: 0.5,
+                first: Box::new(make_pane_spec("a")),
+                second: Box::new(make_pane_spec("b")),
+            },
+        };
+        let mut app = App::new(40, 80).expect("App::new");
+        app.apply_layout(&cfg).expect("apply_layout");
+
+        let (_sub_id, rx) = app.event_bus.subscribe();
+        let b_id = *app.ws().pane_names.get("b").expect("b registered");
+
+        // Simulate PtyEof having beaten us to the emission.
+        app.workspaces[0]
+            .panes
+            .get_mut(&b_id)
+            .expect("pane b")
+            .exit_event_emitted = true;
+
+        let closed = app
+            .handle_close(&ipc::PaneRef::Id(b_id))
+            .expect("close pane b");
+        assert_eq!(closed, b_id);
+        assert!(!app.ws().panes.contains_key(&b_id));
+
+        // Drain any events that did fire. The pre-flag means
+        // handle_close must not emit PaneExited for b_id.
+        let mut saw_b_exited = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let ipc::Event::PaneExited { id, .. } = ev {
+                if id == b_id {
+                    saw_b_exited = true;
+                }
+            }
+        }
+        assert!(
+            !saw_b_exited,
+            "PaneExited for b must be suppressed when exit_event_emitted was already set"
+        );
 
         app.shutdown();
     }
