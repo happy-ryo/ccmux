@@ -166,59 +166,58 @@
       <h1>ccmux-fork</h1>
       <p class="tagline">
         <a href="https://github.com/Shin-sibainu/ccmux">Shin-sibainu/ccmux</a>
-        のフォーク。独自機能を先行開発しており、npm では
-        <code>ccmux-fork</code> として配布しています。
+        のフォーク。独自機能を先行で足して npm では
+        <code>ccmux-fork</code> の名前で配布しています。
       </p>
 
       <figure class="hero">
         <img
           src="./ime-overlay.png"
-          alt="ターミナル中央の IME composition overlay に日本語変換候補窓がキャレット直下に吸着している様子。背後の Claude pane は凍結されている"
+          alt="ターミナル中央に開いた IME overlay。日本語の変換候補窓がキャレットの真下に吸着していて、背後の Claude ペインは凍結されている"
         />
         <figcaption>
-          中央表示の多行 IME composition overlay (フォーク独自機能)。
-          ホストターミナルの IME 候補窓がキャレット直下に吸着するので、
-          日本語 / 中国語 / 韓国語の入力中に Claude のカーソル移動で候補窓が暴れなくなります。
-          <code>Alt+Enter</code> で送信、<code>Enter</code> で改行、
-          <code>--ime-freeze-panes</code> と併用すれば背景のちらつきも止められます。
+          画面中央にフロート表示される複数行の IME 入力ボックス (フォーク独自)。
+          ホスト OS の IME 候補窓がキャレットに吸着するので、
+          日本語 / 中国語 / 韓国語の変換中に候補窓が Claude のカーソルに振り回されません。
+          <code>Alt+Enter</code> で送信、<code>Enter</code> は改行、
+          <code>--ime-freeze-panes</code> を組み合わせると背後のちらつきも止まります。
         </figcaption>
       </figure>
 
       <p>
-        このフォークは上流 (upstream) の変更を定期的に取り込みながら独自機能を先行開発しています。
-        オリジナル版は
+        上流の変更を定期的に取り込みつつ、独自機能を先行で入れています。オリジナル版は
         <a href="https://github.com/Shin-sibainu/ccmux">upstream リポジトリ</a>
-        を参照してください。
+        を見てください。
       </p>
 
       <pre><code>$ npm install -g ccmux-fork</code></pre>
 
       <p>
-        upstream の <code>ccmux-cli</code> から移行する場合:
+        上流の <code>ccmux-cli</code> から移行する場合:
       </p>
       <pre><code>$ npm uninstall -g ccmux-cli
 $ npm install -g ccmux-fork</code></pre>
 
-      <h2>upstream との差分</h2>
+      <h2>上流との差分</h2>
       <p style="color: var(--muted); font-size: 0.9rem; margin-top: -4px;">
-        このフォークは現在の upstream <code>master</code> の厳密なスーパーセットです — 上流にある機能はすべて含みます。
-        以下は、リリース済み upstream スナップショットと比べてフォーク固有の追加機能です:
+        このフォークは現時点の upstream <code>master</code> の完全な上位互換です。上流にあるものは全部入っています。
+        下の表は、直近の upstream リリースに対してフォーク側だけに入っている機能の一覧です。
       </p>
       <table class="diff">
         <thead>
           <tr>
             <th>機能</th>
-            <th class="mark">upstream</th>
+            <th class="mark">上流</th>
             <th class="mark">フォーク</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td>
-              中央多行 IME composition overlay (Windows + サードパーティターミナルでの JP / CN / KR 入力)
+              画面中央の複数行 IME 入力ボックス (Windows + サードパーティ製ターミナルでの日本語 / 中国語 / 韓国語入力)
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                <code>Alt+Enter</code> で送信、<code>Enter</code> で改行、
-                ホスト IME の候補窓がキャレットに吸着
+                <code>Alt+Enter</code> で送信、<code>Enter</code> は改行、
+                IME 候補窓はキャレットに吸着
               </span>
             </td>
             <td class="mark">—</td>
@@ -226,11 +225,11 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
-              IME 入力中の pane 凍結 + 周期 catch-up
+              IME 入力中にペインを凍結 + 周期的に追いつく
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                <code>--ime-freeze-panes</code> で PTY 由来の repaint を抑止、
-                <code>--ime-overlay-catchup-ms</code> で凍結中にも
-                streaming 出力が読める周期更新を再投入
+                <code>--ime-freeze-panes</code> で背後のペインの再描画を止め、
+                <code>--ime-overlay-catchup-ms</code> で凍結中も一定間隔だけ
+                再描画を挟んで Claude の出力が進む様子を確認できる
               </span>
             </td>
             <td class="mark">—</td>
@@ -238,11 +237,10 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
-              Pane ライフサイクルイベント (<code>ccmux events --timeout / --count</code>)
+              ペインのライフサイクルイベント (<code>ccmux events --timeout / --count</code>)
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                <code>PaneStarted</code> / <code>PaneExited</code> を改行区切り JSON として
-                subscribe 可能。heartbeat ベースの half-close 検出と
-                安定した error code を併用
+                <code>PaneStarted</code> / <code>PaneExited</code> を JSON Lines で購読できる。
+                heartbeat で half-close を検知、エラーコードは安定
               </span>
             </td>
             <td class="mark">—</td>
@@ -250,11 +248,11 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
-              スクリーンスナップショット + レイアウト取得
+              画面のスナップショット取得とレイアウト情報
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                <code>ccmux inspect</code> が 1 行ごとの JSON スナップショットを返し、
-                <code>ccmux list</code> は各 pane の rect を含むので外部ツールから
-                画面座標でマッチ可能
+                <code>ccmux inspect</code> で 1 行ずつ JSON 化したペイン画面が取れる。
+                <code>ccmux list</code> は各ペインの画面矩形も返すので、
+                外部ツールから座標ベースでマッチさせられる
               </span>
             </td>
             <td class="mark">—</td>
@@ -262,11 +260,11 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
-              pane サイズの最小値を CLI で変更可能
+              最小ペインサイズを CLI で指定できる
               <br /><span style="color: var(--muted); font-size: 0.85em;">
                 <code>--min-pane-width</code> / <code>--min-pane-height</code> で
-                デフォルトの 20×5 を上書き。狭い分割を必要とするレイアウトのために
-                ソースをパッチする必要がなくなりました
+                デフォルトの 20×5 を上書き。狭い分割を前提にしたレイアウトでも
+                ソースに手を入れずに済む
               </span>
             </td>
             <td class="mark">—</td>
@@ -276,8 +274,8 @@ $ npm install -g ccmux-fork</code></pre>
             <td>
               <code>ccmux close</code> サブコマンド
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                スクリプトから pane を終了。最後のタブの最後の pane は拒否するので、
-                セッション自体を誤って吹き飛ばす心配はありません
+                スクリプトからペインを終了できる。最後のタブの最後のペインは拒否するので、
+                誤ってセッションごと吹き飛ばす心配なし
               </span>
             </td>
             <td class="mark">—</td>
@@ -285,23 +283,23 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
-              安定した IPC エラーコード
+              IPC エラーコードの安定化
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                すべての IPC 応答が機械可読なコード
-                (<code>PANE_NOT_FOUND</code>, <code>AMBIGUOUS_TARGET</code> など)
-                を含むので、呼び出し側が文字列マッチ無しで分岐できます
+                すべての IPC 応答にコード
+                (<code>PANE_NOT_FOUND</code>、<code>AMBIGUOUS_TARGET</code> など) が付くので、
+                呼び出し側は文字列マッチに頼らずに分岐できる
               </span>
             </td>
             <td class="mark">—</td>
             <td class="mark has">✓</td>
           </tr>
           <tr>
-            <td>alt-screen TUI (Claude <code>/tui</code>, vim, lazygit 等) へのマウスホイール転送</td>
+            <td>alt-screen で動く TUI (Claude <code>/tui</code>、vim、lazygit など) へのマウスホイール転送</td>
             <td class="mark">—</td>
             <td class="mark has">✓</td>
           </tr>
           <tr>
-            <td>CI マトリクス (Windows / macOS / Linux) + rustfmt / clippy ゲート</td>
+            <td>Windows / macOS / Linux の CI と rustfmt / clippy チェック</td>
             <td class="mark">—</td>
             <td class="mark has">✓</td>
           </tr>
@@ -309,10 +307,10 @@ $ npm install -g ccmux-fork</code></pre>
             <td>
               基本 IPC (<code>list / send / focus / split / new-tab</code>)
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                upstream PR #4 と共同開発。upstream <code>master</code> には未マージ
+                上流 PR #4 と共同開発。上流 <code>master</code> にはまだ入っていない
               </span>
             </td>
-            <td class="mark">pending</td>
+            <td class="mark">予定</td>
             <td class="mark has">✓</td>
           </tr>
         </tbody>
@@ -324,7 +322,7 @@ $ npm install -g ccmux-fork</code></pre>
           → <a href="https://github.com/happy-ryo/ccmux">GitHub (このフォーク)</a>
         </li>
         <li>
-          → <a href="https://github.com/Shin-sibainu/ccmux">upstream プロジェクト (オリジナル)</a>
+          → <a href="https://github.com/Shin-sibainu/ccmux">上流プロジェクト (オリジナル)</a>
         </li>
       </ul>
     </main>
