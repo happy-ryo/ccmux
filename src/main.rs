@@ -122,7 +122,7 @@ fn main() -> Result<()> {
 
     // Load user config + apply CLI override (CLI > file > default).
     let mut user_config = config::Config::load();
-    user_config.apply_cli_overrides(cli.ime);
+    user_config.apply_cli_overrides(cli.ime, cli.ime_overlay_poll_ms);
 
     // Create app (spawns the initial pane, which captures the env above).
     let mut app = app::App::new(size.height, size.width)?;
@@ -382,8 +382,18 @@ fn run_event_loop(
             break;
         }
 
-        // Poll for crossterm events with a short timeout (~30fps)
-        if event::poll(Duration::from_millis(33))? {
+        // Poll for crossterm events. Normal rate is ~30 fps (33 ms);
+        // while the IME composition overlay is open we stretch the
+        // timeout (Issue #38) so Claude's thinking spinner doesn't
+        // force a repaint every frame during JP composition. Any real
+        // input (key / paste / mouse / resize) interrupts the poll
+        // immediately, so perceived latency is unaffected.
+        let poll_timeout = if app.overlay.is_some() {
+            Duration::from_millis(app.ime_overlay_poll_ms)
+        } else {
+            Duration::from_millis(33)
+        };
+        if event::poll(poll_timeout)? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     let consumed = app.handle_key_event(key)?;

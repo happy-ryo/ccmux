@@ -70,6 +70,7 @@ Launch from any directory. The file tree shows the current working directory.
 
 - `--min-pane-width <COLS>` — minimum child columns a split may produce (default `20`). Splits whose halved pane would be narrower are refused. `0` is clamped to `1` to avoid zero-width children.
 - `--min-pane-height <ROWS>` — minimum child rows a split may produce (default `5`). Same clamp rule as `--min-pane-width`.
+- `--ime-overlay-poll-ms <MS>` — idle `event::poll` timeout (ms) while the IME composition overlay is open (default `166`, preliminary per Issue #82). Larger values throttle flicker during JP composition without affecting key/paste/mouse responsiveness. Values below `10` are clamped up. Also settable via `[ime] overlay_poll_ms` in `config.toml`.
 
 ## Configuration
 

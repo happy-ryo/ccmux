@@ -22,10 +22,37 @@ pub struct Config {
 /// IME overlay settings. See Issue #39 for the full mode design;
 /// `always_on` lives behind Issue #40 and is explicitly not accepted
 /// here yet.
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ImeConfig {
     pub mode: ImeMode,
+    /// Main-loop `event::poll` timeout (ms) while the IME composition
+    /// overlay is open (Issue #38). Higher values throttle redraws
+    /// during composition at the cost of a slightly less responsive
+    /// cancel/commit path on very slow typists. Input events (key /
+    /// paste / mouse / resize) still interrupt the poll immediately,
+    /// so only the idle redraw rate is affected. Clamped to
+    /// `MIN_OVERLAY_POLL_MS` at apply time to avoid degenerate near-0
+    /// timeouts. Default is 166 ms — preliminary, to be finalized by
+    /// the PoC benchmark described in Issue #82.
+    pub overlay_poll_ms: u64,
+}
+
+/// Preliminary default overlay `event::poll` timeout. See
+/// [`ImeConfig::overlay_poll_ms`].
+pub const DEFAULT_OVERLAY_POLL_MS: u64 = 166;
+
+/// Floor for `overlay_poll_ms`. Values below this (including 0) are
+/// clamped up so the main loop never spins on a 0-ms poll.
+pub const MIN_OVERLAY_POLL_MS: u64 = 10;
+
+impl Default for ImeConfig {
+    fn default() -> Self {
+        Self {
+            mode: ImeMode::default(),
+            overlay_poll_ms: DEFAULT_OVERLAY_POLL_MS,
+        }
+    }
 }
 
 /// How Ctrl+; behaves in a focused pane.
@@ -136,12 +163,20 @@ impl Config {
         }
     }
 
-    /// Apply an optional CLI override on top of the loaded config.
+    /// Apply optional CLI overrides on top of the loaded config.
     /// `None` leaves the field untouched, mirroring the precedence
-    /// "CLI > file > default".
-    pub fn apply_cli_overrides(&mut self, ime_mode: Option<ImeMode>) {
+    /// "CLI > file > default". `overlay_poll_ms` is clamped to
+    /// [`MIN_OVERLAY_POLL_MS`] whether it arrived via CLI, file, or
+    /// default, so the main loop never sees a sub-floor value.
+    pub fn apply_cli_overrides(&mut self, ime_mode: Option<ImeMode>, overlay_poll_ms: Option<u64>) {
         if let Some(mode) = ime_mode {
             self.ime.mode = mode;
+        }
+        if let Some(ms) = overlay_poll_ms {
+            self.ime.overlay_poll_ms = ms;
+        }
+        if self.ime.overlay_poll_ms < MIN_OVERLAY_POLL_MS {
+            self.ime.overlay_poll_ms = MIN_OVERLAY_POLL_MS;
         }
     }
 }
@@ -243,7 +278,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(Some(ImeMode::Off));
+        cfg.apply_cli_overrides(Some(ImeMode::Off), None);
         assert_eq!(cfg.ime.mode, ImeMode::Off);
     }
 
@@ -256,7 +291,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(None);
+        cfg.apply_cli_overrides(None, None);
         assert_eq!(cfg.ime.mode, ImeMode::Off);
     }
 
@@ -296,6 +331,59 @@ mod tests {
         let cfg = Config::load_from(&tmp);
         std::fs::remove_file(&tmp).ok();
         assert_eq!(cfg.ime.mode, ImeMode::Hotkey);
+    }
+
+    #[test]
+    fn default_overlay_poll_ms_is_preliminary_166() {
+        let cfg = Config::default();
+        assert_eq!(cfg.ime.overlay_poll_ms, DEFAULT_OVERLAY_POLL_MS);
+        assert_eq!(DEFAULT_OVERLAY_POLL_MS, 166);
+    }
+
+    #[test]
+    fn parses_overlay_poll_ms_from_toml() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [ime]
+            mode = "hotkey"
+            overlay_poll_ms = 200
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.ime.overlay_poll_ms, 200);
+    }
+
+    #[test]
+    fn cli_overlay_poll_ms_beats_file() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [ime]
+            overlay_poll_ms = 200
+            "#,
+        )
+        .unwrap();
+        cfg.apply_cli_overrides(None, Some(333));
+        assert_eq!(cfg.ime.overlay_poll_ms, 333);
+    }
+
+    #[test]
+    fn overlay_poll_ms_clamps_below_floor() {
+        // Sub-floor values from config must be clamped up, even when no
+        // CLI override is provided, so the main loop never sees a 0 ms
+        // poll.
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [ime]
+            overlay_poll_ms = 0
+            "#,
+        )
+        .unwrap();
+        cfg.apply_cli_overrides(None, None);
+        assert_eq!(cfg.ime.overlay_poll_ms, MIN_OVERLAY_POLL_MS);
+
+        let mut cfg2 = Config::default();
+        cfg2.apply_cli_overrides(None, Some(1));
+        assert_eq!(cfg2.ime.overlay_poll_ms, MIN_OVERLAY_POLL_MS);
     }
 
     #[test]

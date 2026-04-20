@@ -29,6 +29,15 @@ pub struct Cli {
     #[arg(long, value_name = "MODE", value_enum)]
     pub ime: Option<crate::config::ImeMode>,
 
+    /// Main-loop `event::poll` timeout (ms) while the IME composition
+    /// overlay is open (Issue #38). Throttles idle redraws during JP
+    /// IME composition; key / paste / mouse / resize events still
+    /// interrupt the poll immediately so responsiveness is preserved.
+    /// Values below 10 are clamped up to 10. Overrides `[ime]
+    /// overlay_poll_ms` in config.toml. Default: 166 (preliminary).
+    #[arg(long, value_name = "MS")]
+    pub ime_overlay_poll_ms: Option<u64>,
+
     /// Minimum columns each child pane must retain after a vertical
     /// split. Splits that would produce a narrower child are refused.
     /// A value of `0` is clamped to `1` at runtime to avoid degenerate
@@ -726,6 +735,18 @@ mod tests {
     fn ime_flag_is_optional() {
         let cli = Cli::try_parse_from(["ccmux"]).unwrap();
         assert_eq!(cli.ime, None);
+    }
+
+    #[test]
+    fn ime_overlay_poll_ms_defaults_to_none() {
+        let cli = Cli::try_parse_from(["ccmux"]).unwrap();
+        assert_eq!(cli.ime_overlay_poll_ms, None);
+    }
+
+    #[test]
+    fn parses_ime_overlay_poll_ms_override() {
+        let cli = Cli::try_parse_from(["ccmux", "--ime-overlay-poll-ms", "250"]).unwrap();
+        assert_eq!(cli.ime_overlay_poll_ms, Some(250));
     }
 
     #[test]

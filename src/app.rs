@@ -606,6 +606,11 @@ pub struct App {
     /// IME overlay mode resolved from config + CLI. `Off` disables
     /// the Ctrl+; hotkey so the keystroke reaches the PTY untouched.
     pub ime_mode: crate::config::ImeMode,
+    /// Resolved main-loop `event::poll` timeout (ms) to use while the
+    /// IME composition overlay is open. Populated from config + CLI
+    /// by [`App::apply_config`] and consumed by the main loop in
+    /// `src/main.rs`. See Issue #38.
+    pub ime_overlay_poll_ms: u64,
     /// In `Always` mode, the pane id where the user explicitly
     /// dismissed (Esc with empty buffer / Ctrl+C) the auto-opened
     /// overlay. Blocks re-open on the same focus. Cleared whenever
@@ -685,6 +690,7 @@ impl App {
             clipboard: None,
             event_bus,
             ime_mode: crate::config::ImeMode::default(),
+            ime_overlay_poll_ms: crate::config::DEFAULT_OVERLAY_POLL_MS,
             always_dismissed_pane: None,
             last_focused_pane: None,
             min_pane_width: 20,
@@ -698,6 +704,14 @@ impl App {
     /// collapsed into a single resolved value.
     pub fn apply_config(&mut self, cfg: &crate::config::Config) {
         self.ime_mode = cfg.ime.mode;
+        // Config::apply_cli_overrides already clamped this to
+        // MIN_OVERLAY_POLL_MS, but re-apply the floor here so direct
+        // tests that mutate cfg.ime.overlay_poll_ms without going
+        // through the setter still get a safe value.
+        self.ime_overlay_poll_ms = cfg
+            .ime
+            .overlay_poll_ms
+            .max(crate::config::MIN_OVERLAY_POLL_MS);
     }
 
     /// Override the minimum per-child split dimensions. Values of `0`
