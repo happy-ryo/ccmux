@@ -68,113 +68,214 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     let show_status = app.status_bar_visible || app.rename_input.is_some();
     let status_h = if show_status { 1 } else { 0 };
     let show_overlay = app.overlay.is_some();
-    let overlay_h = if show_overlay { 1 } else { 0 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),         // tab bar
-            Constraint::Min(1),            // main area
-            Constraint::Length(overlay_h), // IME overlay row (when open)
-            Constraint::Length(status_h),  // status bar
+            Constraint::Length(1),        // tab bar
+            Constraint::Min(1),           // main area
+            Constraint::Length(status_h), // status bar
         ])
         .split(area);
 
     render_tab_bar(app, frame, chunks[0]);
     render_main_area(app, frame, chunks[1]);
-    if show_overlay {
-        render_ime_overlay(app, frame, chunks[2]);
-    }
     if show_status {
-        render_status_bar(app, frame, chunks[3]);
+        render_status_bar(app, frame, chunks[2]);
+    }
+    // The IME composition overlay is drawn last so its centered box
+    // and its caret anchor land on top of the pane content without
+    // having claimed a layout slot. Using the full terminal `area`
+    // (not `chunks[1]`) keeps it visually centered on the whole
+    // window even when the status bar is visible.
+    if show_overlay {
+        render_ime_overlay(app, frame, area);
     }
 }
 
 // ─── IME composition overlay ──────────────────────────────
+
+/// Minimum inside-box dimensions for the centered IME overlay. Below
+/// these the box collapses to nothing so we don't render a widget so
+/// small the caret can't fit.
+const OVERLAY_MIN_INNER_WIDTH: u16 = 20;
+const OVERLAY_MIN_INNER_HEIGHT: u16 = 1;
+/// Target visible height inside the box — content rows, not
+/// including borders. The box grows with the buffer up to this cap
+/// and then scrolls.
+const OVERLAY_MAX_INNER_HEIGHT: u16 = 10;
+/// Target width as a percentage of the terminal columns, clamped
+/// below to 40 cols and above to 100 cols so the box is readable on
+/// both narrow and ultra-wide terminals.
+const OVERLAY_TARGET_WIDTH_PCT: u16 = 60;
+const OVERLAY_MAX_WIDTH: u16 = 100;
+const OVERLAY_MIN_WIDTH: u16 = 42;
 
 fn render_ime_overlay(app: &mut App, frame: &mut Frame, area: Rect) {
     let overlay = match app.overlay.as_ref() {
         Some(o) => o,
         None => return,
     };
-    // Line layout: "  IME  > <buffer> " followed by a hint on the
-    // right side: "Enter send / Esc cancel". Fixed-width label, buffer
-    // clipped so the hint always fits.
-    let label = " IME \u{276f} ";
-    let hint = " Enter send / Esc cancel ";
-    let label_w = unicode_width::UnicodeWidthStr::width(label) as u16;
-    let hint_w = unicode_width::UnicodeWidthStr::width(hint) as u16;
-    // Available width for the buffer content (plus terminating cursor cell).
-    let budget = area.width.saturating_sub(label_w + hint_w + 1) as usize;
-    let (buf_for_display, cursor_col_in_buf): (String, u16) = {
-        // Truncate from the left if the cursor would fall outside the
-        // budget window, so the caret stays visible during long input.
-        let chars: Vec<char> = overlay.buffer.chars().collect();
-        let cursor = overlay.cursor.min(chars.len());
-        let mut start = 0usize;
-        let width_cursor: u16 = loop {
-            let slice: String = chars[start..cursor].iter().collect();
-            let w = unicode_width::UnicodeWidthStr::width(slice.as_str());
-            if w <= budget {
-                break w as u16;
-            }
-            start += 1;
-            if start >= cursor {
-                break 0;
-            }
-        };
-        let end = chars.len();
-        let mut rendered: String = chars[start..end].iter().collect();
-        while unicode_width::UnicodeWidthStr::width(rendered.as_str()) > budget {
-            rendered.pop();
-        }
-        (rendered, width_cursor)
+
+    // Box width: 60% of the terminal, clamped. Plus-2 for the border
+    // columns. Collapse if the terminal is smaller than the minimum.
+    let pct_w = area.width.saturating_mul(OVERLAY_TARGET_WIDTH_PCT) / 100;
+    let box_w = pct_w.clamp(OVERLAY_MIN_WIDTH, OVERLAY_MAX_WIDTH);
+    let box_w = box_w.min(area.width);
+    if box_w < OVERLAY_MIN_INNER_WIDTH + 2 {
+        return;
+    }
+    let inner_w = box_w - 2;
+
+    // Split the buffer into logical lines, then wrap each at inner_w
+    // display columns. Cursor position in wrapped space is tracked
+    // alongside so the caret anchor lands in the right visual cell.
+    let (wrapped, cursor_row_in_wrapped, cursor_col_in_wrapped) =
+        wrap_overlay_buffer(&overlay.buffer, overlay.cursor, inner_w as usize);
+
+    // Box height: enough rows to show the cursor line, capped at
+    // OVERLAY_MAX_INNER_HEIGHT + 2 borders. If content exceeds the
+    // cap, scroll so the cursor line stays visible (prefer showing
+    // text around the cursor, not the top of the buffer).
+    let inner_h_wanted = wrapped
+        .len()
+        .max(OVERLAY_MIN_INNER_HEIGHT as usize)
+        .min(OVERLAY_MAX_INNER_HEIGHT as usize) as u16;
+    let box_h = (inner_h_wanted + 2).min(area.height);
+    if box_h < OVERLAY_MIN_INNER_HEIGHT + 2 {
+        return;
+    }
+    let inner_h = box_h - 2;
+
+    // Vertical scroll: if the cursor row sits below the visible
+    // window, scroll down so the caret stays in view. Keep at least
+    // one context row above the cursor when possible.
+    let scroll_y = if cursor_row_in_wrapped >= inner_h as usize {
+        cursor_row_in_wrapped + 1 - inner_h as usize
+    } else {
+        0
     };
 
-    let bg_block = Block::default().style(Style::default().bg(HEADER_BG));
-    frame.render_widget(bg_block, area);
+    // Center the box on the whole terminal area.
+    let box_x = area.x + (area.width - box_w) / 2;
+    let box_y = area.y + (area.height.saturating_sub(box_h)) / 2;
+    let box_rect = Rect::new(box_x, box_y, box_w, box_h);
 
-    let label_rect = Rect::new(area.x, area.y, label_w.min(area.width), 1);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            label,
-            Style::default().fg(ACCENT_CLAUDE).bg(HEADER_BG),
-        ))),
-        label_rect,
-    );
+    // Clear the area underneath so the frozen pane content doesn't
+    // bleed through the border/padding.
+    frame.render_widget(ratatui::widgets::Clear, box_rect);
 
-    let buf_x = area.x + label_w;
-    let buf_width = area.width.saturating_sub(label_w + hint_w);
-    if buf_width > 0 {
-        let buf_rect = Rect::new(buf_x, area.y, buf_width, 1);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                buf_for_display,
-                Style::default().fg(TEXT).bg(HEADER_BG),
-            ))),
-            buf_rect,
-        );
+    let title = Line::from(vec![
+        Span::styled(" IME \u{276f} ", Style::default().fg(ACCENT_CLAUDE)),
+        Span::styled(
+            "compose",
+            Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    let hint = Line::from(Span::styled(
+        " Alt+Enter send \u{00b7} Enter newline \u{00b7} Esc cancel ",
+        Style::default().fg(TEXT_DIM),
+    ));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT_CLAUDE))
+        .style(Style::default().bg(PANEL_BG))
+        .title(title)
+        .title_bottom(hint);
+    let visible: Vec<Line> = wrapped
+        .iter()
+        .skip(scroll_y)
+        .take(inner_h as usize)
+        .map(|row| {
+            Line::from(Span::styled(
+                row.clone(),
+                Style::default().fg(TEXT).bg(PANEL_BG),
+            ))
+        })
+        .collect();
+    let para = Paragraph::new(visible).block(block);
+    frame.render_widget(para, box_rect);
+
+    // Caret anchor. The host terminal's IME candidate window follows
+    // wherever we park the hardware cursor — the whole reason this
+    // widget exists.
+    let caret_row_visible = cursor_row_in_wrapped.saturating_sub(scroll_y) as u16;
+    let caret_x = box_x + 1 + cursor_col_in_wrapped as u16;
+    let caret_y = box_y + 1 + caret_row_visible;
+    // Clamp inside the box interior just in case the wrap math ever
+    // drifts; better to place the caret on the last visible cell
+    // than to leak it outside the border.
+    let caret_x = caret_x.min(box_x + box_w.saturating_sub(2));
+    let caret_y = caret_y.min(box_y + box_h.saturating_sub(2));
+    frame.set_cursor_position((caret_x, caret_y));
+}
+
+/// Split `buffer` into display rows that fit within `inner_w` cols.
+/// Each `\n` in the buffer starts a new row; within a logical line,
+/// characters wrap once their cumulative display width reaches
+/// `inner_w`. Returns the wrapped rows, the wrapped-space row
+/// containing the cursor, and the cursor's column inside that row.
+///
+/// When `cursor_chars` sits exactly on a soft-wrap boundary (the
+/// previous char filled the row to `inner_w`, and the next char
+/// would wrap), the caret is reported at `(next_row, 0)` rather than
+/// at `(current_row, inner_w)` — that column is past the visible
+/// content area and would leak outside the border, and it would also
+/// mislead users about where the next inserted character lands.
+fn wrap_overlay_buffer(
+    buffer: &str,
+    cursor_chars: usize,
+    inner_w: usize,
+) -> (Vec<String>, usize, usize) {
+    let inner_w = inner_w.max(1);
+    let mut rows: Vec<String> = vec![String::new()];
+    let mut current_col: usize = 0; // display columns in the current row
+    let mut cur_row = 0usize;
+    let mut cur_col = 0usize;
+    let mut found_cursor = false;
+
+    for (i, ch) in buffer.chars().enumerate() {
+        // Look ahead: will this char trigger a soft wrap? Newlines
+        // are handled separately, so `would_wrap` only applies to
+        // visible chars.
+        let w = if ch == '\n' {
+            0
+        } else {
+            unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1)
+        };
+        let would_wrap = ch != '\n' && current_col + w > inner_w && current_col > 0;
+
+        if i == cursor_chars {
+            if would_wrap {
+                // Cursor is exactly at a wrap boundary → report on
+                // the next row's col 0, where the next insertion
+                // will actually land.
+                cur_row = rows.len(); // the row we are about to push
+                cur_col = 0;
+            } else {
+                cur_row = rows.len() - 1;
+                cur_col = current_col;
+            }
+            found_cursor = true;
+        }
+
+        if ch == '\n' {
+            rows.push(String::new());
+            current_col = 0;
+            continue;
+        }
+        if would_wrap {
+            rows.push(String::new());
+            current_col = 0;
+        }
+        rows.last_mut().unwrap().push(ch);
+        current_col += w;
     }
-
-    if area.width >= hint_w {
-        let hint_rect = Rect::new(area.x + area.width - hint_w, area.y, hint_w, 1);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                hint,
-                Style::default().fg(TEXT_DIM).bg(HEADER_BG),
-            ))),
-            hint_rect,
-        );
+    if !found_cursor {
+        cur_row = rows.len() - 1;
+        cur_col = current_col;
     }
-
-    // Place the terminal cursor inside the buffer area so the host
-    // terminal's IME attaches its candidate window here — the whole
-    // reason this widget exists. Clamp in case the buffer width is 0.
-    let cursor_x = buf_x
-        .saturating_add(cursor_col_in_buf)
-        .min(area.x + label_w + buf_width.saturating_sub(1));
-    if cursor_x < area.x + area.width {
-        frame.set_cursor_position((cursor_x, area.y));
-    }
+    (rows, cur_row, cur_col)
 }
 
 // ─── Tab bar ──────────────────────────────────────────────
@@ -465,7 +566,6 @@ fn render_panes(app: &mut App, frame: &mut Frame, area: Rect) {
     let focused_id = app.ws().focused_pane_id;
     let focus_target = app.ws().focus_target;
     let selection = app.selection.clone();
-    let overlay_active = app.overlay.is_some();
     for (pane_id, rect) in rects {
         if let Some(pane) = app.ws().panes.get(&pane_id) {
             let is_focused = pane_id == focused_id && focus_target == FocusTarget::Pane;
@@ -473,15 +573,7 @@ fn render_panes(app: &mut App, frame: &mut Frame, area: Rect) {
                 |s| matches!(s.target, crate::app::SelectionTarget::Pane(id) if id == pane_id),
             );
             let claude_state = app.claude_monitor.state(pane_id);
-            render_single_pane(
-                pane,
-                is_focused,
-                pane_sel,
-                &claude_state,
-                overlay_active,
-                frame,
-                rect,
-            );
+            render_single_pane(pane, is_focused, pane_sel, &claude_state, frame, rect);
         }
     }
 }
@@ -491,7 +583,6 @@ fn render_single_pane(
     is_focused: bool,
     selection: Option<&crate::app::TextSelection>,
     claude_state: &crate::claude_monitor::ClaudeState,
-    overlay_active: bool,
     frame: &mut Frame,
     area: Rect,
 ) {
@@ -616,7 +707,7 @@ fn render_single_pane(
             .alignment(Alignment::Center);
         frame.render_widget(msg, inner);
     } else {
-        render_terminal_content(pane, is_focused, selection, overlay_active, frame, inner);
+        render_terminal_content(pane, is_focused, selection, frame, inner);
     }
 }
 
@@ -624,7 +715,6 @@ fn render_terminal_content(
     pane: &crate::pane::Pane,
     is_focused: bool,
     selection: Option<&crate::app::TextSelection>,
-    overlay_active: bool,
     frame: &mut Frame,
     area: Rect,
 ) {
@@ -689,8 +779,14 @@ fn render_terminal_content(
     // Show cursor when focused.
     // For non-Claude panes, respect the PTY's hide_cursor request.
     // For Claude Code, always show because Claude relies on the terminal cursor.
-    let show_cursor =
-        !overlay_active && is_focused && (!screen.hide_cursor() || pane.is_claude_running());
+    //
+    // The old bottom-row IME overlay used to gate this with
+    // `!overlay_active` so the pane cursor wouldn't fight the overlay
+    // caret. The centered overlay now renders AFTER `render_main_area`
+    // and calls `frame.set_cursor_position` itself, so last-write-wins
+    // already puts the caret inside the composition box when the
+    // overlay is open. No extra gate needed.
+    let show_cursor = is_focused && (!screen.hide_cursor() || pane.is_claude_running());
     if show_cursor {
         let cursor = screen.cursor_position();
         // For Claude Code, shift cursor 1 column left because Claude draws its own
@@ -1131,5 +1227,65 @@ fn vt100_color_to_ratatui(color: vt100::Color) -> Color {
         vt100::Color::Default => Color::Reset,
         vt100::Color::Idx(idx) => Color::Indexed(idx),
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+    }
+}
+
+#[cfg(test)]
+mod overlay_wrap_tests {
+    use super::wrap_overlay_buffer;
+
+    #[test]
+    fn empty_buffer_reports_origin() {
+        let (rows, r, c) = wrap_overlay_buffer("", 0, 10);
+        assert_eq!(rows, vec![String::new()]);
+        assert_eq!((r, c), (0, 0));
+    }
+
+    #[test]
+    fn cursor_on_soft_wrap_boundary_lands_on_next_row() {
+        // "abcd" with inner_w=3 soft-wraps between 'c' and 'd'.
+        // Cursor at 3 means "between c and d" → should appear at
+        // col 0 of the row that holds 'd', not col 3 of the row
+        // that ended at 'c'.
+        let (rows, r, c) = wrap_overlay_buffer("abcd", 3, 3);
+        assert_eq!(rows, vec!["abc".to_string(), "d".to_string()]);
+        assert_eq!((r, c), (1, 0));
+    }
+
+    #[test]
+    fn cursor_after_trailing_newline_lands_on_fresh_row() {
+        let (rows, r, c) = wrap_overlay_buffer("abc\n", 4, 10);
+        assert_eq!(rows, vec!["abc".to_string(), String::new()]);
+        assert_eq!((r, c), (1, 0));
+    }
+
+    #[test]
+    fn cursor_past_end_clamps_to_eof() {
+        // Deliberately pass a cursor beyond buffer length — the
+        // function must clamp without panicking so transient bad
+        // state (e.g. race between overlay edit and render) never
+        // crashes the TUI.
+        let (rows, r, c) = wrap_overlay_buffer("abc", 99, 10);
+        assert_eq!(rows, vec!["abc".to_string()]);
+        assert_eq!((r, c), (0, 3));
+    }
+
+    #[test]
+    fn cjk_width_two_wraps_at_display_width() {
+        // Three CJK chars each width 2, inner_w=4 → row 0 holds
+        // two chars, row 1 holds the third. Cursor at 2 (boundary)
+        // should land on row 1 col 0.
+        let (rows, r, c) = wrap_overlay_buffer("あいう", 2, 4);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], "あい");
+        assert_eq!(rows[1], "う");
+        assert_eq!((r, c), (1, 0));
+    }
+
+    #[test]
+    fn hard_newline_resets_column() {
+        let (rows, r, c) = wrap_overlay_buffer("ab\ncd", 5, 10);
+        assert_eq!(rows, vec!["ab".to_string(), "cd".to_string()]);
+        assert_eq!((r, c), (1, 2));
     }
 }

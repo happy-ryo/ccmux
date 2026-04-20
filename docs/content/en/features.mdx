@@ -149,7 +149,7 @@ Config file location:
 
 The `--ime hotkey|off|always` CLI flag overrides the file. Precedence is **CLI > config > default (`hotkey`)**. See the README Configuration section for more details.
 
-Windows' conpty layer flickers the hardware caret during ratatui's diff paint; ccmux issues `cursor::Hide` while the overlay is open (`#[cfg(windows)]`) to mitigate. Not a full fix — see Issues #37 / #38.
+Windows' conpty layer flickers the hardware caret during ratatui's diff paint. ccmux mitigates with three layers: a `cursor::Hide` guard around every draw transaction while the overlay is open (Windows-only, since conpty is the only observed culprit), the opt-in `--ime-freeze-panes` flag that suppresses PTY-output-driven repaints entirely, and the complementary `--ime-overlay-catchup-ms <MS>` dial that reintroduces a single periodic repaint so streaming output stays visible. See the README `[ime]` section for recommended defaults.
 
 ## Keybindings
 

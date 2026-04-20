@@ -362,17 +362,25 @@ fn run_event_loop(
         // Only render when something changed (and no cooldown is active)
         if app.dirty && app.paste_cooldown == 0 && app.resize_cooldown == 0 {
             app.dirty = false;
-            // While the IME overlay is open, Claude's thinking spinner keeps
-            // dirtying cells inside the pane. ratatui-crossterm paints those
-            // diffs by emitting MoveTo+Print without hiding the cursor, and
-            // Windows Terminal/conpty leaks those cursor moves to the host
-            // caret — producing rapid flicker between the pane and the
-            // overlay row. Force-hide the cursor for the entire draw
-            // transaction; ratatui will re-show and place it at the overlay
-            // position via frame.set_cursor_position at flush time.
-            // Scoped to Windows because conpty is the observed culprit; on
-            // macOS / Linux terminals this wasn't seen and gating avoids
-            // any unintended side effect.
+            // Defense-in-depth for the Windows conpty caret-leak
+            // originally reported in #25 / fixed in #36: while any pane
+            // diff paints, ratatui-crossterm emits MoveTo+Print without
+            // hiding the hardware cursor, and conpty leaks each MoveTo
+            // to Windows Terminal's caret — producing a ghost-caret
+            // flicker around the screen mid-composition.
+            //
+            // Force-hide the cursor for the whole draw transaction;
+            // ratatui re-shows it and places it inside the centered
+            // overlay box via `frame.set_cursor_position` at flush.
+            //
+            // When `--ime-freeze-panes` is enabled there is no pane
+            // diff to paint so the Hide is redundant, but it is also
+            // free, and users who don't opt in still rely on it for
+            // the flicker reduction baseline that landed in #36.
+            //
+            // Scoped to Windows because conpty is the observed
+            // culprit; macOS / Linux terminals don't exhibit the
+            // leak, and the gate avoids any unintended side effect.
             #[cfg(windows)]
             {
                 if app.overlay.is_some() {

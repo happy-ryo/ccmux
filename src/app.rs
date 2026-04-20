@@ -509,11 +509,13 @@ pub struct App {
     /// to the active workspace's `custom_name`, Esc cancels.
     pub rename_input: Option<String>,
     /// IME composition overlay. When `Some`, key input is routed into
-    /// this buffer instead of the focused PTY; the overlay reserves a
-    /// bottom row so the host terminal's IME candidate window has a
-    /// concrete text-input widget to anchor to (Issue #25 / Phase 4b).
-    /// Enter commits the composed text to the target pane via the
-    /// existing bracketed-paste path; Esc / Ctrl+C cancels.
+    /// this buffer instead of the focused PTY; the overlay draws a
+    /// centered multi-line composition box on top of the pane area
+    /// so the host terminal's IME candidate window has a concrete
+    /// text-input widget to anchor to (Issue #25 / Phase 4b). `Enter`
+    /// inserts a newline; `Alt+Enter` / `Ctrl+Enter` commits the
+    /// composed text to the target pane via the existing
+    /// bracketed-paste path; `Esc` / `Ctrl+C` cancels.
     pub overlay: Option<OverlayState>,
     /// (tab index, timestamp) of the last left-click on a tab label.
     /// Used to detect a double-click → enter rename mode.
@@ -833,8 +835,12 @@ impl App {
         } else {
             0
         };
-        let overlay_h: u16 = if self.overlay.is_some() { 1 } else { 0 };
-        let main_h = rows.saturating_sub(tab_h + status_h + overlay_h);
+        // The IME composition overlay is drawn as a centered floating
+        // box on top of the pane area (see `ui::render_ime_overlay`),
+        // so unlike the old single-row widget it does not claim a
+        // layout slot — panes keep their full height whether the
+        // overlay is open or not.
+        let main_h = rows.saturating_sub(tab_h + status_h);
 
         let mut has_tree = self.ws().file_tree_visible;
         let mut has_preview = self.ws().preview.is_active();
