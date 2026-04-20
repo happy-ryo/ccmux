@@ -2934,10 +2934,6 @@ fn key_event_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
-    fn mk_key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
-        KeyEvent::new(code, mods)
-    }
-
     #[test]
     fn hotkey_mode_esc_closes_overlay_and_discards_buffer() {
         // Regression guard for the #90 cleanup: Esc on the overlay
