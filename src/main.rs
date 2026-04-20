@@ -3,6 +3,7 @@ mod claude_monitor;
 mod cli;
 mod config;
 mod filetree;
+mod input;
 mod ipc;
 mod layout_config;
 mod pane;
