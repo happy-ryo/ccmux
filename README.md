@@ -100,6 +100,33 @@ mode = "hotkey"   # "hotkey" | "off" | "always"
 
 The `--ime hotkey|off|always` CLI flag overrides the config file for a single run. Precedence is **CLI > config file > default**.
 
+### Recommended setup for JP / CJK IME users
+
+If you regularly compose Japanese (or any IME-heavy language) prompts for Claude, launch ccmux with this trio:
+
+```bash
+ccmux --ime always --ime-freeze-panes --ime-overlay-catchup-ms 3000
+```
+
+Or set it once in `config.toml` so every session starts this way:
+
+```toml
+[ime]
+mode = "always"
+freeze_panes_on_overlay = true
+overlay_catchup_ms = 3000
+```
+
+**What you get:**
+
+1. **Overlay opens automatically.** As soon as focus lands on a Claude pane, a centered multi-line composition box appears. The host-terminal IME candidate window anchors to the caret inside the box, so long JP words stop "jumping" around the screen mid-conversion (Issue #25).
+2. **Pane flicker stops.** While the overlay is open, ccmux freezes the pane underneath — Claude's thinking spinner and streaming tokens no longer force repaints that would flicker past your IME candidates. You can focus entirely on composing.
+3. **Progress stays visible.** Every 3 seconds, ccmux unfreezes for a single frame so you can see Claude's streamed output advance. Tune the interval with `--ime-overlay-catchup-ms`: `0` for pure freeze, `5000` if even 3 s feels busy.
+4. **Multi-line drafts first-class.** `Enter` inserts a newline. Press `Alt+Enter` (macOS `Option+Return`) to send the whole buffer, or `Ctrl+Enter` on Windows Terminal / wezterm / VS Code. Full keymap is in the next subsection.
+5. **Escape hatch.** `Esc` on an empty buffer closes the overlay so you can use ccmux's pane-management shortcuts (`Ctrl+D` split, `Ctrl+Left/Right` focus cycle, etc.); moving focus to another pane and back re-opens it.
+
+If the always-open behavior feels intrusive, swap `mode = "always"` for `mode = "hotkey"` — the overlay then only opens when you press `Ctrl+;`, but the other two flags still eliminate flicker when it is open.
+
 ### IME overlay keybindings
 
 The overlay opens as a centered multi-line composition box. Host-terminal IME candidate windows anchor to the caret inside the box.
