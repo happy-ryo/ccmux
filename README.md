@@ -1,5 +1,7 @@
 # ccmux (fork)
 
+*Read this in other languages: [日本語](./README.ja.md)*
+
 Claude Code Multiplexer — manage multiple Claude Code instances in TUI split panes.
 
 A lightweight terminal multiplexer built specifically for running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions side-by-side.

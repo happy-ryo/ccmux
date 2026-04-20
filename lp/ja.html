@@ -1,12 +1,12 @@
 <!doctype html>
-<html lang="en">
+<html lang="ja">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ccmux-fork — fork of ccmux</title>
+    <title>ccmux-fork — ccmux のフォーク</title>
     <meta
       name="description"
-      content="Fork of Shin-sibainu/ccmux with independent development. Installs as ccmux-fork on npm."
+      content="Shin-sibainu/ccmux のフォーク。独自機能を先行開発し、npm では ccmux-fork として配布中。"
     />
     <link rel="alternate" hreflang="en" href="./index.html" />
     <link rel="alternate" hreflang="ja" href="./ja.html" />
@@ -27,7 +27,7 @@
           "Hiragino Sans", "Yu Gothic", sans-serif;
         background: var(--bg);
         color: var(--fg);
-        line-height: 1.6;
+        line-height: 1.7;
         min-height: 100vh;
         display: flex;
         flex-direction: column;
@@ -116,7 +116,7 @@
         margin-top: 8px;
         color: var(--muted);
         font-size: 0.85rem;
-        line-height: 1.5;
+        line-height: 1.6;
       }
       nav.lang {
         margin: 0 0 24px;
@@ -141,70 +141,67 @@
   </head>
   <body>
     <main>
-      <nav class="lang" aria-label="Language">
-        <a href="./" aria-current="page">English</a>
+      <nav class="lang" aria-label="言語切替">
+        <a href="./" hreflang="en">English</a>
         <span class="sep">·</span>
-        <a href="./ja.html" hreflang="ja">日本語</a>
+        <a href="./ja.html" aria-current="page">日本語</a>
       </nav>
       <h1>ccmux-fork</h1>
       <p class="tagline">
-        Fork of
         <a href="https://github.com/Shin-sibainu/ccmux">Shin-sibainu/ccmux</a>
-        with independent development. Installs as <code>ccmux-fork</code> on npm.
+        のフォーク。独自機能を先行開発しており、npm では
+        <code>ccmux-fork</code> として配布しています。
       </p>
 
       <figure class="hero">
         <img
           src="./ime-overlay.png"
-          alt="Centered IME composition overlay in the middle of the terminal with a Japanese conversion candidate window anchored right under the caret; two Claude panes stay frozen behind it"
+          alt="ターミナル中央の IME composition overlay に日本語変換候補窓がキャレット直下に吸着している様子。背後の Claude pane は凍結されている"
         />
         <figcaption>
-          Centered multi-line IME composition overlay — fork-exclusive.
-          The host terminal's IME candidate window anchors to the
-          caret inside the box, so Japanese / Chinese / Korean
-          composition stops chasing Claude's moving cursor. Press
-          <code>Alt+Enter</code> to send, <code>Enter</code> for a
-          newline, pair with <code>--ime-freeze-panes</code> to
-          silence background flicker.
+          中央表示の多行 IME composition overlay (フォーク独自機能)。
+          ホストターミナルの IME 候補窓がキャレット直下に吸着するので、
+          日本語 / 中国語 / 韓国語の入力中に Claude のカーソル移動で候補窓が暴れなくなります。
+          <code>Alt+Enter</code> で送信、<code>Enter</code> で改行、
+          <code>--ime-freeze-panes</code> と併用すれば背景のちらつきも止められます。
         </figcaption>
       </figure>
 
       <p>
-        This fork periodically syncs upstream changes while developing
-        independent features. For the original project, please visit the
-        <a href="https://github.com/Shin-sibainu/ccmux">upstream repository</a>.
+        このフォークは上流 (upstream) の変更を定期的に取り込みながら独自機能を先行開発しています。
+        オリジナル版は
+        <a href="https://github.com/Shin-sibainu/ccmux">upstream リポジトリ</a>
+        を参照してください。
       </p>
 
       <pre><code>$ npm install -g ccmux-fork</code></pre>
 
       <p>
-        Migrating from upstream <code>ccmux-cli</code>:
+        upstream の <code>ccmux-cli</code> から移行する場合:
       </p>
       <pre><code>$ npm uninstall -g ccmux-cli
 $ npm install -g ccmux-fork</code></pre>
 
-      <h2>Differences from upstream</h2>
+      <h2>upstream との差分</h2>
       <p style="color: var(--muted); font-size: 0.9rem; margin-top: -4px;">
-        The fork is a strict superset of the current upstream
-        <code>master</code> — everything upstream ships is here.
-        Additions unique to the fork (compared to the shipped
-        upstream snapshot):
+        このフォークは現在の upstream <code>master</code> の厳密なスーパーセットです — 上流にある機能はすべて含みます。
+        以下は、リリース済み upstream スナップショットと比べてフォーク固有の追加機能です:
       </p>
       <table class="diff">
         <thead>
           <tr>
-            <th>Feature</th>
-            <th class="mark">Upstream</th>
-            <th class="mark">Fork</th>
+            <th>機能</th>
+            <th class="mark">upstream</th>
+            <th class="mark">フォーク</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td>
-              Centered multi-line IME composition overlay (JP / CN / KR on Windows + third-party terminals)
+              中央多行 IME composition overlay (Windows + サードパーティターミナルでの JP / CN / KR 入力)
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                <code>Alt+Enter</code> to send, <code>Enter</code> for newline,
-                host IME candidate window anchors to the caret
+                <code>Alt+Enter</code> で送信、<code>Enter</code> で改行、
+                ホスト IME の候補窓がキャレットに吸着
               </span>
             </td>
             <td class="mark">—</td>
@@ -212,11 +209,11 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
-              Pane freeze + periodic catch-up during IME composition
+              IME 入力中の pane 凍結 + 周期 catch-up
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                <code>--ime-freeze-panes</code> suppresses PTY-driven repaints;
-                <code>--ime-overlay-catchup-ms</code> reintroduces a single
-                periodic repaint so streaming output stays visible
+                <code>--ime-freeze-panes</code> で PTY 由来の repaint を抑止、
+                <code>--ime-overlay-catchup-ms</code> で凍結中にも
+                streaming 出力が読める周期更新を再投入
               </span>
             </td>
             <td class="mark">—</td>
@@ -224,11 +221,11 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
-              Pane lifecycle events (<code>ccmux events --timeout / --count</code>)
+              Pane ライフサイクルイベント (<code>ccmux events --timeout / --count</code>)
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                subscribe to <code>PaneStarted</code> / <code>PaneExited</code> as
-                newline-delimited JSON, with heartbeat-based half-close detection
-                and stable error codes
+                <code>PaneStarted</code> / <code>PaneExited</code> を改行区切り JSON として
+                subscribe 可能。heartbeat ベースの half-close 検出と
+                安定した error code を併用
               </span>
             </td>
             <td class="mark">—</td>
@@ -236,11 +233,11 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
-              Screen snapshot + layout inspection
+              スクリーンスナップショット + レイアウト取得
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                <code>ccmux inspect</code> returns a row-by-row JSON snapshot;
-                <code>ccmux list</code> now includes each pane's rect so external
-                tools can match by on-screen position
+                <code>ccmux inspect</code> が 1 行ごとの JSON スナップショットを返し、
+                <code>ccmux list</code> は各 pane の rect を含むので外部ツールから
+                画面座標でマッチ可能
               </span>
             </td>
             <td class="mark">—</td>
@@ -248,11 +245,11 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
-              Configurable minimum pane size
+              pane サイズの最小値を CLI で変更可能
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                <code>--min-pane-width</code> / <code>--min-pane-height</code>
-                override the 20×5 default so layouts that need tighter
-                splits no longer have to patch the source
+                <code>--min-pane-width</code> / <code>--min-pane-height</code> で
+                デフォルトの 20×5 を上書き。狭い分割を必要とするレイアウトのために
+                ソースをパッチする必要がなくなりました
               </span>
             </td>
             <td class="mark">—</td>
@@ -260,10 +257,10 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
-              <code>ccmux close</code> subcommand
+              <code>ccmux close</code> サブコマンド
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                terminate a pane from a script; refuses on the last pane of
-                the last tab so you can't accidentally kill the session
+                スクリプトから pane を終了。最後のタブの最後の pane は拒否するので、
+                セッション自体を誤って吹き飛ばす心配はありません
               </span>
             </td>
             <td class="mark">—</td>
@@ -271,31 +268,31 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
-              Stable IPC error codes
+              安定した IPC エラーコード
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                every IPC reply carries a machine-readable code
-                (<code>PANE_NOT_FOUND</code>, <code>AMBIGUOUS_TARGET</code>, …)
-                so script callers can branch without string-matching
+                すべての IPC 応答が機械可読なコード
+                (<code>PANE_NOT_FOUND</code>, <code>AMBIGUOUS_TARGET</code> など)
+                を含むので、呼び出し側が文字列マッチ無しで分岐できます
               </span>
             </td>
             <td class="mark">—</td>
             <td class="mark has">✓</td>
           </tr>
           <tr>
-            <td>Mouse wheel forwarding to alt-screen TUIs (Claude <code>/tui</code>, vim, lazygit)</td>
+            <td>alt-screen TUI (Claude <code>/tui</code>, vim, lazygit 等) へのマウスホイール転送</td>
             <td class="mark">—</td>
             <td class="mark has">✓</td>
           </tr>
           <tr>
-            <td>CI matrix (Windows / macOS / Linux) with rustfmt + clippy gate</td>
+            <td>CI マトリクス (Windows / macOS / Linux) + rustfmt / clippy ゲート</td>
             <td class="mark">—</td>
             <td class="mark has">✓</td>
           </tr>
           <tr>
             <td>
-              Basic IPC (<code>list / send / focus / split / new-tab</code>)
+              基本 IPC (<code>list / send / focus / split / new-tab</code>)
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                co-developed with upstream PR #4; not yet on upstream <code>master</code>
+                upstream PR #4 と共同開発。upstream <code>master</code> には未マージ
               </span>
             </td>
             <td class="mark">pending</td>
@@ -305,18 +302,18 @@ $ npm install -g ccmux-fork</code></pre>
       </table>
 
       <ul class="links">
-        <li>→ <a href="./docs/">Documentation</a></li>
+        <li>→ <a href="./docs/">ドキュメント</a></li>
         <li>
-          → <a href="https://github.com/happy-ryo/ccmux">GitHub (this fork)</a>
+          → <a href="https://github.com/happy-ryo/ccmux">GitHub (このフォーク)</a>
         </li>
         <li>
-          → <a href="https://github.com/Shin-sibainu/ccmux">Upstream project (original)</a>
+          → <a href="https://github.com/Shin-sibainu/ccmux">upstream プロジェクト (オリジナル)</a>
         </li>
       </ul>
     </main>
     <footer>
-      MIT License. Not an official Anthropic product. Claude and Claude Code are
-      trademarks of Anthropic, PBC. Original ccmux © Shin-sibainu.
+      MIT ライセンス。Anthropic の公式製品ではありません。Claude および Claude Code は
+      Anthropic, PBC の商標です。オリジナルの ccmux © Shin-sibainu。
     </footer>
   </body>
 </html>
