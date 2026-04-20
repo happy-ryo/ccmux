@@ -613,11 +613,15 @@ fn render_terminal_content(
 
 // ─── Preview ──────────────────────────────────────────────
 
-fn render_preview(app: &App, frame: &mut Frame, area: Rect) {
-    let ws = app.ws();
-    let is_focused = ws.focus_target == FocusTarget::Preview;
-    let filename = ws.preview.filename();
+fn render_preview(app: &mut App, frame: &mut Frame, area: Rect) {
+    // Extract values we need before any mutable borrow.
+    let is_focused = app.ws().focus_target == FocusTarget::Preview;
+    let filename = app.ws().preview.filename();
     let title = format!(" {} ", filename);
+    let is_image = app.ws().preview.is_image();
+    let is_binary = app.ws().preview.is_binary;
+    let line_count = app.ws().preview.lines.len();
+    let scroll_pos = app.ws().preview.scroll_offset;
 
     let is_border_active = matches!(
         app.dragging.as_ref().or(app.hover_border.as_ref()),
@@ -632,11 +636,11 @@ fn render_preview(app: &App, frame: &mut Frame, area: Rect) {
     };
 
     // Line count in bottom-right
-    let line_info = if !ws.preview.is_binary {
-        let total = ws.preview.lines.len();
-        let current = ws.preview.scroll_offset + 1;
+    let line_info = if is_image {
+        Span::styled(" image ", Style::default().fg(TEXT_DIM))
+    } else if !is_binary {
         Span::styled(
-            format!(" {}/{} ", current, total),
+            format!(" {}/{} ", scroll_pos + 1, line_count),
             Style::default().fg(TEXT_DIM),
         )
     } else {
@@ -657,13 +661,31 @@ fn render_preview(app: &App, frame: &mut Frame, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if ws.preview.is_binary {
+    // Image preview
+    if is_image {
+        let is_dragging = app.dragging.is_some();
+        if is_dragging {
+            // Skip expensive Sixel re-encode during drag; show placeholder.
+            let placeholder = Paragraph::new("Resizing...")
+                .alignment(ratatui::layout::Alignment::Center)
+                .style(Style::default().fg(TEXT_DIM).bg(PANEL_BG));
+            frame.render_widget(placeholder, inner);
+        } else if let Some(ref mut protocol) = app.ws_mut().preview.image_protocol {
+            let image_widget = ratatui_image::StatefulImage::default()
+                .resize(ratatui_image::Resize::Fit(Some(ratatui_image::FilterType::CatmullRom)));
+            frame.render_stateful_widget(image_widget, inner, protocol);
+        }
+        return;
+    }
+
+    if is_binary {
         let msg = Paragraph::new("\u{2718} バイナリファイルです")
             .style(Style::default().fg(TEXT_DIM).bg(PANEL_BG));
         frame.render_widget(msg, inner);
         return;
     }
 
+    let ws = app.ws();
     let visible_height = inner.height as usize;
     let scroll = ws.preview.scroll_offset;
     let h_scroll = ws.preview.h_scroll_offset;

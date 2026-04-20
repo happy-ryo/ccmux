@@ -387,6 +387,8 @@ pub struct App {
     pub claude_monitor: crate::claude_monitor::ClaudeMonitor,
     // Reusable clipboard handle (lazy-initialized)
     clipboard: Option<arboard::Clipboard>,
+    // Image preview protocol picker
+    pub image_picker: Option<ratatui_image::picker::Picker>,
 }
 
 impl App {
@@ -430,6 +432,7 @@ impl App {
             },
             claude_monitor: crate::claude_monitor::ClaudeMonitor::new(),
             clipboard: None,
+            image_picker: None,
         })
     }
 
@@ -778,7 +781,9 @@ impl App {
                 let path = self.ws_mut().file_tree.toggle_or_select();
                 if let Some(path) = path {
                     self.clear_selection_if_preview();
-                    self.ws_mut().preview.load(&path);
+                    let mut picker = self.image_picker.take();
+                    self.ws_mut().preview.load(&path, picker.as_mut());
+                    self.image_picker = picker;
                 }
                 Ok(true)
             }
@@ -1237,7 +1242,9 @@ impl App {
                             let path = self.ws_mut().file_tree.toggle_or_select();
                             if let Some(path) = path {
                                 self.clear_selection_if_preview();
-                                self.ws_mut().preview.load(&path);
+                                let mut picker = self.image_picker.take();
+                                self.ws_mut().preview.load(&path, picker.as_mut());
+                                self.image_picker = picker;
                             }
                         }
                         return;

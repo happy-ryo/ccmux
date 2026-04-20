@@ -48,6 +48,13 @@ fn main() -> Result<()> {
         default_hook(info);
     }));
 
+    // Query terminal for graphics protocol support BEFORE raw mode.
+    // Falls back to halfblocks if detection fails.
+    let image_picker = Some(
+        ratatui_image::picker::Picker::from_query_stdio()
+            .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks()),
+    );
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -63,6 +70,7 @@ fn main() -> Result<()> {
 
     // Create app
     let mut app = app::App::new(size.height, size.width)?;
+    app.image_picker = image_picker;
 
     // Main event loop
     let result = run_event_loop(&mut terminal, &mut app);

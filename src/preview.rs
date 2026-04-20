@@ -2,6 +2,8 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::StatefulProtocol;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 use syntect::easy::HighlightLines;
@@ -9,6 +11,7 @@ use syntect::easy::HighlightLines;
 const MAX_PREVIEW_LINES: usize = 500;
 const BINARY_CHECK_BYTES: usize = 8192;
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10MB
+const MAX_IMAGE_SIZE: u64 = 20 * 1024 * 1024; // 20MB for images
 
 /// A styled text span for rendering.
 #[derive(Debug, Clone)]
@@ -29,6 +32,8 @@ pub struct Preview {
     /// preview panel width.
     pub h_scroll_offset: usize,
     pub is_binary: bool,
+    /// Image preview state (set when an image file is loaded).
+    pub image_protocol: Option<StatefulProtocol>,
     syntax_set: SyntaxSet,
     theme_set: ThemeSet,
 }
@@ -42,13 +47,19 @@ impl Preview {
             scroll_offset: 0,
             h_scroll_offset: 0,
             is_binary: false,
+            image_protocol: None,
             syntax_set: SyntaxSet::load_defaults_newlines(),
             theme_set: ThemeSet::load_defaults(),
         }
     }
 
+    /// Check if the current preview is an image.
+    pub fn is_image(&self) -> bool {
+        self.image_protocol.is_some()
+    }
+
     /// Load a file for preview.
-    pub fn load(&mut self, path: &Path) {
+    pub fn load(&mut self, path: &Path, picker: Option<&mut Picker>) {
         if self.file_path.as_deref() == Some(path) {
             return;
         }
@@ -59,6 +70,7 @@ impl Preview {
         self.lines.clear();
         self.highlighted_lines.clear();
         self.is_binary = false;
+        self.image_protocol = None;
 
         let metadata = match std::fs::metadata(path) {
             Ok(m) => m,
@@ -71,6 +83,33 @@ impl Preview {
         if !metadata.is_file() {
             self.lines = vec!["通常ファイルではありません".to_string()];
             return;
+        }
+
+        // Try loading as image first (by extension)
+        if is_image_extension(path) {
+            if metadata.len() > MAX_IMAGE_SIZE {
+                self.lines = vec![format!(
+                    "画像が大きすぎます（{:.1}MB > {:.0}MB）",
+                    metadata.len() as f64 / 1024.0 / 1024.0,
+                    MAX_IMAGE_SIZE as f64 / 1024.0 / 1024.0
+                )];
+                return;
+            }
+            if let Some(picker) = picker {
+                match image::ImageReader::open(path)
+                    .and_then(|r| r.with_guessed_format())
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r.decode().map_err(|e| e.to_string()))
+                {
+                    Ok(dyn_img) => {
+                        self.image_protocol = Some(picker.new_resize_protocol(dyn_img));
+                        return;
+                    }
+                    Err(_) => {
+                        // Fall through to text/binary preview
+                    }
+                }
+            }
         }
 
         if metadata.len() > MAX_FILE_SIZE {
@@ -157,6 +196,7 @@ impl Preview {
         self.scroll_offset = 0;
         self.h_scroll_offset = 0;
         self.is_binary = false;
+        self.image_protocol = None;
     }
 
     /// Check if preview is active.
@@ -205,6 +245,18 @@ impl Preview {
     }
 }
 
+/// Check if a file has an image extension.
+fn is_image_extension(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "tiff" | "tif"
+    )
+}
+
 /// Check if a file is likely binary by reading only the first N bytes.
 fn is_binary_file(path: &Path) -> bool {
     let file = match File::open(path) {
@@ -233,7 +285,7 @@ mod tests {
     #[test]
     fn test_preview_load_text_file() {
         let mut preview = Preview::new();
-        preview.load(Path::new("Cargo.toml"));
+        preview.load(Path::new("Cargo.toml"), None);
         assert!(preview.is_active());
         assert!(!preview.is_binary);
         assert!(!preview.lines.is_empty());
@@ -243,7 +295,7 @@ mod tests {
     #[test]
     fn test_preview_close() {
         let mut preview = Preview::new();
-        preview.load(Path::new("Cargo.toml"));
+        preview.load(Path::new("Cargo.toml"), None);
         assert!(preview.is_active());
 
         preview.close();
@@ -267,7 +319,7 @@ mod tests {
     #[test]
     fn test_preview_highlight_rust() {
         let mut preview = Preview::new();
-        preview.load(Path::new("src/main.rs"));
+        preview.load(Path::new("src/main.rs"), None);
         assert!(!preview.highlighted_lines.is_empty());
         // Highlighted lines should have colored spans
         let first = &preview.highlighted_lines[0];
