@@ -562,6 +562,12 @@ pub struct App {
     /// Minimum height (rows) each child must retain after a horizontal
     /// split. See [`App::set_min_pane_size`] for the clamp rule.
     min_pane_height: u16,
+    /// Image preview protocol picker (upstream sync, PR #7). `None`
+    /// when the host terminal exposes no supported graphics protocol
+    /// (Sixel / Kitty / iTerm2 / halfblocks) — in that case image
+    /// files fall back to the textual "binary file" placeholder in
+    /// the preview panel.
+    pub image_picker: Option<ratatui_image::picker::Picker>,
 }
 
 impl App {
@@ -627,6 +633,7 @@ impl App {
             last_overlay_repaint: None,
             min_pane_width: 20,
             min_pane_height: 5,
+            image_picker: None,
         })
     }
 
@@ -1154,7 +1161,9 @@ impl App {
                 let path = self.ws_mut().file_tree.toggle_or_select();
                 if let Some(path) = path {
                     self.clear_selection_if_preview();
-                    self.ws_mut().preview.load(&path);
+                    let mut picker = self.image_picker.take();
+                    self.ws_mut().preview.load(&path, picker.as_mut());
+                    self.image_picker = picker;
                 }
                 Ok(true)
             }
@@ -1907,7 +1916,9 @@ impl App {
                             let path = self.ws_mut().file_tree.toggle_or_select();
                             if let Some(path) = path {
                                 self.clear_selection_if_preview();
-                                self.ws_mut().preview.load(&path);
+                                let mut picker = self.image_picker.take();
+                                self.ws_mut().preview.load(&path, picker.as_mut());
+                                self.image_picker = picker;
                             }
                         }
                         return;

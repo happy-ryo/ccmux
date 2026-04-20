@@ -71,6 +71,13 @@ fn main() -> Result<()> {
         default_hook(info);
     }));
 
+    // Query terminal for graphics protocol support BEFORE raw mode.
+    // Falls back to halfblocks if detection fails.
+    let image_picker = Some(
+        ratatui_image::picker::Picker::from_query_stdio()
+            .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks()),
+    );
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -129,6 +136,7 @@ fn main() -> Result<()> {
     let mut app = app::App::new(size.height, size.width)?;
     app.apply_config(&user_config);
     app.set_min_pane_size(cli.min_pane_width, cli.min_pane_height);
+    app.image_picker = image_picker;
 
     // Keep the server handle alive for the process lifetime; its Drop
     // impl cleans up the Unix socket file on exit.
