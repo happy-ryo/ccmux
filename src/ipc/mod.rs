@@ -85,6 +85,12 @@ pub enum Request {
     },
     /// Move keyboard focus to the target pane.
     Focus { target: PaneRef },
+    /// Close the target pane. Terminates its underlying process, drops
+    /// it from the layout, and emits a `PaneExited` event. If the pane
+    /// is the only leaf in its workspace and other workspaces exist,
+    /// the whole tab is closed. Fails with `last_pane` if it's the last
+    /// pane of the only remaining tab.
+    Close { target: PaneRef },
     /// Create a new tab with a fresh single pane. The server switches
     /// focus to the new tab (matching the existing Alt+T keybinding).
     NewTab {
@@ -241,6 +247,10 @@ pub mod err_code {
     /// client so it can distinguish "setup broken" from "request
     /// invalid".
     pub const IO_ERROR: &str = "io_error";
+    /// `ccmux close` was asked to remove the only pane of the only
+    /// remaining tab. Refused so the TUI doesn't end up with an empty
+    /// layout; the caller should shut down ccmux instead.
+    pub const LAST_PANE: &str = "last_pane";
 }
 
 /// App-side error carrying a free-form message plus an optional
