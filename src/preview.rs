@@ -245,7 +245,14 @@ impl Preview {
     }
 }
 
-/// Check if a file has an image extension.
+/// Check if a file has an image extension. Must stay in sync with the
+/// feature flags enabled on the `image` crate in `Cargo.toml` — an
+/// extension listed here but missing from the feature set would route
+/// the file to the image pipeline and fail to decode at runtime with
+/// a format-not-supported error. Upstream PR #7 originally included
+/// `ico` / `tiff` / `tif` here but only enabled `png / jpeg / gif /
+/// bmp / webp` features; trimmed on sync to match what actually
+/// decodes.
 fn is_image_extension(path: &Path) -> bool {
     let ext = path
         .extension()
@@ -253,8 +260,61 @@ fn is_image_extension(path: &Path) -> bool {
         .unwrap_or_default();
     matches!(
         ext.as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "tiff" | "tif"
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp"
     )
+}
+
+#[cfg(test)]
+mod image_ext_tests {
+    use super::is_image_extension;
+    use std::path::Path;
+
+    #[test]
+    fn detects_enabled_formats() {
+        // Keep this list in lockstep with the `image` crate features
+        // declared in Cargo.toml.
+        for ext in ["png", "jpg", "jpeg", "gif", "bmp", "webp"] {
+            let path_lower = format!("x.{ext}");
+            assert!(
+                is_image_extension(Path::new(&path_lower)),
+                "`.{ext}` must be detected as an image"
+            );
+            // Case-insensitive.
+            let path_upper = format!("x.{}", ext.to_uppercase());
+            assert!(
+                is_image_extension(Path::new(&path_upper)),
+                "`.{}` must be detected as an image",
+                ext.to_uppercase()
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_formats_without_crate_features() {
+        // Feature flags we do NOT enable — an `image::open` call on
+        // these would fail at runtime. The detector must not route
+        // them to the image pipeline. Guard against regressions if
+        // Cargo.toml ever drops features out of sync.
+        for ext in ["ico", "tiff", "tif", "avif", "heic", "tga"] {
+            let path = format!("x.{ext}");
+            assert!(
+                !is_image_extension(Path::new(&path)),
+                "`.{ext}` must not be detected as an image (crate feature not enabled)"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_non_image_extensions() {
+        for ext in ["txt", "rs", "md", "json", ""] {
+            let path = if ext.is_empty() {
+                "Cargo".to_string()
+            } else {
+                format!("x.{ext}")
+            };
+            assert!(!is_image_extension(Path::new(&path)));
+        }
+    }
 }
 
 /// Check if a file is likely binary by reading only the first N bytes.
