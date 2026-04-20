@@ -1,6 +1,6 @@
 [package]
 name = "ccmux"
-version = "0.5.7-fork.3"
+version = "0.5.8"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
