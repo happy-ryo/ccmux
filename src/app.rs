@@ -619,10 +619,12 @@ pub struct App {
     /// Minimum width (cols) each child must retain after a vertical
     /// split. Populated from `--min-pane-width`; `0` is clamped to `1`
     /// in `set_min_pane_size` to avoid degenerate halving math.
-    pub min_pane_width: u16,
+    /// Private — the setter is the only supported entry point so the
+    /// clamp invariant cannot be bypassed.
+    min_pane_width: u16,
     /// Minimum height (rows) each child must retain after a horizontal
-    /// split. See [`App::min_pane_width`] for the clamp rule.
-    pub min_pane_height: u16,
+    /// split. See [`App::set_min_pane_size`] for the clamp rule.
+    min_pane_height: u16,
 }
 
 impl App {
@@ -4039,8 +4041,10 @@ mod tests {
         // the attached name. Exercises the runtime wiring that CLI
         // parse tests cannot cover.
         let mut app = App::new(40, 80).expect("App::new");
-        app.set_min_pane_size(10, 3);
 
+        // First split runs under defaults (20 / 5) so the cached rect
+        // geometry feeding the second split is identical to the
+        // refusal test's setup — only the threshold itself differs.
         app.handle_split(
             &ipc::PaneRef::Focused,
             ipc::Direction::Vertical,
@@ -4049,6 +4053,11 @@ mod tests {
             None,
         )
         .expect("first split should succeed");
+
+        // Lower the threshold just before the split that would
+        // otherwise refuse, so the causal contrast with the sibling
+        // refusal test is explicit in the test body.
+        app.set_min_pane_size(10, 3);
 
         let (_sub_id, rx) = app.event_bus.subscribe();
 
