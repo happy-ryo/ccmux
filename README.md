@@ -117,7 +117,7 @@ freeze_panes_on_overlay = true
 overlay_catchup_ms = 3000
 ```
 
-![Centered IME overlay composing Japanese — candidate window anchors right under the caret, panes stay frozen behind it](ime-overlay.png)
+![Centered IME overlay with a Japanese conversion candidate window anchored right under the caret, Claude panes frozen behind it](ime-overlay.png)
 
 **What you get:**
 

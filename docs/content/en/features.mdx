@@ -131,13 +131,30 @@ For alt-screen TUI panes, routing depends on whether the app enabled mouse repor
 
 On Windows with WezTerm / zellij / other third-party terminals, the host IME anchors its candidate window to the cursor, and fast-moving TUIs like Claude Code make that anchor jump around — JP input becomes unusable. (macOS native terminals and Windows Terminal don't reproduce the issue.)
 
-ccmux paints a single-row **composition overlay** at the bottom of the screen to give the host IME a stable anchor, and commits the confirmed text to the pane via bracketed paste.
+ccmux paints a **centered, multi-line composition overlay** that floats over the pane area to give the host IME a stable anchor, and commits the confirmed text to the pane via bracketed paste. Long prompts that span multiple lines can be drafted inside the overlay and sent in one shot.
 
-Three modes selected via the `[ime]` config section or `--ime` flag:
+![Centered overlay with the host IME candidate window docked inside it](/ime-overlay.png)
+
+### Keybindings
+
+| Key | Action |
+|---|---|
+| `Enter` / `Shift+Enter` | Insert newline |
+| **`Alt+Enter`** | Send (works everywhere, including macOS `Option+Return`) |
+| `Ctrl+Enter` | Send (Windows Terminal / wezterm / VS Code and most Linux terminals) |
+| `Esc` / `Ctrl+C` | Cancel |
+| `←` `→` `↑` `↓` | Navigate |
+| `Home` / `End` | Start / end of current line |
+| `Ctrl+Home` / `Ctrl+End` | Start / end of whole buffer |
+| `Backspace` | Delete char left of caret |
+
+### Three modes
+
+Selected via the `[ime]` config section or `--ime` flag:
 
 | Mode | Behavior |
 |---|---|
-| `hotkey` (default) | `Ctrl+;` opens the overlay. Enter commits, Esc cancels |
+| `hotkey` (default) | `Ctrl+;` opens the overlay |
 | `off` | `Ctrl+;` is swallowed, overlay never opens. Opt-out for environments where the problem doesn't exist |
 | `always` | The overlay stays open on focused Claude panes so JP IME can compose from the first keystroke |
 
