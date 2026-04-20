@@ -740,9 +740,8 @@ mod tests {
         // Non-zero override is stored verbatim; the runtime clamp of
         // `0 → 1` lives in `App::set_min_pane_size`, not in clap, so
         // this parses without error.
-        let cli =
-            Cli::try_parse_from(["ccmux", "--min-pane-width", "0", "--min-pane-height", "3"])
-                .unwrap();
+        let cli = Cli::try_parse_from(["ccmux", "--min-pane-width", "0", "--min-pane-height", "3"])
+            .unwrap();
         assert_eq!(cli.min_pane_width, 0);
         assert_eq!(cli.min_pane_height, 3);
 
