@@ -2676,8 +2676,7 @@ impl App {
                 for (name, id) in &ws.pane_names {
                     name_by_id.insert(*id, name.clone());
                 }
-                let rect_by_id: HashMap<usize, Rect> =
-                    ws.last_pane_rects.iter().copied().collect();
+                let rect_by_id: HashMap<usize, Rect> = ws.last_pane_rects.iter().copied().collect();
                 let mut infos: Vec<PaneInfo> = Vec::new();
                 for id in ws.layout.collect_pane_ids() {
                     let role = ws.panes.get(&id).and_then(|p| p.role.clone());
