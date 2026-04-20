@@ -19,7 +19,13 @@ dirs = "5"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
-interprocess = "2"
+# 2.4.2 removes the `CannotUnwind` guard from `exsync_op`. On 2.4.0 a
+# Win32 write failure during IPC — normal when a `ccmux events` client
+# disconnects ahead of the 30 s heartbeat — propagated via `?` before
+# the guard's `.end()` ran, so its `Drop` aborted the whole TUI via
+# `std::process::abort()` / `__fastfail`. Silent death, no panic. Pin
+# so a downgrade can't reintroduce it.
+interprocess = "2.4.2"
 oneshot = "0.1"
 subtle = "2"
 humantime = "2"
