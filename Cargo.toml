@@ -1,9 +1,10 @@
 [package]
 name = "ccmux"
-# Fork keeps its own version line; intentionally stays below the
-# upstream `0.6.0` bump. Next release will jump past it when we ship
-# the image-preview sync + our own accumulated changes.
-version = "0.5.8"
+# Fork keeps its own version line. 0.7.0 jumps past upstream 0.6.0 so
+# users can tell fork and upstream apart at a glance, and reflects the
+# breaking change in `mode = "always"` removal (#90) plus the shipped
+# IME overlay rework (#85 / #86) and image-preview sync (#91).
+version = "0.7.0"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
