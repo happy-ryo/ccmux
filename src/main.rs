@@ -127,6 +127,7 @@ fn main() -> Result<()> {
     // Create app (spawns the initial pane, which captures the env above).
     let mut app = app::App::new(size.height, size.width)?;
     app.apply_config(&user_config);
+    app.set_min_pane_size(cli.min_pane_width, cli.min_pane_height);
 
     // Keep the server handle alive for the process lifetime; its Drop
     // impl cleans up the Unix socket file on exit.

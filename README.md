@@ -66,6 +66,11 @@ ccmux
 
 Launch from any directory. The file tree shows the current working directory.
 
+### Flags
+
+- `--min-pane-width <COLS>` — minimum child columns a split may produce (default `20`). Splits whose halved pane would be narrower are refused. `0` is clamped to `1` to avoid zero-width children.
+- `--min-pane-height <ROWS>` — minimum child rows a split may produce (default `5`). Same clamp rule as `--min-pane-width`.
+
 ## Configuration
 
 Optional. Place a TOML file at:
