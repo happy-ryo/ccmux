@@ -833,8 +833,12 @@ impl App {
         } else {
             0
         };
-        let overlay_h: u16 = if self.overlay.is_some() { 1 } else { 0 };
-        let main_h = rows.saturating_sub(tab_h + status_h + overlay_h);
+        // The IME composition overlay is drawn as a centered floating
+        // box on top of the pane area (see `ui::render_ime_overlay`),
+        // so unlike the old single-row widget it does not claim a
+        // layout slot — panes keep their full height whether the
+        // overlay is open or not.
+        let main_h = rows.saturating_sub(tab_h + status_h);
 
         let mut has_tree = self.ws().file_tree_visible;
         let mut has_preview = self.ws().preview.is_active();

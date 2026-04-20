@@ -100,6 +100,20 @@ mode = "hotkey"   # "hotkey" | "off" | "always"
 
 The `--ime hotkey|off|always` CLI flag overrides the config file for a single run. Precedence is **CLI > config file > default**.
 
+### IME overlay keybindings
+
+The overlay opens as a centered multi-line composition box. Host-terminal IME candidate windows anchor to the caret inside the box.
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Insert newline (also `Shift+Enter`) |
+| `Alt+Enter` | Send buffer to the pane and close (portable across all tier-1 terminals, incl. macOS `Option+Return`) |
+| `Ctrl+Enter` | Send buffer — alternative commit for Windows Terminal / wezterm / VS Code / most Linux terminals |
+| `Esc` / `Ctrl+C` | Cancel. Empty buffer closes the overlay; non-empty buffer in Always mode first clears, second press dismisses |
+| `←` `→` `↑` `↓` | Navigate |
+| `Home` / `End` | Start / end of current line |
+| `Backspace` | Delete char left of caret |
+
 ## Keybindings
 
 ### Pane mode (default)
