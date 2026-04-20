@@ -401,6 +401,27 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
         Request::Focus { target } => {
             forward_unit(command_tx, |reply| AppCommand::Focus { target, reply })
         }
+        Request::Close { target } => {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            if command_tx
+                .send(AppCommand::Close {
+                    target,
+                    reply: reply_tx,
+                })
+                .is_err()
+            {
+                return Response::err_coded(err_code::SHUTTING_DOWN, "app shutting down");
+            }
+            match reply_rx.recv_timeout(APP_REPLY_TIMEOUT) {
+                Ok(Ok(closed_id)) => Response::ok_value(
+                    serde_json::json!({ "id": closed_id, "closed": true }),
+                ),
+                Ok(Err(err)) => err.into_response(),
+                Err(e) => {
+                    Response::err_coded(err_code::APP_TIMEOUT, format!("app did not respond: {e}"))
+                }
+            }
+        }
         Request::Split {
             target,
             direction,
@@ -850,6 +871,58 @@ mod tests {
                 assert_eq!(lines.len(), 3);
             }
             other => panic!("expected Ok, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_close_returns_id_and_closed_flag() {
+        let (tx, rx) = mpsc::channel::<AppCommand>();
+        let handle = thread::spawn(move || {
+            if let Ok(AppCommand::Close { reply, .. }) = rx.recv() {
+                reply.send(Ok(13)).unwrap();
+            }
+        });
+        let resp = dispatch_request(
+            Request::Close {
+                target: PaneRef::Name("worker-foo".into()),
+            },
+            &tx,
+        );
+        handle.join().unwrap();
+        match resp {
+            Response::Ok { data } => {
+                assert_eq!(data.get("id").and_then(|v| v.as_u64()), Some(13));
+                assert_eq!(data.get("closed").and_then(|v| v.as_bool()), Some(true));
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_close_surfaces_last_pane_code() {
+        let (tx, rx) = mpsc::channel::<AppCommand>();
+        let handle = thread::spawn(move || {
+            if let Ok(AppCommand::Close { reply, .. }) = rx.recv() {
+                reply
+                    .send(Err(super::super::CodedError::new(
+                        super::super::err_code::LAST_PANE,
+                        "cannot close the last pane of the only tab",
+                    )))
+                    .unwrap();
+            }
+        });
+        let resp = dispatch_request(
+            Request::Close {
+                target: PaneRef::Focused,
+            },
+            &tx,
+        );
+        handle.join().unwrap();
+        match resp {
+            Response::Err { code, .. } => {
+                assert_eq!(code.as_deref(), Some(super::super::err_code::LAST_PANE));
+            }
+            other => panic!("expected Err, got {other:?}"),
         }
     }
 

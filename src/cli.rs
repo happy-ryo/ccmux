@@ -60,6 +60,16 @@ pub enum IpcCommand {
         #[arg(long, conflicts_with = "name")]
         id: Option<usize>,
     },
+    /// Close a pane (terminate its process and remove it from the
+    /// layout). If the pane is the only one in its tab and other tabs
+    /// exist, the whole tab is closed. Refuses when it's the last pane
+    /// of the last tab.
+    Close {
+        #[arg(long, conflicts_with = "id")]
+        name: Option<String>,
+        #[arg(long, conflicts_with = "name")]
+        id: Option<usize>,
+    },
     /// Open a new tab with a fresh single pane. Focus switches to the
     /// new tab. Optionally pre-assigns a stable pane name and tab
     /// label.
@@ -194,6 +204,9 @@ impl IpcCommand {
                 append_enter: *enter,
             }),
             IpcCommand::Focus { name, id } => Ok(Request::Focus {
+                target: pick_ref(name, id, false)?,
+            }),
+            IpcCommand::Close { name, id } => Ok(Request::Close {
                 target: pick_ref(name, id, false)?,
             }),
             IpcCommand::Split {
@@ -331,6 +344,36 @@ mod tests {
             }
             other => panic!("expected Send, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_close_subcommand_with_name() {
+        let cli = Cli::try_parse_from(["ccmux", "close", "--name", "worker-foo"]).unwrap();
+        match cli.command {
+            Some(IpcCommand::Close { name, id }) => {
+                assert_eq!(name.as_deref(), Some("worker-foo"));
+                assert!(id.is_none());
+            }
+            other => panic!("expected Close, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn close_to_request_translates_id() {
+        let cli = Cli::try_parse_from(["ccmux", "close", "--id", "5"]).unwrap();
+        let req = cli.command.unwrap().to_request().unwrap();
+        match req {
+            crate::ipc::Request::Close { target } => {
+                assert!(matches!(target, crate::ipc::PaneRef::Id(5)));
+            }
+            other => panic!("expected Close, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn close_rejects_name_and_id_together() {
+        let result = Cli::try_parse_from(["ccmux", "close", "--name", "a", "--id", "1"]);
+        assert!(result.is_err(), "name and id must be mutually exclusive");
     }
 
     #[test]
