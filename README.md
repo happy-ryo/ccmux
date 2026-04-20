@@ -132,6 +132,7 @@ The overlay opens as a centered multi-line composition box. Host-terminal IME ca
 | `Ctrl+F` | Toggle file tree |
 | `Ctrl+P` | Swap preview/terminal layout |
 | `Ctrl+Right/Left` | Cycle focus (sidebar, preview, panes) |
+| `Ctrl+;` | Open IME composition overlay (centered multi-line — see below) |
 | `Ctrl+Q` | Quit |
 
 ### File tree mode (after `Ctrl+F`)
