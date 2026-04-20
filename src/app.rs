@@ -1058,7 +1058,8 @@ impl App {
         if (key.modifiers == KeyModifiers::CONTROL || key.modifiers == KeyModifiers::ALT)
             && matches!(key.code, KeyCode::Char('t') | KeyCode::Char('T'))
         {
-            self.new_tab()?;
+            let new_id = self.new_tab()?;
+            self.emit_pane_started(new_id);
             return Ok(true);
         }
 
@@ -1149,11 +1150,15 @@ impl App {
 
         match (key.modifiers, key.code) {
             (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
-                self.split_focused_pane(SplitDirection::Vertical)?;
+                if let Some(new_id) = self.split_focused_pane(SplitDirection::Vertical)? {
+                    self.emit_pane_started(new_id);
+                }
                 Ok(true)
             }
             (KeyModifiers::CONTROL, KeyCode::Char('e')) => {
-                self.split_focused_pane(SplitDirection::Horizontal)?;
+                if let Some(new_id) = self.split_focused_pane(SplitDirection::Horizontal)? {
+                    self.emit_pane_started(new_id);
+                }
                 Ok(true)
             }
             (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
@@ -1461,7 +1466,14 @@ impl App {
 
     // ─── Tab management ───────────────────────────────────
 
-    fn new_tab(&mut self) -> Result<()> {
+    /// Create a new tab with a fresh single pane, and return the new
+    /// pane id.
+    ///
+    /// **Does not emit `PaneStarted`.** Callers must fire the event
+    /// after attaching any metadata (name, role, custom tab label) so
+    /// subscribers see the final identity — mirrors the contract on
+    /// `split_focused_pane`.
+    fn new_tab(&mut self) -> Result<usize> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let name = dir_name(&cwd);
         let pane_id = self.next_pane_id;
@@ -1471,8 +1483,7 @@ impl App {
         self.workspaces.push(ws);
         self.active_tab = self.workspaces.len() - 1;
         self.overlay = None;
-        self.emit_pane_started(pane_id);
-        Ok(())
+        Ok(pane_id)
     }
 
     fn close_tab(&mut self, index: usize) {
@@ -1573,9 +1584,18 @@ impl App {
     const MIN_PANE_WIDTH: u16 = 20;
     const MIN_PANE_HEIGHT: u16 = 5;
 
-    fn split_focused_pane(&mut self, direction: SplitDirection) -> Result<()> {
+    /// Create a new pane by splitting the focused one. Returns the new
+    /// pane id on success, or `None` when the split was refused because
+    /// the workspace is at `MAX_PANES` or the focused pane is too
+    /// small to halve.
+    ///
+    /// **Does not emit `PaneStarted`.** Callers are responsible for
+    /// firing the event after they've attached metadata (name, role) so
+    /// subscribers see the pane with its final identity — otherwise the
+    /// event races the metadata and lands with `name: None, role: None`.
+    fn split_focused_pane(&mut self, direction: SplitDirection) -> Result<Option<usize>> {
         if self.ws().layout.pane_count() >= Self::MAX_PANES {
-            return Ok(());
+            return Ok(None);
         }
 
         if let Some(&(_, rect)) = self
@@ -1587,12 +1607,12 @@ impl App {
             match direction {
                 SplitDirection::Vertical => {
                     if rect.width / 2 < Self::MIN_PANE_WIDTH {
-                        return Ok(());
+                        return Ok(None);
                     }
                 }
                 SplitDirection::Horizontal => {
                     if rect.height / 2 < Self::MIN_PANE_HEIGHT {
-                        return Ok(());
+                        return Ok(None);
                     }
                 }
             }
@@ -1617,8 +1637,7 @@ impl App {
         ws.focused_pane_id = new_id;
 
         self.mark_layout_change();
-        self.emit_pane_started(new_id);
-        Ok(())
+        Ok(Some(new_id))
     }
 
     /// Apply a multi-pane layout to the active workspace.
@@ -1671,10 +1690,19 @@ impl App {
                     DirectionSpec::Vertical => SplitDirection::Vertical,
                     DirectionSpec::Horizontal => SplitDirection::Horizontal,
                 };
-                self.split_focused_pane(split_dir)?;
-                let new_pane_id = self.ws().focused_pane_id;
+                let new_pane_id = self.split_focused_pane(split_dir)?.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "layout split refused (too small or MAX_PANES) while applying layout"
+                    )
+                })?;
+                // Recurse into both subtrees first — the leaves attach
+                // name/role to their pane ids — then emit PaneStarted
+                // so subscribers see the new pane with its final
+                // identity (the initial pane was already emitted by
+                // App::new; only the freshly-split one needs it here).
                 self.apply_layout_node(first, target_pane_id)?;
                 self.apply_layout_node(second, new_pane_id)?;
+                self.emit_pane_started(new_pane_id);
                 Ok(())
             }
         }
@@ -2041,7 +2069,9 @@ impl App {
                         && row >= rect.y
                         && row < rect.y + rect.height
                     {
-                        let _ = self.new_tab();
+                        if let Ok(new_id) = self.new_tab() {
+                            self.emit_pane_started(new_id);
+                        }
                         return;
                     }
                 }
@@ -2824,10 +2854,13 @@ impl App {
         // Delegate to the existing keybinding-driven new_tab so we
         // don't drift from the interactive behavior (pane id bookkeeping,
         // active_tab update, cwd inheritance). The freshly-created tab
-        // becomes the active one, so `ws_mut()` points at it.
-        self.new_tab()
+        // becomes the active one, so `ws_mut()` points at it. new_tab
+        // deliberately does not emit PaneStarted — we emit below after
+        // attaching name / role / label so subscribers see the final
+        // identity.
+        let new_pane_id = self
+            .new_tab()
             .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?;
-        let new_pane_id = self.ws().focused_pane_id;
         if let Some(pane) = self.ws_mut().panes.get_mut(&new_pane_id) {
             if let Some(cmd) = command {
                 pane.queue_startup_command(&cmd);
@@ -2847,6 +2880,7 @@ impl App {
             }
         }
         self.dirty = true;
+        self.emit_pane_started(new_pane_id);
         Ok(new_pane_id)
     }
 
@@ -2910,19 +2944,25 @@ impl App {
             ipc::Direction::Vertical => SplitDirection::Vertical,
             ipc::Direction::Horizontal => SplitDirection::Horizontal,
         };
-        self.split_focused_pane(split_dir)
-            .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?;
-        let new_pane_id = self.ws().focused_pane_id;
-        // split_focused_pane is a no-op (keeps focus) when the pane is
-        // too small or the workspace is already at MAX_PANES; detect
-        // that by checking whether focus actually advanced.
-        if new_pane_id == target_pane_id {
-            self.ws_mut().focused_pane_id = prev_focus;
-            return Err(ipc::CodedError::new(
-                ipc::err_code::SPLIT_REFUSED,
-                "split refused (max panes reached or pane too small)",
-            ));
-        }
+        let new_pane_id = match self
+            .split_focused_pane(split_dir)
+            .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?
+        {
+            Some(id) => id,
+            None => {
+                // Refused (too small or MAX_PANES). Restore focus so
+                // the refusal is invisible to the caller state.
+                self.ws_mut().focused_pane_id = prev_focus;
+                return Err(ipc::CodedError::new(
+                    ipc::err_code::SPLIT_REFUSED,
+                    "split refused (max panes reached or pane too small)",
+                ));
+            }
+        };
+        // Attach name/role/command BEFORE emitting PaneStarted so
+        // subscribers see the final identity. Otherwise the event races
+        // the metadata and lands with `name: None, role: None`, breaking
+        // consumers that filter on `.name == "<stable>"`.
         if let Some(pane) = self.ws_mut().panes.get_mut(&new_pane_id) {
             if let Some(cmd) = command {
                 pane.queue_startup_command(&cmd);
@@ -2936,6 +2976,7 @@ impl App {
                 self.ws_mut().pane_names.insert(name, new_pane_id);
             }
         }
+        self.emit_pane_started(new_pane_id);
         Ok(new_pane_id)
     }
 }
@@ -3816,6 +3857,194 @@ mod tests {
             !saw_b_exited,
             "PaneExited for b must be suppressed when exit_event_emitted was already set"
         );
+
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_split_emits_pane_started_with_attached_name_and_role() {
+        // Regression: previously split_focused_pane emitted PaneStarted
+        // before handle_split attached name / role, so subscribers saw
+        // `name: None, role: None` and could never filter on the
+        // stable identifier. Guard against that regression by
+        // subscribing and verifying the emitted event carries both.
+        let mut app = App::new(40, 80).expect("App::new");
+        let (_sub_id, rx) = app.event_bus.subscribe();
+
+        let id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                Some("worker-1".into()),
+                Some("worker".into()),
+            )
+            .expect("split succeeds");
+
+        let mut observed: Option<(Option<String>, Option<String>)> = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let ipc::Event::PaneStarted {
+                id: ev_id,
+                name,
+                role,
+                ..
+            } = ev
+            {
+                if ev_id == id {
+                    observed = Some((name, role));
+                    break;
+                }
+            }
+        }
+        let (name, role) = observed.expect("PaneStarted for new pane");
+        assert_eq!(name.as_deref(), Some("worker-1"));
+        assert_eq!(role.as_deref(), Some("worker"));
+
+        app.shutdown();
+    }
+
+    #[test]
+    fn apply_layout_emits_pane_started_after_leaf_metadata_is_attached() {
+        // Regression: apply_layout_node's Split arm used to emit
+        // PaneStarted for the freshly-created pane before recursing
+        // into the leaf that attaches its role, so subscribers saw
+        // the new pane with `role: None`.
+        let cfg = crate::layout_config::LayoutConfig {
+            version: 1,
+            name: "role-test".into(),
+            root: crate::layout_config::LayoutNodeSpec::Split {
+                direction: crate::layout_config::DirectionSpec::Vertical,
+                ratio: 0.5,
+                first: Box::new(crate::layout_config::LayoutNodeSpec::Pane {
+                    id: "keeper".into(),
+                    command: None,
+                    role: Some("keeper-role".into()),
+                }),
+                second: Box::new(crate::layout_config::LayoutNodeSpec::Pane {
+                    id: "new-leaf".into(),
+                    command: None,
+                    role: Some("leaf-role".into()),
+                }),
+            },
+        };
+
+        let mut app = App::new(40, 80).expect("App::new");
+        let (_sub_id, rx) = app.event_bus.subscribe();
+
+        app.apply_layout(&cfg).expect("apply_layout");
+
+        let new_leaf_id = *app.ws().pane_names.get("new-leaf").expect("registered");
+        let mut observed: Option<(Option<String>, Option<String>)> = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let ipc::Event::PaneStarted {
+                id: ev_id,
+                name,
+                role,
+                ..
+            } = ev
+            {
+                if ev_id == new_leaf_id {
+                    observed = Some((name, role));
+                    break;
+                }
+            }
+        }
+        let (name, role) = observed.expect("PaneStarted for freshly-split leaf");
+        assert_eq!(name.as_deref(), Some("new-leaf"));
+        assert_eq!(role.as_deref(), Some("leaf-role"));
+
+        app.shutdown();
+    }
+
+    #[test]
+    fn split_refused_keeps_focus_and_emits_no_pane_started() {
+        // Drive handle_split into its refused arm (pane too small
+        // after halving, below MIN_PANE_WIDTH) and confirm:
+        //   * SPLIT_REFUSED bubbles up,
+        //   * focus stays where it was,
+        //   * the requested name is NOT registered,
+        //   * no PaneStarted event leaks out for the nonexistent pane.
+        let mut app = App::new(40, 80).expect("App::new");
+
+        // First split succeeds: 80 cols minus file-tree (20) = 60 cols
+        // of pane area → two panes of ~30 cols each.
+        app.handle_split(
+            &ipc::PaneRef::Focused,
+            ipc::Direction::Vertical,
+            None,
+            Some("first".into()),
+            None,
+        )
+        .expect("first split should succeed");
+
+        let focus_before = app.ws().focused_pane_id;
+        let (_sub_id, rx) = app.event_bus.subscribe();
+
+        // Second vertical split on the now-focused ~30-col pane would
+        // produce ~15-col children, below MIN_PANE_WIDTH (20) → refuse.
+        let err = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                Some("overflow".into()),
+                None,
+            )
+            .expect_err("too-narrow split must be refused");
+        assert_eq!(err.code, Some(ipc::err_code::SPLIT_REFUSED));
+
+        assert_eq!(
+            app.ws().focused_pane_id,
+            focus_before,
+            "refused split must not move focus"
+        );
+        assert!(
+            !app.ws().pane_names.contains_key("overflow"),
+            "refused split must not register its requested name"
+        );
+
+        let any_started = rx
+            .try_iter()
+            .any(|ev| matches!(ev, ipc::Event::PaneStarted { .. }));
+        assert!(!any_started, "refused split must not emit PaneStarted");
+
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_new_tab_emits_pane_started_with_attached_name_and_role() {
+        // Same race as handle_split, but for handle_new_tab: metadata
+        // must be attached before emitting PaneStarted.
+        let mut app = App::new(40, 80).expect("App::new");
+        let (_sub_id, rx) = app.event_bus.subscribe();
+
+        let id = app
+            .handle_new_tab(
+                None,
+                Some("tab-pane".into()),
+                Some("tab label".into()),
+                Some("tab-role".into()),
+            )
+            .expect("new tab succeeds");
+
+        let mut observed: Option<(Option<String>, Option<String>)> = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let ipc::Event::PaneStarted {
+                id: ev_id,
+                name,
+                role,
+                ..
+            } = ev
+            {
+                if ev_id == id {
+                    observed = Some((name, role));
+                    break;
+                }
+            }
+        }
+        let (name, role) = observed.expect("PaneStarted for new tab's pane");
+        assert_eq!(name.as_deref(), Some("tab-pane"));
+        assert_eq!(role.as_deref(), Some("tab-role"));
 
         app.shutdown();
     }
