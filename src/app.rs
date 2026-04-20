@@ -4101,7 +4101,8 @@ mod tests {
         // file-tree sidebar.
         let mut app = App::new(40, 120).expect("App::new");
         app.last_term_size = (120, 40);
-        // Turn on the file tree (default is off in App::new).
+        // Workspace::new sets file_tree_visible = true; set it
+        // explicitly here to make the test's precondition obvious.
         app.ws_mut().file_tree_visible = true;
         let tree_w = app.file_tree_width;
         assert!(tree_w > 0, "file tree width should be non-zero");
@@ -4121,6 +4122,45 @@ mod tests {
             "pane origin must sit past the file-tree sidebar"
         );
         assert_eq!(rect.y, 1, "pane origin must sit below the tab strip");
+    }
+
+    #[test]
+    fn relayout_panes_rect_origin_follows_layout_swapped_preview() {
+        // With `layout_swapped = true` the chunk order is
+        // [tree] [preview] [panes] [...]. Pane origin must therefore
+        // include the preview width too. With `layout_swapped = false`
+        // preview sits to the right of the panes and does not offset
+        // the origin.
+        use std::path::PathBuf;
+
+        for swapped in [true, false] {
+            let mut app = App::new(40, 160).expect("App::new");
+            app.last_term_size = (160, 40);
+            app.ws_mut().file_tree_visible = true;
+            // Activate preview without touching disk: is_active() just
+            // checks Preview::file_path.is_some().
+            app.ws_mut().preview.file_path = Some(PathBuf::from("dummy"));
+            app.layout_swapped = swapped;
+
+            let tree_w = app.file_tree_width;
+            let preview_w = app.preview_width;
+
+            app.relayout_panes();
+
+            let pane_id = app.ws().focused_pane_id;
+            let rect = app
+                .ws()
+                .last_pane_rects
+                .iter()
+                .find(|(id, _)| *id == pane_id)
+                .map(|(_, r)| *r)
+                .expect("relayout should populate rect for focused pane");
+            let expected_x = tree_w + if swapped { preview_w } else { 0 };
+            assert_eq!(
+                rect.x, expected_x,
+                "swapped={swapped}: pane x should be {expected_x} (tree_w={tree_w}, preview_w={preview_w})"
+            );
+        }
     }
 
     #[test]
