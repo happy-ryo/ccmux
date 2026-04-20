@@ -28,6 +28,19 @@ pub struct Cli {
     ///   never opened.
     #[arg(long, value_name = "MODE", value_enum)]
     pub ime: Option<crate::config::ImeMode>,
+
+    /// Minimum columns each child pane must retain after a vertical
+    /// split. Splits that would produce a narrower child are refused.
+    /// A value of `0` is clamped to `1` at runtime to avoid degenerate
+    /// halving math. Default: 20.
+    #[arg(long, value_name = "COLS", default_value_t = 20)]
+    pub min_pane_width: u16,
+
+    /// Minimum rows each child pane must retain after a horizontal
+    /// split. Splits that would produce a shorter child are refused.
+    /// A value of `0` is clamped to `1` at runtime. Default: 5.
+    #[arg(long, value_name = "ROWS", default_value_t = 5)]
+    pub min_pane_height: u16,
 }
 
 /// Subcommands dispatched to a running ccmux instance via its IPC
@@ -713,6 +726,30 @@ mod tests {
     fn ime_flag_is_optional() {
         let cli = Cli::try_parse_from(["ccmux"]).unwrap();
         assert_eq!(cli.ime, None);
+    }
+
+    #[test]
+    fn min_pane_size_defaults_to_20_and_5() {
+        let cli = Cli::try_parse_from(["ccmux"]).unwrap();
+        assert_eq!(cli.min_pane_width, 20);
+        assert_eq!(cli.min_pane_height, 5);
+    }
+
+    #[test]
+    fn min_pane_size_accepts_override_and_zero() {
+        // Non-zero override is stored verbatim; the runtime clamp of
+        // `0 → 1` lives in `App::set_min_pane_size`, not in clap, so
+        // this parses without error.
+        let cli = Cli::try_parse_from(["ccmux", "--min-pane-width", "0", "--min-pane-height", "3"])
+            .unwrap();
+        assert_eq!(cli.min_pane_width, 0);
+        assert_eq!(cli.min_pane_height, 3);
+
+        let cli2 =
+            Cli::try_parse_from(["ccmux", "--min-pane-width", "12", "--min-pane-height", "4"])
+                .unwrap();
+        assert_eq!(cli2.min_pane_width, 12);
+        assert_eq!(cli2.min_pane_height, 4);
     }
 
     #[test]

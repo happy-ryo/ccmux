@@ -616,6 +616,15 @@ pub struct App {
     /// by `maybe_auto_open_always_overlay` to detect focus changes
     /// and clear `always_dismissed_pane`.
     last_focused_pane: Option<usize>,
+    /// Minimum width (cols) each child must retain after a vertical
+    /// split. Populated from `--min-pane-width`; `0` is clamped to `1`
+    /// in `set_min_pane_size` to avoid degenerate halving math.
+    /// Private — the setter is the only supported entry point so the
+    /// clamp invariant cannot be bypassed.
+    min_pane_width: u16,
+    /// Minimum height (rows) each child must retain after a horizontal
+    /// split. See [`App::set_min_pane_size`] for the clamp rule.
+    min_pane_height: u16,
 }
 
 impl App {
@@ -678,6 +687,8 @@ impl App {
             ime_mode: crate::config::ImeMode::default(),
             always_dismissed_pane: None,
             last_focused_pane: None,
+            min_pane_width: 20,
+            min_pane_height: 5,
         })
     }
 
@@ -687,6 +698,15 @@ impl App {
     /// collapsed into a single resolved value.
     pub fn apply_config(&mut self, cfg: &crate::config::Config) {
         self.ime_mode = cfg.ime.mode;
+    }
+
+    /// Override the minimum per-child split dimensions. Values of `0`
+    /// are clamped to `1` so `rect.width / 2 < min` stays meaningful
+    /// (`0` would let splits succeed on a 1-column pane and produce
+    /// zero-width children).
+    pub fn set_min_pane_size(&mut self, width: u16, height: u16) {
+        self.min_pane_width = width.max(1);
+        self.min_pane_height = height.max(1);
     }
 
     /// In `Always` mode, make sure the IME overlay is open whenever
@@ -1581,8 +1601,6 @@ impl App {
     }
 
     const MAX_PANES: usize = 16;
-    const MIN_PANE_WIDTH: u16 = 20;
-    const MIN_PANE_HEIGHT: u16 = 5;
 
     /// Create a new pane by splitting the focused one. Returns the new
     /// pane id on success, or `None` when the split was refused because
@@ -1606,12 +1624,12 @@ impl App {
         {
             match direction {
                 SplitDirection::Vertical => {
-                    if rect.width / 2 < Self::MIN_PANE_WIDTH {
+                    if rect.width / 2 < self.min_pane_width {
                         return Ok(None);
                     }
                 }
                 SplitDirection::Horizontal => {
-                    if rect.height / 2 < Self::MIN_PANE_HEIGHT {
+                    if rect.height / 2 < self.min_pane_height {
                         return Ok(None);
                     }
                 }
@@ -3959,7 +3977,8 @@ mod tests {
     #[test]
     fn split_refused_keeps_focus_and_emits_no_pane_started() {
         // Drive handle_split into its refused arm (pane too small
-        // after halving, below MIN_PANE_WIDTH) and confirm:
+        // after halving, below `min_pane_width` — default 20) and
+        // confirm:
         //   * SPLIT_REFUSED bubbles up,
         //   * focus stays where it was,
         //   * the requested name is NOT registered,
@@ -3981,7 +4000,8 @@ mod tests {
         let (_sub_id, rx) = app.event_bus.subscribe();
 
         // Second vertical split on the now-focused ~30-col pane would
-        // produce ~15-col children, below MIN_PANE_WIDTH (20) → refuse.
+        // produce ~15-col children, below `min_pane_width` (default
+        // 20) → refuse.
         let err = app
             .handle_split(
                 &ipc::PaneRef::Focused,
@@ -4008,6 +4028,81 @@ mod tests {
             .any(|ev| matches!(ev, ipc::Event::PaneStarted { .. }));
         assert!(!any_started, "refused split must not emit PaneStarted");
 
+        app.shutdown();
+    }
+
+    #[test]
+    fn set_min_pane_size_lets_split_succeed_below_default_threshold() {
+        // With defaults (20 / 5), a second vertical split on a
+        // ~30-col pane refuses (same geometry as
+        // `split_refused_keeps_focus_and_emits_no_pane_started`).
+        // Lowering the threshold via `set_min_pane_size` must let the
+        // same split succeed and emit exactly one PaneStarted with
+        // the attached name. Exercises the runtime wiring that CLI
+        // parse tests cannot cover.
+        let mut app = App::new(40, 80).expect("App::new");
+
+        // First split runs under defaults (20 / 5) so the cached rect
+        // geometry feeding the second split is identical to the
+        // refusal test's setup — only the threshold itself differs.
+        app.handle_split(
+            &ipc::PaneRef::Focused,
+            ipc::Direction::Vertical,
+            None,
+            Some("first".into()),
+            None,
+        )
+        .expect("first split should succeed");
+
+        // Lower the threshold just before the split that would
+        // otherwise refuse, so the causal contrast with the sibling
+        // refusal test is explicit in the test body.
+        app.set_min_pane_size(10, 3);
+
+        let (_sub_id, rx) = app.event_bus.subscribe();
+
+        let new_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                Some("narrow".into()),
+                None,
+            )
+            .expect("split should succeed once min_pane_width is lowered");
+
+        assert_eq!(app.ws().focused_pane_id, new_id, "focus moves to new pane");
+        assert_eq!(
+            app.ws().pane_names.get("narrow").copied(),
+            Some(new_id),
+            "requested name registers on success"
+        );
+
+        let started_ids: Vec<usize> = rx
+            .try_iter()
+            .filter_map(|ev| match ev {
+                ipc::Event::PaneStarted { id, .. } => Some(id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            started_ids,
+            vec![new_id],
+            "exactly one PaneStarted for the freshly-created pane"
+        );
+
+        app.shutdown();
+    }
+
+    #[test]
+    fn set_min_pane_size_clamps_zero_to_one() {
+        // `--min-pane-width 0` would make `rect.width / 2 < 0` always
+        // false and let splits succeed on 1-col panes. The setter
+        // must floor the value at 1.
+        let mut app = App::new(40, 80).expect("App::new");
+        app.set_min_pane_size(0, 0);
+        assert_eq!(app.min_pane_width, 1);
+        assert_eq!(app.min_pane_height, 1);
         app.shutdown();
     }
 
