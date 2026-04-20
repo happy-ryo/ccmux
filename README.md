@@ -117,6 +117,8 @@ freeze_panes_on_overlay = true
 overlay_catchup_ms = 3000
 ```
 
+![Centered IME overlay composing Japanese — candidate window anchors right under the caret, panes stay frozen behind it](ime-overlay.png)
+
 **What you get:**
 
 1. **Overlay opens automatically.** As soon as focus lands on a Claude pane, a centered multi-line composition box appears. The host-terminal IME candidate window anchors to the caret inside the box, so long JP words stop "jumping" around the screen mid-conversion (Issue #25).
