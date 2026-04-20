@@ -2939,6 +2939,54 @@ mod tests {
     }
 
     #[test]
+    fn hotkey_mode_esc_closes_overlay_and_discards_buffer() {
+        // Regression guard for the #90 cleanup: Esc on the overlay
+        // must always close and discard, regardless of whether the
+        // buffer was empty. The pre-removal Always-mode behavior
+        // used to keep a composing overlay open on the first Esc
+        // and dismiss on the second — Hotkey mode was already
+        // "close immediately", and this test pins that down so a
+        // future copy-paste of the old branch can't sneak back.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_a = app.ws().focused_pane_id;
+        assert_eq!(app.ime_mode, crate::config::ImeMode::Hotkey);
+        let mut state = crate::input::overlay::OverlayState::new(pane_a);
+        state.insert_char('あ');
+        app.overlay = Some(state);
+
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let consumed = crate::input::overlay::handle_overlay_key(&mut app, esc)
+            .expect("handle_overlay_key Esc");
+
+        assert!(consumed, "Esc must be consumed by the overlay handler");
+        assert!(
+            app.overlay.is_none(),
+            "Esc must close the overlay even with a non-empty buffer"
+        );
+    }
+
+    #[test]
+    fn hotkey_mode_ctrl_c_closes_overlay_and_discards_buffer() {
+        // Symmetric to the Esc test — Ctrl+C shares the cancel
+        // branch and must behave identically, without forwarding
+        // the Ctrl+C keystroke to the target pane. The old
+        // Always-mode path did forward it on empty-buffer
+        // dismissal; that forwarding is gone along with Always.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_a = app.ws().focused_pane_id;
+        let mut state = crate::input::overlay::OverlayState::new(pane_a);
+        state.insert_char('x');
+        app.overlay = Some(state);
+
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let consumed = crate::input::overlay::handle_overlay_key(&mut app, ctrl_c)
+            .expect("handle_overlay_key Ctrl+C");
+
+        assert!(consumed);
+        assert!(app.overlay.is_none());
+    }
+
+    #[test]
     fn freeze_panes_suppresses_pty_output_repaint_when_overlay_open() {
         // With freeze enabled and the overlay open, a burst of
         // PtyOutput events must NOT mark the app dirty, so the screen
