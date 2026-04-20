@@ -1,5 +1,8 @@
 [package]
 name = "ccmux"
+# Fork keeps its own version line; intentionally stays below the
+# upstream `0.6.0` bump. Next release will jump past it when we ship
+# the image-preview sync + our own accumulated changes.
 version = "0.5.8"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
@@ -10,7 +13,7 @@ crossterm = "0.29"
 portable-pty = "0.8"
 vt100 = "0.16"
 anyhow = "1.0"
-unicode-width = "0.2"
+unicode-width = "0.2.1"
 arboard = "3.6"
 syntect = "5.3"
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
@@ -29,6 +32,10 @@ interprocess = "2.4.2"
 oneshot = "0.1"
 subtle = "2"
 humantime = "2"
+# Upstream image-preview sync (#7): image decoding + ratatui-image
+# picker / protocol detection for the preview panel.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
+ratatui-image = { version = "10", default-features = false, features = ["crossterm"] }
 
 [target.'cfg(unix)'.dependencies]
 # getuid() for the IPC endpoint directory name. Used only on Unix;
