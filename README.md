@@ -117,7 +117,7 @@ freeze_panes_on_overlay = true
 overlay_catchup_ms = 3000
 ```
 
-![Centered IME overlay composing Japanese — candidate window anchors right under the caret, panes stay frozen behind it](ime-overlay.png)
+![Centered IME overlay composing Japanese — the candidate window opens right under the caret with the usual "Tab to select / Shift+Enter to commit head" hints, while the two Claude panes stay frozen behind it](ime-overlay.png)
 
 **What you get:**
 
