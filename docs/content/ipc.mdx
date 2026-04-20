@@ -17,10 +17,18 @@ import { Callout } from 'nextra/components'
 ```bash
 $ ccmux list
 [
-  { "id": 1, "name": "secretary", "role": "leader", "focused": true },
-  { "id": 2, "name": "worker-foo", "role": "worker", "focused": false }
+  { "id": 1, "name": "secretary", "role": "leader", "focused": true,
+    "x": 0, "y": 0, "width": 80, "height": 24 },
+  { "id": 2, "name": "worker-foo", "role": "worker", "focused": false,
+    "x": 80, "y": 0, "width": 80, "height": 24 }
 ]
 ```
+
+`x` / `y` / `width` / `height` は pane のターミナル上の矩形
+（左上 = `(0, 0)`、単位はセル）。値はレイアウト計算または描画の直後に
+更新され、file-tree / preview サイドバーのオフセットも反映する。
+ccmux 起動直後など一度もレイアウト計算が走っていない状態では 4 値とも
+`0` になる。既存 consumer は新フィールドを無視しても動作する。
 
 ### `ccmux send`
 

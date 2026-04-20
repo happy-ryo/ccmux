@@ -861,9 +861,14 @@ impl App {
         let preview_w = if has_preview { preview_w_nom } else { 0 };
         let pane_w = cols.saturating_sub(tree_w).saturating_sub(preview_w);
 
-        // x/y exact values don't matter for calculate_rects' sub-areas,
-        // only width/height propagate into the recursive split sizes.
-        let pane_area = Rect::new(0, tab_h, pane_w, main_h);
+        // Mirror ui::render_main_area's chunk ordering so the cached
+        // rects reflect actual on-screen positions (not just sizes).
+        // The IPC `list` response and mouse hit-testing both read x/y
+        // from last_pane_rects, so getting the origin right matters
+        // here even between renders. Chunk order there is:
+        //   [tree?] [preview(if swapped)?] [panes] [preview(if !swapped)?]
+        let pane_x = tree_w + if self.layout_swapped { preview_w } else { 0 };
+        let pane_area = Rect::new(pane_x, tab_h, pane_w, main_h);
         let rects = self.ws().layout.calculate_rects(pane_area);
 
         let mut any_changed = false;
@@ -2689,14 +2694,20 @@ impl App {
                 for (name, id) in &ws.pane_names {
                     name_by_id.insert(*id, name.clone());
                 }
+                let rect_by_id: HashMap<usize, Rect> = ws.last_pane_rects.iter().copied().collect();
                 let mut infos: Vec<PaneInfo> = Vec::new();
                 for id in ws.layout.collect_pane_ids() {
                     let role = ws.panes.get(&id).and_then(|p| p.role.clone());
+                    let rect = rect_by_id.get(&id).copied().unwrap_or_default();
                     infos.push(PaneInfo {
                         id,
                         name: name_by_id.get(&id).cloned(),
                         role,
                         focused: id == focused,
+                        x: rect.x,
+                        y: rect.y,
+                        width: rect.width,
+                        height: rect.height,
                     });
                 }
                 let _ = reply.send(infos);
@@ -4142,6 +4153,168 @@ mod tests {
         assert_eq!(role.as_deref(), Some("tab-role"));
 
         app.shutdown();
+    }
+
+    #[test]
+    fn list_command_includes_rect_from_last_pane_rects() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+        app.ws_mut().last_pane_rects = vec![(
+            pane_id,
+            Rect {
+                x: 2,
+                y: 3,
+                width: 50,
+                height: 20,
+            },
+        )];
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        app.handle_app_command(AppCommand::List { reply: reply_tx });
+        let infos = reply_rx.recv().expect("list reply");
+
+        assert_eq!(infos.len(), 1);
+        let info = &infos[0];
+        assert_eq!(info.id, pane_id);
+        assert!(info.focused);
+        assert_eq!(info.x, 2);
+        assert_eq!(info.y, 3);
+        assert_eq!(info.width, 50);
+        assert_eq!(info.height, 20);
+    }
+
+    #[test]
+    fn relayout_panes_caches_rect_origin_accounting_for_sidebar() {
+        // Before #80, relayout_panes() used Rect::new(0, tab_h, ...)
+        // because only width/height mattered for PTY sizing. Now that
+        // `ccmux list` also exposes x/y from the same cache, the
+        // origin must match ui::render_main_area's chunk order (tree
+        // on the left, preview on the swapped side) — otherwise a
+        // List call between a layout change and the next draw would
+        // return x=0 for a pane that's actually rendered past the
+        // file-tree sidebar.
+        let mut app = App::new(40, 120).expect("App::new");
+        app.last_term_size = (120, 40);
+        // Workspace::new sets file_tree_visible = true; set it
+        // explicitly here to make the test's precondition obvious.
+        app.ws_mut().file_tree_visible = true;
+        let tree_w = app.file_tree_width;
+        assert!(tree_w > 0, "file tree width should be non-zero");
+
+        app.relayout_panes();
+
+        let pane_id = app.ws().focused_pane_id;
+        let rect = app
+            .ws()
+            .last_pane_rects
+            .iter()
+            .find(|(id, _)| *id == pane_id)
+            .map(|(_, r)| *r)
+            .expect("relayout should populate rect for focused pane");
+        assert_eq!(
+            rect.x, tree_w,
+            "pane origin must sit past the file-tree sidebar"
+        );
+        assert_eq!(rect.y, 1, "pane origin must sit below the tab strip");
+    }
+
+    #[test]
+    fn relayout_panes_rect_origin_follows_layout_swapped_preview() {
+        // With `layout_swapped = true` the chunk order is
+        // [tree] [preview] [panes] [...]. Pane origin must therefore
+        // include the preview width too. With `layout_swapped = false`
+        // preview sits to the right of the panes and does not offset
+        // the origin.
+        use std::path::PathBuf;
+
+        for swapped in [true, false] {
+            let mut app = App::new(40, 160).expect("App::new");
+            app.last_term_size = (160, 40);
+            app.ws_mut().file_tree_visible = true;
+            // Activate preview without touching disk: is_active() just
+            // checks Preview::file_path.is_some().
+            app.ws_mut().preview.file_path = Some(PathBuf::from("dummy"));
+            app.layout_swapped = swapped;
+
+            let tree_w = app.file_tree_width;
+            let preview_w = app.preview_width;
+
+            app.relayout_panes();
+
+            let pane_id = app.ws().focused_pane_id;
+            let rect = app
+                .ws()
+                .last_pane_rects
+                .iter()
+                .find(|(id, _)| *id == pane_id)
+                .map(|(_, r)| *r)
+                .expect("relayout should populate rect for focused pane");
+            let expected_x = tree_w + if swapped { preview_w } else { 0 };
+            assert_eq!(
+                rect.x, expected_x,
+                "swapped={swapped}: pane x should be {expected_x} (tree_w={tree_w}, preview_w={preview_w})"
+            );
+        }
+    }
+
+    #[test]
+    fn list_command_ignores_stale_rect_entries_for_removed_panes() {
+        // Entries in last_pane_rects for pane ids that are no longer
+        // in the layout must not leak into the response. Output is
+        // keyed off layout.collect_pane_ids(), so a stale rect for a
+        // nonexistent id should simply be dropped.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+        let ghost_id = pane_id.wrapping_add(9999);
+        app.ws_mut().last_pane_rects = vec![
+            (
+                pane_id,
+                Rect {
+                    x: 1,
+                    y: 2,
+                    width: 10,
+                    height: 5,
+                },
+            ),
+            (
+                ghost_id,
+                Rect {
+                    x: 100,
+                    y: 100,
+                    width: 100,
+                    height: 100,
+                },
+            ),
+        ];
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        app.handle_app_command(AppCommand::List { reply: reply_tx });
+        let infos = reply_rx.recv().expect("list reply");
+
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].id, pane_id);
+        assert_eq!(infos[0].width, 10);
+        assert!(
+            infos.iter().all(|i| i.id != ghost_id),
+            "stale rect for removed pane leaked into list"
+        );
+    }
+
+    #[test]
+    fn list_command_zero_rect_when_pane_not_in_last_pane_rects() {
+        let mut app = App::new(40, 80).expect("App::new");
+        app.ws_mut().last_pane_rects.clear();
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        app.handle_app_command(AppCommand::List { reply: reply_tx });
+        let infos = reply_rx.recv().expect("list reply");
+
+        assert_eq!(infos.len(), 1);
+        let info = &infos[0];
+        assert_eq!(info.x, 0);
+        assert_eq!(info.y, 0);
+        assert_eq!(info.width, 0);
+        assert_eq!(info.height, 0);
     }
 
     #[test]
