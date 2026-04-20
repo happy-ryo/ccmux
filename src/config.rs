@@ -26,6 +26,15 @@ pub struct Config {
 #[serde(default)]
 pub struct ImeConfig {
     pub mode: ImeMode,
+    /// When `true`, pane repaints driven by PTY output are suppressed
+    /// while the IME composition overlay is open (Issue #37 / #82
+    /// Phase 2). vt100 parsers keep advancing in the background, so
+    /// panes catch up instantly when the overlay closes. Off by
+    /// default because it's a user-visible behavior change (the
+    /// screen literally stops updating during composition) even
+    /// though it's the intended way to kill overlay flicker on hosts
+    /// where `overlay_poll_ms` throttling alone isn't enough.
+    pub freeze_panes_on_overlay: bool,
 }
 
 /// How Ctrl+; behaves in a focused pane.
@@ -139,9 +148,16 @@ impl Config {
     /// Apply an optional CLI override on top of the loaded config.
     /// `None` leaves the field untouched, mirroring the precedence
     /// "CLI > file > default".
-    pub fn apply_cli_overrides(&mut self, ime_mode: Option<ImeMode>) {
+    pub fn apply_cli_overrides(
+        &mut self,
+        ime_mode: Option<ImeMode>,
+        freeze_panes_on_overlay: Option<bool>,
+    ) {
         if let Some(mode) = ime_mode {
             self.ime.mode = mode;
+        }
+        if let Some(freeze) = freeze_panes_on_overlay {
+            self.ime.freeze_panes_on_overlay = freeze;
         }
     }
 }
@@ -243,7 +259,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(Some(ImeMode::Off));
+        cfg.apply_cli_overrides(Some(ImeMode::Off), None);
         assert_eq!(cfg.ime.mode, ImeMode::Off);
     }
 
@@ -256,7 +272,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(None);
+        cfg.apply_cli_overrides(None, None);
         assert_eq!(cfg.ime.mode, ImeMode::Off);
     }
 
@@ -296,6 +312,41 @@ mod tests {
         let cfg = Config::load_from(&tmp);
         std::fs::remove_file(&tmp).ok();
         assert_eq!(cfg.ime.mode, ImeMode::Hotkey);
+    }
+
+    #[test]
+    fn freeze_panes_defaults_to_false() {
+        let cfg = Config::default();
+        assert!(!cfg.ime.freeze_panes_on_overlay);
+    }
+
+    #[test]
+    fn parses_freeze_panes_from_toml() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [ime]
+            freeze_panes_on_overlay = true
+            "#,
+        )
+        .unwrap();
+        assert!(cfg.ime.freeze_panes_on_overlay);
+    }
+
+    #[test]
+    fn cli_freeze_panes_beats_file() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [ime]
+            freeze_panes_on_overlay = true
+            "#,
+        )
+        .unwrap();
+        cfg.apply_cli_overrides(None, Some(false));
+        assert!(!cfg.ime.freeze_panes_on_overlay);
+
+        let mut cfg2 = Config::default();
+        cfg2.apply_cli_overrides(None, Some(true));
+        assert!(cfg2.ime.freeze_panes_on_overlay);
     }
 
     #[test]

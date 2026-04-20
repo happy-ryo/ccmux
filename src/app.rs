@@ -531,6 +531,13 @@ pub struct App {
     /// IME overlay mode resolved from config + CLI. `Off` disables
     /// the Ctrl+; hotkey so the keystroke reaches the PTY untouched.
     pub ime_mode: crate::config::ImeMode,
+    /// When `true`, PTY-output-driven repaints are suppressed while
+    /// the IME composition overlay is open (Issue #37 / #82 Phase 2).
+    /// Populated from config + CLI via [`App::apply_config`]; consumed
+    /// by [`App::drain_pty_events`]. State-changing events (pane exit,
+    /// cwd update) still repaint because those affect non-pane UI
+    /// (tab labels, sidebar).
+    pub ime_freeze_panes_on_overlay: bool,
     /// In `Always` mode, the pane id where the user explicitly
     /// dismissed (Esc with empty buffer / Ctrl+C) the auto-opened
     /// overlay. Blocks re-open on the same focus. Cleared whenever
@@ -610,6 +617,7 @@ impl App {
             clipboard: None,
             event_bus,
             ime_mode: crate::config::ImeMode::default(),
+            ime_freeze_panes_on_overlay: false,
             always_dismissed_pane: None,
             last_focused_pane: None,
             min_pane_width: 20,
@@ -623,6 +631,7 @@ impl App {
     /// collapsed into a single resolved value.
     pub fn apply_config(&mut self, cfg: &crate::config::Config) {
         self.ime_mode = cfg.ime.mode;
+        self.ime_freeze_panes_on_overlay = cfg.ime.freeze_panes_on_overlay;
     }
 
     /// Override the minimum per-child split dimensions. Values of `0`
@@ -2361,10 +2370,18 @@ impl App {
 
     pub fn drain_pty_events(&mut self) -> bool {
         let mut had_events = false;
+        // Track state-changing events (pane exit, cwd update) separately
+        // from raw PTY output. When `ime_freeze_panes_on_overlay` is on
+        // and the overlay is open we suppress repaints caused by pure
+        // PTY output so Claude's thinking spinner can't flicker the
+        // overlay, but state-changing events still need to repaint
+        // because they affect non-pane UI (tab labels, sidebar cwd).
+        let mut had_state_change = false;
         while let Ok(event) = self.event_rx.try_recv() {
             had_events = true;
             match event {
                 AppEvent::PtyEof(pane_id) => {
+                    had_state_change = true;
                     let mut exit_meta: Option<(Option<String>, Option<String>)> = None;
                     for ws in &mut self.workspaces {
                         if let Some(pane) = ws.panes.get_mut(&pane_id) {
@@ -2386,6 +2403,7 @@ impl App {
                     }
                 }
                 AppEvent::CwdChanged(pane_id, new_cwd) => {
+                    had_state_change = true;
                     // Security: resolve symlinks and relative components.
                     // Reject paths that don't resolve to a real directory
                     // (prevents OSC 7 escape sequence path injection).
@@ -2419,7 +2437,10 @@ impl App {
             }
         }
         if had_events {
-            self.dirty = true;
+            let freeze_output = self.ime_freeze_panes_on_overlay && self.overlay.is_some();
+            if had_state_change || !freeze_output {
+                self.dirty = true;
+            }
         }
         had_events
     }
@@ -3143,6 +3164,74 @@ mod tests {
         // `ime_mode != Always` without observing or clearing state.
         assert_eq!(app.always_dismissed_pane, Some(pane_a));
         assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn freeze_panes_suppresses_pty_output_repaint_when_overlay_open() {
+        // With freeze enabled and the overlay open, a burst of
+        // PtyOutput events must NOT mark the app dirty, so the screen
+        // stays frozen while the user composes JP text. vt100 parser
+        // work happens on reader threads and is unaffected by this
+        // gate, so panes catch up instantly when the overlay closes.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_a = app.ws().focused_pane_id;
+        app.ime_freeze_panes_on_overlay = true;
+        app.overlay = Some(crate::input::overlay::OverlayState::new(pane_a));
+        app.dirty = false;
+
+        // Push a PtyOutput directly through the event channel —
+        // drain_pty_events treats it as the pure-output no-op case.
+        app.event_tx
+            .send(AppEvent::PtyOutput(pane_a))
+            .expect("send PtyOutput");
+        app.drain_pty_events();
+
+        assert!(
+            !app.dirty,
+            "PtyOutput must not dirty the app while overlay is open and freeze is on"
+        );
+    }
+
+    #[test]
+    fn freeze_panes_off_still_repaints_on_pty_output() {
+        // Sanity: with freeze disabled the legacy behavior is
+        // preserved — PtyOutput dirties the app even while the
+        // overlay is open. This is the pre-#37 baseline and how the
+        // flag's default (false) has to behave.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_a = app.ws().focused_pane_id;
+        app.ime_freeze_panes_on_overlay = false;
+        app.overlay = Some(crate::input::overlay::OverlayState::new(pane_a));
+        app.dirty = false;
+
+        app.event_tx
+            .send(AppEvent::PtyOutput(pane_a))
+            .expect("send PtyOutput");
+        app.drain_pty_events();
+
+        assert!(
+            app.dirty,
+            "PtyOutput should dirty the app when freeze is disabled"
+        );
+    }
+
+    #[test]
+    fn freeze_panes_does_not_suppress_without_overlay() {
+        // Freeze is gated on overlay being open. With the overlay
+        // closed the flag must have no effect, so normal editing
+        // stays responsive.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_a = app.ws().focused_pane_id;
+        app.ime_freeze_panes_on_overlay = true;
+        app.overlay = None;
+        app.dirty = false;
+
+        app.event_tx
+            .send(AppEvent::PtyOutput(pane_a))
+            .expect("send PtyOutput");
+        app.drain_pty_events();
+
+        assert!(app.dirty, "PtyOutput must dirty when overlay is closed");
     }
 
     #[test]

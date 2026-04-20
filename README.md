@@ -70,6 +70,7 @@ Launch from any directory. The file tree shows the current working directory.
 
 - `--min-pane-width <COLS>` — minimum child columns a split may produce (default `20`). Splits whose halved pane would be narrower are refused. `0` is clamped to `1` to avoid zero-width children.
 - `--min-pane-height <ROWS>` — minimum child rows a split may produce (default `5`). Same clamp rule as `--min-pane-width`.
+- `--ime-freeze-panes[=BOOL]` — freeze pane repaints while the IME composition overlay is open (default `false`). Suppresses flicker from Claude's thinking spinner and other background PTY output during JP composition; panes catch up instantly when the overlay closes. Pass the bare flag to enable, or `=false` to force-disable a config `true`. Also settable via `[ime] freeze_panes_on_overlay` in `config.toml`.
 
 ## Configuration
 

@@ -123,7 +123,7 @@ fn main() -> Result<()> {
 
     // Load user config + apply CLI override (CLI > file > default).
     let mut user_config = config::Config::load();
-    user_config.apply_cli_overrides(cli.ime);
+    user_config.apply_cli_overrides(cli.ime, cli.ime_freeze_panes);
 
     // Create app (spawns the initial pane, which captures the env above).
     let mut app = app::App::new(size.height, size.width)?;
