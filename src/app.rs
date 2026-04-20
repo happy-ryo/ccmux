@@ -538,6 +538,19 @@ pub struct App {
     /// cwd update) still repaint because those affect non-pane UI
     /// (tab labels, sidebar).
     pub ime_freeze_panes_on_overlay: bool,
+    /// When freeze is enabled, optionally force a single repaint every
+    /// `ime_overlay_catchup_ms` milliseconds so the user sees body-
+    /// content progress periodically without the flicker of live
+    /// repaints. `0` disables the periodic catch-up (pure freeze,
+    /// matches the original Phase 2 behavior). Clamped to
+    /// `MIN_OVERLAY_CATCHUP_MS` at apply time when non-zero to avoid
+    /// a tight repaint loop.
+    pub ime_overlay_catchup_ms: u64,
+    /// Instant of the last overlay-era repaint (open or catch-up
+    /// tick). Populated by [`App::maybe_tick_overlay_catchup`] and
+    /// cleared when the overlay closes. `None` outside an overlay
+    /// session.
+    last_overlay_repaint: Option<Instant>,
     /// In `Always` mode, the pane id where the user explicitly
     /// dismissed (Esc with empty buffer / Ctrl+C) the auto-opened
     /// overlay. Blocks re-open on the same focus. Cleared whenever
@@ -618,6 +631,8 @@ impl App {
             event_bus,
             ime_mode: crate::config::ImeMode::default(),
             ime_freeze_panes_on_overlay: false,
+            ime_overlay_catchup_ms: 0,
+            last_overlay_repaint: None,
             always_dismissed_pane: None,
             last_focused_pane: None,
             min_pane_width: 20,
@@ -632,6 +647,52 @@ impl App {
     pub fn apply_config(&mut self, cfg: &crate::config::Config) {
         self.ime_mode = cfg.ime.mode;
         self.ime_freeze_panes_on_overlay = cfg.ime.freeze_panes_on_overlay;
+        // 0 means "catch-up disabled"; any non-zero value is floored
+        // at MIN_OVERLAY_CATCHUP_MS so a fat-fingered `--…-catchup-ms 5`
+        // can't turn freeze into a ~200 fps repaint storm.
+        self.ime_overlay_catchup_ms = if cfg.ime.overlay_catchup_ms == 0 {
+            0
+        } else {
+            cfg.ime
+                .overlay_catchup_ms
+                .max(crate::config::MIN_OVERLAY_CATCHUP_MS)
+        };
+    }
+
+    /// Time-based catch-up for the freeze-panes-on-overlay path.
+    /// While the overlay is open AND freeze is on AND catch-up is
+    /// configured to a non-zero interval, force a single repaint
+    /// whenever the interval has elapsed. The user sees periodic
+    /// body-content progress (Claude writing new lines, shell output
+    /// scrolling) without the continuous flicker that plain
+    /// freeze=off produces. No-op otherwise.
+    pub fn maybe_tick_overlay_catchup(&mut self) {
+        if self.overlay.is_none() {
+            // Reset timer so the next open starts clean; otherwise a
+            // catch-up could fire 0 ms after a fresh open if the
+            // previous session left a stale Instant behind.
+            self.last_overlay_repaint = None;
+            return;
+        }
+        if !self.ime_freeze_panes_on_overlay || self.ime_overlay_catchup_ms == 0 {
+            return;
+        }
+        let interval = std::time::Duration::from_millis(self.ime_overlay_catchup_ms);
+        let now = Instant::now();
+        match self.last_overlay_repaint {
+            None => {
+                // First tick of this overlay session — anchor the
+                // timer at "now" without repainting, so the first
+                // catch-up fires `interval` after open, not
+                // immediately.
+                self.last_overlay_repaint = Some(now);
+            }
+            Some(prev) if now.duration_since(prev) >= interval => {
+                self.dirty = true;
+                self.last_overlay_repaint = Some(now);
+            }
+            _ => {}
+        }
     }
 
     /// Override the minimum per-child split dimensions. Values of `0`
@@ -3213,6 +3274,100 @@ mod tests {
             app.dirty,
             "PtyOutput should dirty the app when freeze is disabled"
         );
+    }
+
+    #[test]
+    fn overlay_catchup_noop_when_no_overlay() {
+        // No overlay open → catch-up must never dirty or set the
+        // anchor timer, regardless of config values.
+        let mut app = App::new(40, 80).expect("App::new");
+        app.ime_freeze_panes_on_overlay = true;
+        app.ime_overlay_catchup_ms = 1000;
+        app.overlay = None;
+        app.dirty = false;
+
+        app.maybe_tick_overlay_catchup();
+
+        assert!(!app.dirty);
+        assert!(app.last_overlay_repaint.is_none());
+    }
+
+    #[test]
+    fn overlay_catchup_noop_when_disabled() {
+        // Catch-up interval of 0 = disabled. Even with freeze on and
+        // overlay open, no repaint should be forced.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_a = app.ws().focused_pane_id;
+        app.ime_freeze_panes_on_overlay = true;
+        app.ime_overlay_catchup_ms = 0;
+        app.overlay = Some(crate::input::overlay::OverlayState::new(pane_a));
+        app.dirty = false;
+
+        app.maybe_tick_overlay_catchup();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        app.maybe_tick_overlay_catchup();
+
+        assert!(!app.dirty);
+    }
+
+    #[test]
+    fn overlay_catchup_first_call_anchors_without_repaint() {
+        // First tick of a freshly-opened overlay should seed the
+        // timer at "now" without firing a repaint — the first real
+        // catch-up lands `interval` later, not immediately on open.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_a = app.ws().focused_pane_id;
+        app.ime_freeze_panes_on_overlay = true;
+        app.ime_overlay_catchup_ms = 500;
+        app.overlay = Some(crate::input::overlay::OverlayState::new(pane_a));
+        app.dirty = false;
+
+        app.maybe_tick_overlay_catchup();
+
+        assert!(!app.dirty, "first tick must not repaint");
+        assert!(
+            app.last_overlay_repaint.is_some(),
+            "first tick must anchor the timer"
+        );
+    }
+
+    #[test]
+    fn overlay_catchup_fires_after_interval() {
+        // Simulate an elapsed interval by backdating last_overlay_repaint.
+        // `maybe_tick_overlay_catchup` should then mark dirty and
+        // re-anchor the timer.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_a = app.ws().focused_pane_id;
+        app.ime_freeze_panes_on_overlay = true;
+        app.ime_overlay_catchup_ms = 100;
+        app.overlay = Some(crate::input::overlay::OverlayState::new(pane_a));
+        app.dirty = false;
+        app.last_overlay_repaint = Some(Instant::now() - std::time::Duration::from_millis(150));
+
+        app.maybe_tick_overlay_catchup();
+
+        assert!(app.dirty, "elapsed interval must force a repaint");
+        let anchor = app.last_overlay_repaint.expect("timer stays set");
+        assert!(
+            Instant::now().duration_since(anchor) < std::time::Duration::from_millis(50),
+            "timer must be re-anchored to ~now"
+        );
+    }
+
+    #[test]
+    fn overlay_catchup_clears_timer_when_overlay_closes() {
+        // If the overlay closes between ticks, the timer must reset
+        // so the next session doesn't inherit a stale anchor that
+        // could fire a catch-up 0 ms after open.
+        let mut app = App::new(40, 80).expect("App::new");
+        app.ime_freeze_panes_on_overlay = true;
+        app.ime_overlay_catchup_ms = 500;
+        app.overlay = None;
+        app.last_overlay_repaint = Some(Instant::now());
+
+        app.maybe_tick_overlay_catchup();
+
+        assert!(app.last_overlay_repaint.is_none());
     }
 
     #[test]

@@ -46,6 +46,17 @@ pub struct Cli {
     )]
     pub ime_freeze_panes: Option<bool>,
 
+    /// While `--ime-freeze-panes` is active, force a single repaint
+    /// every `<MS>` milliseconds so body-content progress (Claude
+    /// writing new lines, shell output scrolling) stays visible
+    /// through an open overlay. `0` (default) keeps the freeze
+    /// pure — the screen stops updating until the overlay closes.
+    /// Non-zero values are clamped to at least 100 ms. Has no
+    /// effect while freeze is disabled. Overrides `[ime]
+    /// overlay_catchup_ms` in config.toml.
+    #[arg(long, value_name = "MS")]
+    pub ime_overlay_catchup_ms: Option<u64>,
+
     /// Minimum columns each child pane must retain after a vertical
     /// split. Splits that would produce a narrower child are refused.
     /// A value of `0` is clamped to `1` at runtime to avoid degenerate
@@ -761,6 +772,18 @@ mod tests {
     fn ime_freeze_panes_explicit_false_overrides_config() {
         let cli = Cli::try_parse_from(["ccmux", "--ime-freeze-panes=false"]).unwrap();
         assert_eq!(cli.ime_freeze_panes, Some(false));
+    }
+
+    #[test]
+    fn ime_overlay_catchup_ms_defaults_to_none() {
+        let cli = Cli::try_parse_from(["ccmux"]).unwrap();
+        assert_eq!(cli.ime_overlay_catchup_ms, None);
+    }
+
+    #[test]
+    fn parses_ime_overlay_catchup_ms_override() {
+        let cli = Cli::try_parse_from(["ccmux", "--ime-overlay-catchup-ms", "3000"]).unwrap();
+        assert_eq!(cli.ime_overlay_catchup_ms, Some(3000));
     }
 
     #[test]
