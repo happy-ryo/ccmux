@@ -91,45 +91,45 @@ Controls the IME overlay used for host-terminal IME input (Issue #25 / PR #36).
 
 ```toml
 [ime]
-mode = "hotkey"   # "hotkey" | "off" | "always"
+mode = "hotkey"   # "hotkey" | "off"
 ```
 
 | Value | Behavior |
 |-------|----------|
 | `hotkey` (default) | `Ctrl+;` opens the IME composition overlay on a focused pane. |
 | `off` | `Ctrl+;` is swallowed silently — no overlay, no keystroke leaked to the shell. For users who don't use IME, or whose terminal already handles IME placement correctly. |
-| `always` | The overlay is opened automatically whenever focus rests on a non-scrolled Claude pane, so IME composition (including JP) has an anchor from the first keystroke. Press `Esc` (with an empty buffer) or `Ctrl+C` to dismiss the overlay and interact with the pane directly — the dismiss key is forwarded to the pane so Claude's Esc-to-interrupt still works. Moving focus to another pane and back re-opens the overlay. A printable key on a dismissed overlay still triggers auto-open as a half-width shortcut; scrolled-back panes and shell panes never auto-open. **Tradeoff:** while the overlay is open, ccmux pane-management shortcuts (Ctrl+D split, Ctrl+Left/Right focus-cycle, Alt+Left/Right tab-nav, etc.) do not fire — dismiss first, then use them. If that friction is unwanted, stay on `hotkey` and press Ctrl+; only when you need IME. |
 
-The `--ime hotkey|off|always` CLI flag overrides the config file for a single run. Precedence is **CLI > config file > default**.
+The `--ime hotkey\|off` CLI flag overrides the config file for a single run. Precedence is **CLI > config file > default**.
+
+> A third mode, `always`, used to auto-open the overlay on every Claude pane focus. It was removed because the auto-open never worked reliably in practice. Users who want the overlay ready on focus should just press `Ctrl+;` once.
 
 ### Recommended setup for JP / CJK IME users
 
-If you regularly compose Japanese (or any IME-heavy language) prompts for Claude, launch ccmux with this trio:
+If you regularly compose Japanese (or any IME-heavy language) prompts for Claude, launch ccmux with this pair:
 
 ```bash
-ccmux --ime always --ime-freeze-panes --ime-overlay-catchup-ms 3000
+ccmux --ime-freeze-panes --ime-overlay-catchup-ms 3000
 ```
 
 Or set it once in `config.toml` so every session starts this way:
 
 ```toml
 [ime]
-mode = "always"
 freeze_panes_on_overlay = true
 overlay_catchup_ms = 3000
 ```
+
+Press `Ctrl+;` on a focused pane to open the overlay — the freeze + catch-up behavior kicks in automatically while the overlay is open.
 
 ![Centered IME overlay with a Japanese conversion candidate window anchored right under the caret, Claude panes frozen behind it](ime-overlay.png)
 
 **What you get:**
 
-1. **Overlay opens automatically.** As soon as focus lands on a Claude pane, a centered multi-line composition box appears. The host-terminal IME candidate window anchors to the caret inside the box, so long JP words stop "jumping" around the screen mid-conversion (Issue #25).
+1. **Overlay on demand.** Press `Ctrl+;` on a focused Claude pane — a centered multi-line composition box appears. The host-terminal IME candidate window anchors to the caret inside the box, so long JP words stop "jumping" around the screen mid-conversion (Issue #25).
 2. **Pane flicker stops.** While the overlay is open, ccmux freezes the pane underneath — Claude's thinking spinner and streaming tokens no longer force repaints that would flicker past your IME candidates. You can focus entirely on composing.
 3. **Progress stays visible.** Every 3 seconds, ccmux unfreezes for a single frame so you can see Claude's streamed output advance. Tune the interval with `--ime-overlay-catchup-ms`: `0` for pure freeze, `5000` if even 3 s feels busy.
 4. **Multi-line drafts first-class.** `Enter` inserts a newline. Press `Alt+Enter` (macOS `Option+Return`) to send the whole buffer, or `Ctrl+Enter` on Windows Terminal / wezterm / VS Code. Full keymap is in the next subsection.
-5. **Escape hatch.** `Esc` on an empty buffer closes the overlay so you can use ccmux's pane-management shortcuts (`Ctrl+D` split, `Ctrl+Left/Right` focus cycle, etc.); moving focus to another pane and back re-opens it.
-
-If the always-open behavior feels intrusive, swap `mode = "always"` for `mode = "hotkey"` — the overlay then only opens when you press `Ctrl+;`, but the other two flags still eliminate flicker when it is open.
+5. **Escape hatch.** `Esc` on the overlay closes it so you can use ccmux's pane-management shortcuts (`Ctrl+D` split, `Ctrl+Left/Right` focus cycle, etc.).
 
 ### IME overlay keybindings
 
@@ -140,7 +140,7 @@ The overlay opens as a centered multi-line composition box. Host-terminal IME ca
 | `Enter` | Insert newline (also `Shift+Enter`) |
 | `Alt+Enter` | Send buffer to the pane and close (portable across all tier-1 terminals, incl. macOS `Option+Return`) |
 | `Ctrl+Enter` | Send buffer — alternative commit for Windows Terminal / wezterm / VS Code / most Linux terminals |
-| `Esc` / `Ctrl+C` | Cancel. Empty buffer closes the overlay; non-empty buffer in Always mode first clears, second press dismisses |
+| `Esc` / `Ctrl+C` | Cancel — closes the overlay and discards the buffer |
 | `←` `→` `↑` `↓` | Navigate |
 | `Home` / `End` | Start / end of current line |
 | `Ctrl+Home` / `Ctrl+End` | Start / end of whole buffer |

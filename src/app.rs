@@ -553,16 +553,6 @@ pub struct App {
     /// cleared when the overlay closes. `None` outside an overlay
     /// session.
     last_overlay_repaint: Option<Instant>,
-    /// In `Always` mode, the pane id where the user explicitly
-    /// dismissed (Esc with empty buffer / Ctrl+C) the auto-opened
-    /// overlay. Blocks re-open on the same focus. Cleared whenever
-    /// focus moves to a different pane so the overlay reappears the
-    /// next time the user returns.
-    pub(crate) always_dismissed_pane: Option<usize>,
-    /// Pane id that held focus the last time we observed it. Used
-    /// by `maybe_auto_open_always_overlay` to detect focus changes
-    /// and clear `always_dismissed_pane`.
-    last_focused_pane: Option<usize>,
     /// Minimum width (cols) each child must retain after a vertical
     /// split. Populated from `--min-pane-width`; `0` is clamped to `1`
     /// in `set_min_pane_size` to avoid degenerate halving math.
@@ -635,8 +625,6 @@ impl App {
             ime_freeze_panes_on_overlay: false,
             ime_overlay_catchup_ms: 0,
             last_overlay_repaint: None,
-            always_dismissed_pane: None,
-            last_focused_pane: None,
             min_pane_width: 20,
             min_pane_height: 5,
         })
@@ -704,59 +692,6 @@ impl App {
     pub fn set_min_pane_size(&mut self, width: u16, height: u16) {
         self.min_pane_width = width.max(1);
         self.min_pane_height = height.max(1);
-    }
-
-    /// In `Always` mode, make sure the IME overlay is open whenever
-    /// focus rests on a non-scrolled Claude pane. This is the
-    /// JP-IME-friendly behavior: the overlay provides the IME anchor
-    /// from the moment focus lands, so the terminal's IME composes
-    /// directly into it without the user having to press Ctrl+;
-    /// first. Idempotent; safe to call on every tick.
-    ///
-    /// Dismissal: a user-initiated close on a pane (Esc/Ctrl+C with
-    /// empty buffer — see `handle_overlay_key`) records that pane in
-    /// `always_dismissed_pane` so we don't immediately re-open. The
-    /// suppression clears the next time focus moves to a different
-    /// pane; returning refreshes the overlay.
-    pub fn maybe_auto_open_always_overlay(&mut self) {
-        if self.ime_mode != crate::config::ImeMode::Always {
-            return;
-        }
-        let focused_id = self.ws().focused_pane_id;
-        let pane_focused = matches!(self.ws().focus_target, FocusTarget::Pane)
-            && self.ws().panes.contains_key(&focused_id);
-
-        // Detect focus change and clear the one-pane dismissal.
-        // "Focus moves away and comes back" means any transition that
-        // changes `focused_id`, including returning to the previously
-        // dismissed pane — the user coming back is the signal they
-        // want the overlay again.
-        if self.last_focused_pane != Some(focused_id) {
-            self.always_dismissed_pane = None;
-            self.last_focused_pane = Some(focused_id);
-        }
-
-        if !pane_focused {
-            return;
-        }
-        if self.overlay.is_some() {
-            return;
-        }
-        if self.always_dismissed_pane == Some(focused_id) {
-            return;
-        }
-        if self.rename_input.is_some() {
-            return;
-        }
-        let (is_claude, is_scrolled) = {
-            let pane = &self.ws().panes[&focused_id];
-            (pane.is_claude_running(), pane.is_scrolled_back())
-        };
-        if !is_claude || is_scrolled {
-            return;
-        }
-        self.overlay = Some(OverlayState::new(focused_id));
-        self.mark_layout_change();
     }
 
     /// Emit a [`PaneStarted`] event for the given pane id. Pulls the
@@ -970,11 +905,8 @@ impl App {
                     // simply does nothing.
                     return Ok(true);
                 }
-                crate::config::ImeMode::Hotkey | crate::config::ImeMode::Always => {
-                    // `always` still honors the explicit hotkey — users
-                    // should be able to open the overlay deliberately
-                    // before typing (e.g. when they know the first
-                    // character belongs in IME).
+                crate::config::ImeMode::Hotkey => {
+                    // Fall through to open the overlay deliberately.
                 }
             }
             let focused_id = self.ws().focused_pane_id;
@@ -982,59 +914,12 @@ impl App {
                 && self.ws().panes.contains_key(&focused_id);
             if pane_focused {
                 self.overlay = Some(OverlayState::new(focused_id));
-                // Layout includes an overlay row now — repaint so the
-                // panes shrink and the row appears.
                 self.mark_layout_change();
                 return Ok(true);
             }
             // Fall through when focus is on the file tree / preview;
             // Ctrl+; in those contexts has no meaning and shouldn't
             // open an overlay attached to a hidden target.
-        }
-
-        // Always-on IME: a printable key in a focused Claude pane
-        // auto-opens the overlay and absorbs the first character, so
-        // the user can type JP text without a hotkey dance. Gated to
-        // Claude panes (bash / vim shouldn't hijack Enter+text), and
-        // disabled when the pane is scrolled back so scrollback key
-        // shortcuts still work.
-        //
-        // Note on `is_claude_running()` flakiness: PR #36 removed the
-        // same gate from Ctrl+; because Claude briefly retitles the
-        // pane while running tools, causing the hotkey to
-        // "mysteriously stop working" mid-session. The failure mode
-        // for always-on is the mirror image: a momentary false-
-        // negative just means one keystroke goes to the PTY instead
-        // of the overlay, which is recoverable (user presses Ctrl+;
-        // or retypes). A false-positive would be worse — a non-
-        // Claude pane hijacking text input — but the detector keys
-        // on Claude-specific title substrings, so false positives
-        // are rare in practice. Accepting the tradeoff intentionally
-        // here; revisit if users report shell panes being hijacked.
-        if self.ime_mode == crate::config::ImeMode::Always {
-            if let Some(ch) = always_on_trigger_char(&key) {
-                let focused_id = self.ws().focused_pane_id;
-                let pane_focused = matches!(self.ws().focus_target, FocusTarget::Pane)
-                    && self.ws().panes.contains_key(&focused_id);
-                // Dismissal suppresses the key-trigger too. Otherwise
-                // "dismiss overlay to send a raw Esc, then type /" would
-                // reopen the overlay on the first shell char and trap
-                // the input again.
-                let dismissed_here = self.always_dismissed_pane == Some(focused_id);
-                if pane_focused && !dismissed_here {
-                    let (is_claude, is_scrolled) = {
-                        let pane = &self.ws().panes[&focused_id];
-                        (pane.is_claude_running(), pane.is_scrolled_back())
-                    };
-                    if is_claude && !is_scrolled {
-                        let mut overlay = OverlayState::new(focused_id);
-                        overlay.insert_char(ch);
-                        self.overlay = Some(overlay);
-                        self.mark_layout_change();
-                        return Ok(true);
-                    }
-                }
-            }
         }
 
         // Ctrl+Q — quit
@@ -2976,31 +2861,6 @@ pub fn key_event_to_bytes_pub(key: &KeyEvent) -> Option<Vec<u8>> {
     key_event_to_bytes(key)
 }
 
-/// For IME `always` mode: return `Some(ch)` if pressing this key in
-/// a focused Claude pane should auto-open the overlay and seed it
-/// with `ch`. Anything else (Ctrl-modifier, Alt-modifier, navigation
-/// keys, Enter, Backspace, Esc, function keys, …) is NOT a trigger —
-/// those keep their existing pass-through meaning for the pane.
-///
-/// We deliberately let plain SHIFT through because capital letters
-/// and shifted symbols are still printable text the user would want
-/// composed in the overlay.
-fn always_on_trigger_char(key: &KeyEvent) -> Option<char> {
-    // Ctrl / Alt / Super / Meta → not a plain printable press.
-    let ignore_mods = KeyModifiers::CONTROL
-        | KeyModifiers::ALT
-        | KeyModifiers::SUPER
-        | KeyModifiers::HYPER
-        | KeyModifiers::META;
-    if key.modifiers.intersects(ignore_mods) {
-        return None;
-    }
-    match key.code {
-        KeyCode::Char(c) => Some(c),
-        _ => None,
-    }
-}
-
 /// Convert a crossterm KeyEvent into bytes suitable for PTY input.
 fn key_event_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -3076,161 +2936,6 @@ mod tests {
 
     fn mk_key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, mods)
-    }
-
-    #[test]
-    fn always_on_trigger_plain_char_fires() {
-        let k = mk_key(KeyCode::Char('a'), KeyModifiers::NONE);
-        assert_eq!(always_on_trigger_char(&k), Some('a'));
-    }
-
-    #[test]
-    fn always_on_trigger_shift_char_fires() {
-        // Shift keeps printable text (capital letters, shifted symbols).
-        let k = mk_key(KeyCode::Char('A'), KeyModifiers::SHIFT);
-        assert_eq!(always_on_trigger_char(&k), Some('A'));
-    }
-
-    #[test]
-    fn always_on_trigger_ctrl_does_not_fire() {
-        let k = mk_key(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(always_on_trigger_char(&k), None);
-    }
-
-    #[test]
-    fn always_on_trigger_alt_does_not_fire() {
-        let k = mk_key(KeyCode::Char('x'), KeyModifiers::ALT);
-        assert_eq!(always_on_trigger_char(&k), None);
-    }
-
-    #[test]
-    fn always_on_trigger_enter_does_not_fire() {
-        let k = mk_key(KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(always_on_trigger_char(&k), None);
-    }
-
-    #[test]
-    fn always_on_trigger_backspace_does_not_fire() {
-        let k = mk_key(KeyCode::Backspace, KeyModifiers::NONE);
-        assert_eq!(always_on_trigger_char(&k), None);
-    }
-
-    #[test]
-    fn always_on_trigger_arrow_does_not_fire() {
-        let k = mk_key(KeyCode::Up, KeyModifiers::NONE);
-        assert_eq!(always_on_trigger_char(&k), None);
-    }
-
-    #[test]
-    fn always_on_trigger_esc_does_not_fire() {
-        let k = mk_key(KeyCode::Esc, KeyModifiers::NONE);
-        assert_eq!(always_on_trigger_char(&k), None);
-    }
-
-    #[test]
-    fn always_on_trigger_function_key_does_not_fire() {
-        let k = mk_key(KeyCode::F(1), KeyModifiers::NONE);
-        assert_eq!(always_on_trigger_char(&k), None);
-    }
-
-    #[test]
-    fn always_on_trigger_unicode_fires() {
-        // Wide character typical of JP IME-produced input reaching
-        // ccmux (if the host passes it as Char rather than a paste).
-        let k = mk_key(KeyCode::Char('あ'), KeyModifiers::NONE);
-        assert_eq!(always_on_trigger_char(&k), Some('あ'));
-    }
-
-    #[test]
-    fn always_on_trigger_ctrl_alt_does_not_fire() {
-        // Windows AltGr surfaces as CTRL | ALT; must not open the
-        // overlay or the composed character wouldn't reach the
-        // terminal's own AltGr-driven keymap.
-        let k = mk_key(
-            KeyCode::Char('e'),
-            KeyModifiers::CONTROL | KeyModifiers::ALT,
-        );
-        assert_eq!(always_on_trigger_char(&k), None);
-    }
-
-    #[test]
-    fn always_on_trigger_super_does_not_fire() {
-        let k = mk_key(KeyCode::Char('a'), KeyModifiers::SUPER);
-        assert_eq!(always_on_trigger_char(&k), None);
-    }
-
-    #[test]
-    fn always_on_trigger_meta_does_not_fire() {
-        let k = mk_key(KeyCode::Char('a'), KeyModifiers::META);
-        assert_eq!(always_on_trigger_char(&k), None);
-    }
-
-    #[test]
-    fn always_on_trigger_hyper_does_not_fire() {
-        let k = mk_key(KeyCode::Char('a'), KeyModifiers::HYPER);
-        assert_eq!(always_on_trigger_char(&k), None);
-    }
-
-    #[test]
-    fn always_on_trigger_ctrl_shift_does_not_fire() {
-        let k = mk_key(
-            KeyCode::Char('a'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        );
-        assert_eq!(always_on_trigger_char(&k), None);
-    }
-
-    #[test]
-    fn always_mode_dismissal_and_refocus_cycle() {
-        // Exercises the dismissed_pane / last_focused_pane state
-        // machine without touching any PTY or UI: we manipulate the
-        // App's focus fields directly and only assert on the
-        // auto-open-gating logic inside
-        // maybe_auto_open_always_overlay. Non-Claude shells fail the
-        // `is_claude_running` gate, so the overlay itself never
-        // actually opens here — instead we cover focus-change
-        // dismissal clearing, idempotency on stable focus, and
-        // suppression persistence until focus moves.
-        let mut app = App::new(40, 80).expect("App::new");
-        app.ime_mode = crate::config::ImeMode::Always;
-
-        let pane_a = app.ws().focused_pane_id;
-
-        // Seed a dismissal on the currently-focused pane.
-        app.always_dismissed_pane = Some(pane_a);
-        app.last_focused_pane = Some(pane_a);
-
-        // Re-invoking on the same focus must not clear the dismissal.
-        app.maybe_auto_open_always_overlay();
-        assert_eq!(
-            app.always_dismissed_pane,
-            Some(pane_a),
-            "dismissal should persist while focus doesn't move"
-        );
-
-        // Simulate focus moving to a different pane (the pane need
-        // not actually exist for the dismissal-clear logic; the
-        // method bails out before touching `panes` when the pane id
-        // is unknown, but the clear runs first).
-        app.ws_mut().focused_pane_id = pane_a + 100;
-        app.maybe_auto_open_always_overlay();
-        assert_eq!(
-            app.always_dismissed_pane, None,
-            "focus change should clear the dismissal"
-        );
-    }
-
-    #[test]
-    fn always_mode_noop_when_disabled() {
-        let mut app = App::new(40, 80).expect("App::new");
-        // Default mode is Hotkey; auto-open must never run.
-        let pane_a = app.ws().focused_pane_id;
-        app.always_dismissed_pane = Some(pane_a);
-        app.maybe_auto_open_always_overlay();
-        // Dismissal is not touched — the method short-circuits on
-        // `ime_mode != Always` without observing or clearing state.
-        assert_eq!(app.always_dismissed_pane, Some(pane_a));
-        assert!(app.overlay.is_none());
     }
 
     #[test]

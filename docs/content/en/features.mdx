@@ -156,7 +156,8 @@ Selected via the `[ime]` config section or `--ime` flag:
 |---|---|
 | `hotkey` (default) | `Ctrl+;` opens the overlay |
 | `off` | `Ctrl+;` is swallowed, overlay never opens. Opt-out for environments where the problem doesn't exist |
-| `always` | The overlay stays open on focused Claude panes so JP IME can compose from the first keystroke |
+
+A third mode, `always`, used to auto-open the overlay on every Claude pane focus. It was removed because the auto-open never worked reliably in practice.
 
 Config file location:
 

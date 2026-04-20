@@ -51,6 +51,14 @@ pub struct ImeConfig {
 pub const MIN_OVERLAY_CATCHUP_MS: u64 = 100;
 
 /// How Ctrl+; behaves in a focused pane.
+///
+/// The historical `always` variant (auto-open on Claude pane focus) is
+/// gone — the implementation never worked reliably enough to be
+/// recommended, and removing it cuts a non-trivial state machine
+/// (`always_dismissed_pane`, printable-key auto-open, per-focus
+/// dismissal tracking) that was carrying its own bugs. Users who
+/// want IME ready from the first keystroke should just press
+/// `Ctrl+;` once on focus.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 #[clap(rename_all = "lowercase")]
@@ -65,15 +73,6 @@ pub enum ImeMode {
     /// For users who don't use IME or prefer their terminal's own
     /// IME handling.
     Off,
-    /// The overlay is opened automatically whenever focus rests on
-    /// a non-scrolled Claude pane, so IME (including JP) has an
-    /// anchor from the first keystroke. Esc/Ctrl+C on an empty
-    /// buffer dismisses and forwards the cancel key to the pane;
-    /// dismissal clears when focus moves to another pane and back.
-    /// A printable keystroke still auto-opens on a dismissed pane
-    /// as a half-width convenience. See Issue #40 for full
-    /// semantics.
-    Always,
 }
 
 impl fmt::Display for ImeMode {
@@ -81,7 +80,6 @@ impl fmt::Display for ImeMode {
         match self {
             ImeMode::Hotkey => f.write_str("hotkey"),
             ImeMode::Off => f.write_str("off"),
-            ImeMode::Always => f.write_str("always"),
         }
     }
 }
@@ -92,9 +90,8 @@ impl std::str::FromStr for ImeMode {
         match s {
             "hotkey" => Ok(ImeMode::Hotkey),
             "off" => Ok(ImeMode::Off),
-            "always" => Ok(ImeMode::Always),
             other => Err(format!(
-                "invalid ime mode: {other:?} (expected hotkey | off | always)"
+                "invalid ime mode: {other:?} (expected hotkey | off)"
             )),
         }
     }
@@ -250,15 +247,23 @@ mod tests {
     }
 
     #[test]
-    fn parses_minimal_ime_always() {
-        let cfg: Config = toml::from_str(
+    fn rejects_always_mode_value() {
+        // The legacy `always` variant was removed because the auto-open
+        // behavior never worked reliably. A config file still pinning
+        // `mode = "always"` must be rejected with a parse error, not
+        // silently accepted, so users get a clear signal to migrate to
+        // `hotkey`.
+        let err = toml::from_str::<Config>(
             r#"
             [ime]
             mode = "always"
             "#,
         )
-        .unwrap();
-        assert_eq!(cfg.ime.mode, ImeMode::Always);
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("always") || err.to_string().contains("variant"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -418,7 +423,10 @@ mod tests {
         use std::str::FromStr;
         assert_eq!(ImeMode::from_str("hotkey").unwrap(), ImeMode::Hotkey);
         assert_eq!(ImeMode::from_str("off").unwrap(), ImeMode::Off);
-        assert_eq!(ImeMode::from_str("always").unwrap(), ImeMode::Always);
+        assert!(
+            ImeMode::from_str("always").is_err(),
+            "`always` was removed and must no longer parse"
+        );
         assert!(ImeMode::from_str("banana").is_err());
     }
 }

@@ -156,7 +156,8 @@ ccmux は **画面中央にフロート表示する多行 composition overlay** 
 |---|---|
 | `hotkey` (デフォルト) | `Ctrl+;` で overlay を開く |
 | `off` | `Ctrl+;` を完全に無視 (overlay も開かない)。IME 問題が起きない環境向け opt-out |
-| `always` | Claude pane にフォーカスが乗ると overlay を自動起動し続ける。JP IME が最初のキーから変換可能になる |
+
+以前は Claude pane にフォーカスが乗った瞬間 overlay を自動起動する `always` モードも存在しましたが、自動起動が実用水準で安定しなかったため削除されました。
 
 設定ファイルのパス:
 

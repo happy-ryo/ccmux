@@ -348,12 +348,6 @@ fn run_event_loop(
             }
         }
 
-        // Always-mode IME: pre-render hook that keeps the overlay
-        // open whenever focus rests on a non-scrolled Claude pane,
-        // so the host terminal's IME has an anchor from the start.
-        // Idempotent and cheap.
-        app.maybe_auto_open_always_overlay();
-
         // Phase 2 (#37) catch-up: when freeze+catch-up is enabled,
         // periodically force a single repaint so body content stays
         // visible through an open overlay. No-op otherwise.
