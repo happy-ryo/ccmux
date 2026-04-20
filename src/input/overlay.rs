@@ -96,12 +96,28 @@ impl OverlayState {
     /// End moves to the end of the current line (just before the
     /// next `\n`, or buffer end).
     pub fn cursor_end(&mut self) {
-        let chars: Vec<char> = self.buffer.chars().collect();
-        let mut i = self.cursor;
-        while i < chars.len() && chars[i] != '\n' {
-            i += 1;
-        }
-        self.cursor = i;
+        // Walk the char iterator from the current cursor — avoid
+        // materializing a Vec<char> for the whole buffer just to
+        // scan a single line.
+        let additional = self
+            .buffer
+            .chars()
+            .skip(self.cursor)
+            .take_while(|c| *c != '\n')
+            .count();
+        self.cursor += additional;
+    }
+
+    /// Absolute start of the buffer — multi-line equivalent of
+    /// `Ctrl+Home` in a traditional editor.
+    pub fn cursor_buffer_start(&mut self) {
+        self.cursor = 0;
+    }
+
+    /// Absolute end of the buffer — multi-line equivalent of
+    /// `Ctrl+End`.
+    pub fn cursor_buffer_end(&mut self) {
+        self.cursor = self.buffer.chars().count();
     }
 
     /// Arrow-up: move to the same column on the previous line. If
@@ -326,8 +342,20 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         KeyCode::Right => overlay.cursor_right(),
         KeyCode::Up => overlay.cursor_up(),
         KeyCode::Down => overlay.cursor_down(),
-        KeyCode::Home => overlay.cursor_home(),
-        KeyCode::End => overlay.cursor_end(),
+        KeyCode::Home => {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                overlay.cursor_buffer_start();
+            } else {
+                overlay.cursor_home();
+            }
+        }
+        KeyCode::End => {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                overlay.cursor_buffer_end();
+            } else {
+                overlay.cursor_end();
+            }
+        }
         KeyCode::Char(c) => {
             if key
                 .modifiers
@@ -447,6 +475,19 @@ mod tests {
         o.cursor = 4;
         o.cursor_home();
         assert_eq!(o.cursor, 4);
+    }
+
+    #[test]
+    fn buffer_start_end_navigate_whole_buffer() {
+        let mut o = OverlayState::new(0);
+        for ch in "abc\ndef\nghi".chars() {
+            o.insert_char(ch);
+        }
+        o.cursor = 5; // middle of line 1
+        o.cursor_buffer_start();
+        assert_eq!(o.cursor, 0);
+        o.cursor_buffer_end();
+        assert_eq!(o.cursor, 11);
     }
 
     #[test]

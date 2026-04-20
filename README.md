@@ -112,6 +112,7 @@ The overlay opens as a centered multi-line composition box. Host-terminal IME ca
 | `Esc` / `Ctrl+C` | Cancel. Empty buffer closes the overlay; non-empty buffer in Always mode first clears, second press dismisses |
 | `←` `→` `↑` `↓` | Navigate |
 | `Home` / `End` | Start / end of current line |
+| `Ctrl+Home` / `Ctrl+End` | Start / end of whole buffer |
 | `Backspace` | Delete char left of caret |
 
 ## Keybindings

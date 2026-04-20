@@ -215,6 +215,13 @@ fn render_ime_overlay(app: &mut App, frame: &mut Frame, area: Rect) {
 /// characters wrap once their cumulative display width reaches
 /// `inner_w`. Returns the wrapped rows, the wrapped-space row
 /// containing the cursor, and the cursor's column inside that row.
+///
+/// When `cursor_chars` sits exactly on a soft-wrap boundary (the
+/// previous char filled the row to `inner_w`, and the next char
+/// would wrap), the caret is reported at `(next_row, 0)` rather than
+/// at `(current_row, inner_w)` — that column is past the visible
+/// content area and would leak outside the border, and it would also
+/// mislead users about where the next inserted character lands.
 fn wrap_overlay_buffer(
     buffer: &str,
     cursor_chars: usize,
@@ -228,18 +235,36 @@ fn wrap_overlay_buffer(
     let mut found_cursor = false;
 
     for (i, ch) in buffer.chars().enumerate() {
+        // Look ahead: will this char trigger a soft wrap? Newlines
+        // are handled separately, so `would_wrap` only applies to
+        // visible chars.
+        let w = if ch == '\n' {
+            0
+        } else {
+            unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1)
+        };
+        let would_wrap = ch != '\n' && current_col + w > inner_w && current_col > 0;
+
         if i == cursor_chars {
-            cur_row = rows.len() - 1;
-            cur_col = current_col;
+            if would_wrap {
+                // Cursor is exactly at a wrap boundary → report on
+                // the next row's col 0, where the next insertion
+                // will actually land.
+                cur_row = rows.len(); // the row we are about to push
+                cur_col = 0;
+            } else {
+                cur_row = rows.len() - 1;
+                cur_col = current_col;
+            }
             found_cursor = true;
         }
+
         if ch == '\n' {
             rows.push(String::new());
             current_col = 0;
             continue;
         }
-        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
-        if current_col + w > inner_w && current_col > 0 {
+        if would_wrap {
             rows.push(String::new());
             current_col = 0;
         }
@@ -1207,5 +1232,65 @@ fn vt100_color_to_ratatui(color: vt100::Color) -> Color {
         vt100::Color::Default => Color::Reset,
         vt100::Color::Idx(idx) => Color::Indexed(idx),
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+    }
+}
+
+#[cfg(test)]
+mod overlay_wrap_tests {
+    use super::wrap_overlay_buffer;
+
+    #[test]
+    fn empty_buffer_reports_origin() {
+        let (rows, r, c) = wrap_overlay_buffer("", 0, 10);
+        assert_eq!(rows, vec![String::new()]);
+        assert_eq!((r, c), (0, 0));
+    }
+
+    #[test]
+    fn cursor_on_soft_wrap_boundary_lands_on_next_row() {
+        // "abcd" with inner_w=3 soft-wraps between 'c' and 'd'.
+        // Cursor at 3 means "between c and d" → should appear at
+        // col 0 of the row that holds 'd', not col 3 of the row
+        // that ended at 'c'.
+        let (rows, r, c) = wrap_overlay_buffer("abcd", 3, 3);
+        assert_eq!(rows, vec!["abc".to_string(), "d".to_string()]);
+        assert_eq!((r, c), (1, 0));
+    }
+
+    #[test]
+    fn cursor_after_trailing_newline_lands_on_fresh_row() {
+        let (rows, r, c) = wrap_overlay_buffer("abc\n", 4, 10);
+        assert_eq!(rows, vec!["abc".to_string(), String::new()]);
+        assert_eq!((r, c), (1, 0));
+    }
+
+    #[test]
+    fn cursor_past_end_clamps_to_eof() {
+        // Deliberately pass a cursor beyond buffer length — the
+        // function must clamp without panicking so transient bad
+        // state (e.g. race between overlay edit and render) never
+        // crashes the TUI.
+        let (rows, r, c) = wrap_overlay_buffer("abc", 99, 10);
+        assert_eq!(rows, vec!["abc".to_string()]);
+        assert_eq!((r, c), (0, 3));
+    }
+
+    #[test]
+    fn cjk_width_two_wraps_at_display_width() {
+        // Three CJK chars each width 2, inner_w=4 → row 0 holds
+        // two chars, row 1 holds the third. Cursor at 2 (boundary)
+        // should land on row 1 col 0.
+        let (rows, r, c) = wrap_overlay_buffer("あいう", 2, 4);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], "あい");
+        assert_eq!(rows[1], "う");
+        assert_eq!((r, c), (1, 0));
+    }
+
+    #[test]
+    fn hard_newline_resets_column() {
+        let (rows, r, c) = wrap_overlay_buffer("ab\ncd", 5, 10);
+        assert_eq!(rows, vec!["ab".to_string(), "cd".to_string()]);
+        assert_eq!((r, c), (1, 2));
     }
 }
