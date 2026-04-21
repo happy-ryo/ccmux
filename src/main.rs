@@ -7,6 +7,7 @@ mod i18n;
 mod input;
 mod ipc;
 mod layout_config;
+mod mcp_peer;
 mod pane;
 mod preview;
 mod ui;
@@ -37,7 +38,14 @@ fn main() -> Result<()> {
     // the whole point. Dispatch them before the nested-TUI guard kicks
     // in, so the `CCMUX=1` env var set by the parent doesn't block
     // legitimate client invocations.
+    //
+    // `mcp-peer` is the exception: it's a stdio MCP server spawned by
+    // Claude Code, not a one-shot IPC request, so route it directly to
+    // the peer module before the shared dispatcher.
     if let Some(cmd) = cli.command.as_ref() {
+        if matches!(cmd, cli::IpcCommand::McpPeer) {
+            return mcp_peer::run();
+        }
         return run_ipc_client(cmd);
     }
 
