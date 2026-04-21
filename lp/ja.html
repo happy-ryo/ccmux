@@ -214,6 +214,17 @@ $ npm install -g ccmux-fork</code></pre>
         <tbody>
           <tr>
             <td>
+              同一タブ内の Claude Code 同士の peer メッセージング
+              <br /><span style="color: var(--muted); font-size: 0.85em;">
+                <code>ccmux mcp install</code> で stdio MCP server を登録。同タブの Claude Code が <code>list_peers</code> でお互いを発見、<code>send_message</code> でメッセージ交換できる。受信側の context には <code>&lt;channel source="ccmux-peers"&gt;</code> タグで届くので、ユーザー入力とは区別される。
+                <code>Alt+P</code> で peer 対応の起動コマンドを入力行に挿入。
+              </span>
+            </td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
+            <td>
               画面中央の複数行 IME 入力ボックス (Windows + サードパーティ製ターミナルでの日本語 / 中国語 / 韓国語入力)
               <br /><span style="color: var(--muted); font-size: 0.85em;">
                 <code>Alt+Enter</code> で送信、<code>Enter</code> は改行、

@@ -3,4 +3,5 @@ export default {
   'getting-started': 'Getting Started',
   features: 'Features',
   ipc: 'IPC',
+  'peer-messaging': 'Peer Messaging',
 }

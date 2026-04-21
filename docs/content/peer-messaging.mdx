@@ -1,0 +1,150 @@
+# Claude Code ペイン同士のメッセージング
+
+import { Callout } from 'nextra/components'
+
+同じ ccmux タブに置かれた複数の Claude Code インスタンスが、MCP channel notification を使って直接メッセージを交換できる機能。片方の Claude がもう片方に「これを調べて」と頼んだり、失敗したテストのコンテキストをハンドオフしたりを、ユーザーがコピペで中継しなくても出来るようになる。
+
+<Callout type="info">
+  peer から届いたメッセージは、受信側 Claude の context に `<channel source="ccmux-peers">...</channel>` タグで挿入される。**これがユーザー入力と区別されるための唯一の仕組み**。polling で取得するだけだと通常のツール結果と見分けがつかず、割り込みにもならない。
+</Callout>
+
+## スコープは "ccmux タブ" 単位
+
+[`claude-peers-mcp`](https://github.com/happy-ryo/claude-peers-mcp) が `cwd` / `git_root` / `PID` からピアを推論するのに対し、ccmux-peers は **「ユーザーがこのタブに並べて置いた」という物理配置** をそのままスコープ境界として使う。推論が要らないぶん、同じディレクトリを複数案件で開いていても混ざらないし、同じリポジトリを違う場所で再オープンしても重複しない。ccmux が pane lifecycle の権威を持っているので、stale peer の掃除も追加コード不要。
+
+両者のチャンネル名は違う (`server:ccmux-peers` と `server:claude-peers`) ので、同じ Claude Code に両方インストールしていても衝突しない。ccmux 内ではタブスコープを、ccmux 外では cwd スコープを、と使い分けられる。
+
+## セットアップ (一度だけ)
+
+```bash
+ccmux mcp install
+```
+
+現在走っている `ccmux` バイナリを `ccmux-peers` MCP server として Claude Code のユーザー設定に登録する。内部では `claude mcp add-json` にデリゲートしているので、Claude Code の設定ファイルスキーマが将来変わっても ccmux 側の追従コストはゼロ。
+
+再実行は idempotent (同じエントリが既にあれば `--force` 無しだと更新を拒否してメッセージを返す)。ccmux をアップグレードしてバイナリパスを更新したいときは `--force` を付ける。
+
+```bash
+ccmux mcp uninstall  # 解除
+ccmux mcp status     # 登録状態の確認
+```
+
+<Callout type="warning">
+  `claude` CLI が PATH に無い環境では `ccmux mcp install` は失敗する。Claude Code を先にインストールしておくこと。
+</Callout>
+
+## Claude Code を peer channel 付きで起動する
+
+peer メッセージングは MCP の experimental channel 機能に乗っている。Claude Code 側では **起動ごとに** `--dangerously-load-development-channels server:ccmux-peers` というフラグが必要で、環境変数で代替する経路は現時点では無い。毎回これを手打ちするのは現実的じゃないので、ccmux 側から 2 本の経路でアシストする。
+
+### `Alt+P` — どの pane でも一発
+
+pane にフォーカスしている状態で `Alt+P` を押すと、
+
+```
+claude --dangerously-load-development-channels server:ccmux-peers
+```
+
+が入力行に挿入される (末尾スペース付き、Enter は打たれない)。そのまま Enter で起動してもいいし、追加の引数 (例: `/foo`) を続けてから Enter でもいい。shell 問わず動く (bash / zsh / fish / pwsh / cmd.exe すべて同じ挙動) のは、shell hook じゃなく **pane の PTY に直接バイトを書き込んでいる** から。
+
+### `ccmux split --role claude` — 新規 pane で自動起動
+
+ペインを分割すると同時にその pane で自動的にフラグ付き Claude Code が立ち上がる：
+
+```bash
+ccmux split --direction vertical --role claude
+# 新 pane で `claude --dangerously-load-development-channels server:ccmux-peers` が走る
+```
+
+`ccmux new-tab --role claude` も同じ動作 (新しいタブを作ってそこで起動)。明示的に `--command "foo"` を渡した場合は `foo` のほうが優先されるので、カスタム起動のための escape hatch は残っている。
+
+## 提供ツール
+
+Claude Code 側の MCP tool 一覧で見えるもの：
+
+| Tool | 効果 |
+|---|---|
+| `list_peers(scope?)` | 呼び出し元と同じ ccmux タブにいる他の pane を返す。自分自身は除外。`scope` は claude-peers-mcp 互換のため受け取るが常に無視 (ccmux は常にタブスコープ)。 |
+| `send_message(to_id, message)` | 同タブの peer に numeric pane id または stable name で送信。タブ外宛は silent success (他タブを id 列挙でプローブされないようにするため、不明ピア / タブ外ピア / 存在しないピアをすべて同じ応答に丸める)。 |
+| `check_messages` | inbox の手動 drain。通常は channel push が一次経路なので出番は少ないが、何か取りこぼしを疑うときのフォールバック。 |
+| `set_summary(text)` | v1 では stub (accepted and ignored)。ccmux はペイン名 / role を summary 代替として `list_peers` で返しているので、実質不要。将来の v2 で per-pane summary を持つかは未定。 |
+
+## 2 ペインのやり取りの実例
+
+```
+タブ A                         タブ B (独立)
+┌──────────┬──────────┐        ┌──────────┐
+│ claude-1 │ claude-2 │        │ claude-3 │
+│          │          │        │          │
+│  peers ──┼──▶ ✓     │        │  peers   │  ← claude-1/2 は見えない
+│  send ◀──┼── msg    │        │          │
+└──────────┴──────────┘        └──────────┘
+```
+
+Claude A の会話で：
+
+```
+> list_peers を呼んで
+# 結果: id=2 (同タブの相方)
+
+> send_message を to_id=2, message="src/app.rs の handle_split を読んで要約して" で呼んで
+```
+
+Claude B の次ターンの context：
+
+```xml
+<channel source="ccmux-peers" from_id="1" from_name="leader">
+src/app.rs の handle_split を読んで要約して
+</channel>
+```
+
+Claude B はこのタグを「peer からの依頼」として認識 (tag の source 属性で区別) → 要件を実行 → 同じ `send_message` ツールで返信。
+
+## デリバリ意味論
+
+- **in-memory、タブ寿命**: ccmux プロセスが終わると全 inbox が消える。永続化しないのは意図的 (SQLite GC や stale entry 掃除の複雑さが要らない)。
+- **bounded queue**: pane あたりのキュー容量は 256 件、溢れると古いものから drop + `EventsDropped` メタイベントが subscriber に通知される。既存の IPC EventBus 実装に乗っているので特別なロジックは足していない。
+- **fire-and-forget**: `send_message` に correlation id は無い、確認応答も来ない。Claude が返信したければ `send_message(to_id=from_id, ...)` を自分で呼ぶ。
+- **cross-tab は silent drop**: 別タブの pane を目掛けた送信は成功レスポンスで返るが何も配信されない。unknown peer / closed peer / 他タブ peer を区別しないことで、send 側が他タブを列挙することを防ぐ。
+
+## 困ったとき
+
+### `list_peers` が "ccmux not reachable from this Claude Code instance" を返す
+
+Claude Code が ccmux の外で (あるいは ccmux pane の env を継承しない形で) 起動された。ccmux 内のペインで `Alt+P` または `ccmux split --role claude` から起動し直すこと。
+
+具体的には `CCMUX_PANE_ID` 環境変数が MCP subprocess まで継承される必要がある。普通に ccmux で pane を作って中で `claude` を起動すればこの env は pane PTY → shell → claude → mcp-peer と自動的に伝わる。
+
+### peer メッセージが `<channel>` タグとしてレンダリングされない
+
+起動コマンドに `--dangerously-load-development-channels server:ccmux-peers` を付け忘れている。素の `claude` を打つ代わりに `Alt+P` を使うとフラグ付きコマンドが挿入されるので事故りにくい。
+
+### `ccmux mcp install` が失敗する
+
+- `claude` CLI が PATH に無い → Claude Code をまずインストール
+- 既に別バージョンが登録されている → `--force` で上書き、あるいは `ccmux mcp uninstall` してから再 install
+
+### ccmux をアップグレードしたら peer が繋がらなくなった
+
+登録されているバイナリパスが古い。
+
+```bash
+ccmux mcp install --force
+```
+
+で現在の `ccmux` バイナリのフルパスに更新される。
+
+## v1 のスコープ外
+
+- **cross-tab messaging** — `broadcast_tab` 的なツールは未実装。現状では同タブに制限 (物理配置 = 明示的な意図 の原則を守るため)。v1.1 以降の候補。
+- **永続化** — タブ寿命で十分 (pane lifecycle = peer lifecycle)、SQLite は使わない。
+- **非 Claude ピア** — 現状 MCP subprocess が読み書きする形で、外部 IPC クライアントや plain shell pane は peer として登場しない。
+- **添付ファイル / 構造化 request-response** — body は text のみ、相関 id なし。必要になれば v1.1 で追加。
+- **`set_summary` の本格実装** — 現状 stub。ペイン名 / role で十分ワークしているので v2 送り。
+
+## 参考
+
+- [Issue #97](https://github.com/happy-ryo/ccmux/issues/97) — 設計の意図決定の流れ
+- [PR #104](https://github.com/happy-ryo/ccmux/pull/104) — v1 実装
+- [`claude-peers-mcp`](https://github.com/happy-ryo/claude-peers-mcp) — 兄弟プロジェクト (cwd/repo スコープ版)
+- [Model Context Protocol](https://modelcontextprotocol.io/) — MCP spec
