@@ -173,6 +173,24 @@ pub enum Direction {
     Horizontal,
 }
 
+/// One entry in the `PeerList` response payload. Describes a single
+/// Claude-or-shell pane as a peer of the requesting pane. Scoped to
+/// the same workspace as the caller (tab isolation is enforced by the
+/// server). The MCP peer subprocess maps this into its `list_peers`
+/// tool output for Claude; see `src/mcp_peer/` once landed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PeerInfo {
+    pub id: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Working directory the pane was spawned with. Surfaced so the
+    /// asking Claude can tell which repo a sibling pane is in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
 /// One entry in the `List` response payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PaneInfo {
@@ -287,10 +305,6 @@ pub mod err_code {
     /// remaining tab. Refused so the TUI doesn't end up with an empty
     /// layout; the caller should shut down ccmux instead.
     pub const LAST_PANE: &str = "last_pane";
-    /// Request type is known but the server has no handler wired up
-    /// yet. Used by the staged MCP peer rollout so Stage 1 can ship
-    /// wire types independently of Stage 2's routing work.
-    pub const NOT_IMPLEMENTED: &str = "not_implemented";
 }
 
 /// App-side error carrying a free-form message plus an optional

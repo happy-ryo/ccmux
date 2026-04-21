@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::layout::Rect;
 
 use crate::filetree::FileTree;
-use crate::ipc::{self, PaneInfo, PaneRef};
+use crate::ipc::{self, PaneInfo, PaneRef, PeerInfo};
 use crate::layout_config::{DirectionSpec, LayoutConfig, LayoutNodeSpec};
 use crate::pane::{Pane, PointerAction, PointerButton};
 use crate::preview::Preview;
@@ -70,6 +70,26 @@ pub enum AppCommand {
     Close {
         target: PaneRef,
         reply: oneshot::Sender<std::result::Result<usize, ipc::CodedError>>,
+    },
+    /// List peers visible to `from_pane` — every other pane in the
+    /// same workspace. Drives the MCP peer subprocess's `list_peers`
+    /// tool.
+    PeerList {
+        from_pane: usize,
+        reply: oneshot::Sender<std::result::Result<Vec<PeerInfo>, ipc::CodedError>>,
+    },
+    /// Route a peer message from `from_pane` to `target`, provided
+    /// both live in the same workspace. Emits `Event::PeerInbox` on
+    /// the event bus so a subscribed MCP subprocess can push it out
+    /// as a `notifications/claude/channel` frame. Cross-tab targets
+    /// are silently accepted and dropped (no-op success) — v1 does
+    /// not expose cross-tab routing; callers cannot distinguish
+    /// "dropped" from "unknown peer" on purpose.
+    PeerSend {
+        from_pane: usize,
+        target: PaneRef,
+        body: String,
+        reply: oneshot::Sender<std::result::Result<(), ipc::CodedError>>,
     },
 }
 
@@ -2777,7 +2797,105 @@ impl App {
                 let result = self.handle_close(&target);
                 let _ = reply.send(result);
             }
+            AppCommand::PeerList { from_pane, reply } => {
+                let result = self.handle_peer_list(from_pane);
+                let _ = reply.send(result);
+            }
+            AppCommand::PeerSend {
+                from_pane,
+                target,
+                body,
+                reply,
+            } => {
+                let result = self.handle_peer_send(from_pane, &target, body);
+                let _ = reply.send(result);
+            }
         }
+    }
+
+    /// Resolve `from_pane` to its workspace, then return every other
+    /// pane in that workspace as a [`PeerInfo`]. Peers are ordered by
+    /// the workspace's layout traversal so siblings stay in a stable
+    /// visual order across calls (important for UX when Claude lists
+    /// peers — the order should match what the user sees on screen).
+    fn handle_peer_list(
+        &self,
+        from_pane: usize,
+    ) -> std::result::Result<Vec<PeerInfo>, ipc::CodedError> {
+        let (ws_idx, _) = self
+            .resolve_pane_across_workspaces(&PaneRef::Id(from_pane))
+            .ok_or_else(|| {
+                ipc::CodedError::new(
+                    ipc::err_code::PANE_NOT_FOUND,
+                    format!("caller pane {from_pane} not found in any workspace"),
+                )
+            })?;
+        let ws = &self.workspaces[ws_idx];
+        let name_by_id: HashMap<usize, String> = ws
+            .pane_names
+            .iter()
+            .map(|(n, id)| (*id, n.clone()))
+            .collect();
+        let peers: Vec<PeerInfo> = ws
+            .layout
+            .collect_pane_ids()
+            .into_iter()
+            .filter(|id| *id != from_pane)
+            .map(|id| {
+                let pane = ws.panes.get(&id);
+                PeerInfo {
+                    id,
+                    name: name_by_id.get(&id).cloned(),
+                    role: pane.and_then(|p| p.role.clone()),
+                    cwd: pane.map(|p| p.cwd.to_string_lossy().to_string()),
+                }
+            })
+            .collect();
+        Ok(peers)
+    }
+
+    /// Route `body` from `from_pane` to `target` when both share a
+    /// workspace. Cross-tab targets are silently dropped so the MCP
+    /// server cannot enumerate panes in other tabs by probing ids.
+    /// Self-sends are also a no-op — the spike binary proved the
+    /// loopback rendering already; in production self-send is always
+    /// a mistake.
+    fn handle_peer_send(
+        &self,
+        from_pane: usize,
+        target: &PaneRef,
+        body: String,
+    ) -> std::result::Result<(), ipc::CodedError> {
+        let (sender_ws, _) = self
+            .resolve_pane_across_workspaces(&PaneRef::Id(from_pane))
+            .ok_or_else(|| {
+                ipc::CodedError::new(
+                    ipc::err_code::PANE_NOT_FOUND,
+                    format!("sender pane {from_pane} not found"),
+                )
+            })?;
+        let (target_ws, target_id) = match self.resolve_pane_across_workspaces(target) {
+            Some(pair) => pair,
+            // Unknown target: silent success, matching the cross-tab
+            // policy so clients can't distinguish one from the other.
+            None => return Ok(()),
+        };
+        if sender_ws != target_ws || target_id == from_pane {
+            return Ok(());
+        }
+        let from_name = self.workspaces[sender_ws]
+            .pane_names
+            .iter()
+            .find(|(_, id)| **id == from_pane)
+            .map(|(n, _)| n.clone());
+        self.event_bus.emit(ipc::Event::PeerInbox {
+            target_pane: target_id,
+            from_pane,
+            from_name,
+            body,
+            ts_ms: ipc::events::now_ms(),
+        });
+        Ok(())
     }
 
     fn handle_inspect(

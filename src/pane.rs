@@ -82,6 +82,11 @@ impl Pane {
         cmd.cwd(&work_dir);
         cmd.env("TERM", "xterm-256color");
         cmd.env("CCMUX", "1"); // marker to detect nested ccmux
+                               // Per-pane identity for the MCP peer subprocess (see #97). The
+                               // subprocess is spawned by Claude Code, which inherits env
+                               // from this PTY, so reading `CCMUX_PANE_ID` at startup is how
+                               // the subprocess tells ccmux's IPC server which pane it is.
+        cmd.env("CCMUX_PANE_ID", id.to_string());
 
         let child = pair
             .slave
