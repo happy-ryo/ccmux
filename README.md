@@ -221,7 +221,10 @@ The `--lang auto\|ja\|en` CLI flag overrides the config file for a single run. V
 | Double-click tab | Rename tab |
 | Click `+` | New tab |
 | Drag border | Resize panels |
-| Scroll wheel | Scroll file tree / preview / terminal history |
+| Scroll wheel | Scroll file tree / preview / terminal history. In panes running a TUI that subscribed to mouse reporting (Claude Code `/tui fullscreen`, vim, lazygit, less, …) the wheel is forwarded to the app instead. |
+| Click / drag inside a pane | Normally selects text for copy. When the pane is running a mouse-reporting TUI, the click is forwarded to the app so buttons, carets, etc. work. Hold `Shift` to force ccmux-side text selection (same escape hatch as tmux / alacritty). |
+
+Both wheel and click forwarding can be disabled globally with `CCMUX_DISABLE_MOUSE_FORWARD=1` — useful for nested ccmux or terminals whose mouse-protocol encoding confuses the inner app.
 
 ## Architecture
 

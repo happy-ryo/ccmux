@@ -323,6 +323,61 @@ impl Pane {
         }
     }
 
+    /// Decide how a mouse button press/release/drag at `(local_col,
+    /// local_row)` — pane content-area coordinates, 0-origin — should
+    /// be handled. Mirrors [`Pane::wheel_forward_bytes`] (Issue #52 /
+    /// PR #53) for non-wheel events: the same click that lands in a
+    /// plain shell is a ccmux concern (focus, scrollbar, drag-select)
+    /// while a click on a pane running Claude Code `/tui fullscreen`,
+    /// vim, lazygit, etc. needs to reach the PTY as an xterm mouse
+    /// report so the app can handle it.
+    ///
+    /// Returns `Some(bytes)` when the caller should forward the report
+    /// to the PTY (and skip the ccmux-side handlers for this event).
+    /// Returns `None` when mouse reporting is disabled, or when the
+    /// active [`MouseProtocolMode`] doesn't cover this event type —
+    /// e.g. plain `Press` mode never emits release events, so
+    /// forwarding one would be protocol noise.
+    ///
+    /// Mode → action gating follows the xterm ladder:
+    /// * `None` → nothing forwards.
+    /// * `Press` (DECSET 9) → only button presses.
+    /// * `PressRelease` (DECSET 1000) → presses + releases, no drag.
+    /// * `ButtonMotion` (DECSET 1002) → press + release + held-button drag.
+    /// * `AnyMotion` (DECSET 1003) → same as `ButtonMotion` for this
+    ///   call site; plain hover motion (no button held) goes through a
+    ///   different path that we haven't wired yet.
+    pub fn click_forward_bytes(
+        &self,
+        button: PointerButton,
+        action: PointerAction,
+        local_col: u16,
+        local_row: u16,
+    ) -> Option<Vec<u8>> {
+        let parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
+        let screen = parser.screen();
+        let mode = screen.mouse_protocol_mode();
+        let encoding = screen.mouse_protocol_encoding();
+
+        let allowed = match (mode, action) {
+            (vt100::MouseProtocolMode::None, _) => false,
+            (vt100::MouseProtocolMode::Press, PointerAction::Press) => true,
+            (vt100::MouseProtocolMode::Press, _) => false,
+            (vt100::MouseProtocolMode::PressRelease, PointerAction::Drag) => false,
+            (vt100::MouseProtocolMode::PressRelease, _) => true,
+            (vt100::MouseProtocolMode::ButtonMotion, _) => true,
+            (vt100::MouseProtocolMode::AnyMotion, _) => true,
+        };
+
+        if !allowed {
+            return None;
+        }
+
+        Some(encode_mouse_button_report(
+            button, action, local_col, local_row, encoding,
+        ))
+    }
+
     /// Check if Claude Code is running in this pane (by window title).
     pub fn is_claude_running(&self) -> bool {
         if let Ok(t) = self.title.lock() {
@@ -379,6 +434,108 @@ impl Drop for Pane {
     fn drop(&mut self) {
         self.kill();
     }
+}
+
+/// Which mouse button the report encodes. Only the three physical
+/// buttons ccmux actually receives from crossterm — extra buttons
+/// (4/5/wheel, side buttons) are handled by their own paths and
+/// don't round-trip through this enum.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PointerButton {
+    Left,
+    Middle,
+    Right,
+}
+
+impl PointerButton {
+    /// Low 2 bits of the xterm button code: 0 = left, 1 = middle, 2 = right.
+    fn code(self) -> u8 {
+        match self {
+            PointerButton::Left => 0,
+            PointerButton::Middle => 1,
+            PointerButton::Right => 2,
+        }
+    }
+}
+
+/// Which part of a button interaction the event represents. `Drag` is
+/// a motion event with a button still held; plain hover (no button) is
+/// a separate path not handled here.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PointerAction {
+    Press,
+    Release,
+    Drag,
+}
+
+/// Encode an xterm mouse button report (press / release / drag) for
+/// the given protocol encoding. Separate from
+/// [`encode_mouse_wheel_report`] because the release encoding for the
+/// legacy `Default` / `Utf8` forms uses a different button field (`3`
+/// instead of the physical button code) — merging the two would have
+/// required every wheel call site to also thread a "this is a release"
+/// flag through for no gain.
+///
+/// `col` / `row` are pane-local content-area coordinates, **0-origin**;
+/// the encoder converts to the 1-origin wire form. The `Default`
+/// encoding truncates past 223 for the same reason `encode_mouse_wheel_report`
+/// does (single-byte cell + 32 offset).
+pub fn encode_mouse_button_report(
+    button: PointerButton,
+    action: PointerAction,
+    col: u16,
+    row: u16,
+    encoding: vt100::MouseProtocolEncoding,
+) -> Vec<u8> {
+    let c1 = col.saturating_add(1);
+    let r1 = row.saturating_add(1);
+    let btn = button.code();
+
+    match encoding {
+        vt100::MouseProtocolEncoding::Sgr => {
+            // SGR: `CSI < Cb ; Cx ; Cy ; {M|m}`. `M` ends press and
+            // drag, `m` ends release. `Cb` keeps the physical button
+            // code for press / release; drag sets the +32 motion bit.
+            let cb = match action {
+                PointerAction::Press | PointerAction::Release => u32::from(btn),
+                PointerAction::Drag => u32::from(btn) + 32,
+            };
+            let final_byte = match action {
+                PointerAction::Press | PointerAction::Drag => 'M',
+                PointerAction::Release => 'm',
+            };
+            format!("\x1b[<{cb};{c1};{r1}{final_byte}").into_bytes()
+        }
+        vt100::MouseProtocolEncoding::Utf8 => {
+            let cb = mouse_button_legacy_cb(button, action);
+            let mut v: Vec<u8> = vec![0x1b, b'[', b'M', cb];
+            encode_utf8_coord(&mut v, c1);
+            encode_utf8_coord(&mut v, r1);
+            v
+        }
+        vt100::MouseProtocolEncoding::Default => {
+            let cb = mouse_button_legacy_cb(button, action);
+            let col_byte = c1.saturating_add(32).min(255) as u8;
+            let row_byte = r1.saturating_add(32).min(255) as u8;
+            vec![0x1b, b'[', b'M', cb, col_byte, row_byte]
+        }
+    }
+}
+
+/// Legacy `Default` / `Utf8` button byte: `button_code + 32`, with
+/// release flattened to `3 + 32` (the legacy encoding has no per-button
+/// release signal) and drag marked with the `+32` motion flag on top
+/// of the press code.
+fn mouse_button_legacy_cb(button: PointerButton, action: PointerAction) -> u8 {
+    let base: u8 = match action {
+        PointerAction::Press => button.code(),
+        // Legacy release encodes as `3` regardless of which physical
+        // button was let go — the app keys off the earlier press.
+        PointerAction::Release => 3,
+        // Drag = press button code + motion bit.
+        PointerAction::Drag => button.code() + 32,
+    };
+    base.saturating_add(32)
 }
 
 /// Encode a mouse-wheel report for the given xterm protocol encoding.
@@ -750,6 +907,131 @@ mod tests {
         assert_eq!(bytes[5], 0x85);
         // row=0 -> 1-origin 1, +32 = 33 (0x21), single byte
         assert_eq!(bytes[6], 33);
+    }
+
+    // -- encode_mouse_button_report (Issue #52 follow-up: clicks) ----
+
+    #[test]
+    fn button_report_sgr_press_terminator_is_capital_m() {
+        // SGR press of left button at (col=9, row=4) — the `M`
+        // terminator is what distinguishes press/drag from release
+        // in the SGR encoding. Button code 0 = left.
+        let bytes = encode_mouse_button_report(
+            PointerButton::Left,
+            PointerAction::Press,
+            9,
+            4,
+            vt100::MouseProtocolEncoding::Sgr,
+        );
+        assert_eq!(bytes, b"\x1b[<0;10;5M");
+    }
+
+    #[test]
+    fn button_report_sgr_release_terminator_is_lowercase_m() {
+        // SGR release: same button code as press, but lowercase `m`.
+        let bytes = encode_mouse_button_report(
+            PointerButton::Left,
+            PointerAction::Release,
+            9,
+            4,
+            vt100::MouseProtocolEncoding::Sgr,
+        );
+        assert_eq!(bytes, b"\x1b[<0;10;5m");
+    }
+
+    #[test]
+    fn button_report_sgr_drag_sets_motion_bit() {
+        // SGR drag: button_code + 32 = 32 for left, `M` terminator.
+        let bytes = encode_mouse_button_report(
+            PointerButton::Left,
+            PointerAction::Drag,
+            9,
+            4,
+            vt100::MouseProtocolEncoding::Sgr,
+        );
+        assert_eq!(bytes, b"\x1b[<32;10;5M");
+    }
+
+    #[test]
+    fn button_report_sgr_middle_and_right_press() {
+        let middle = encode_mouse_button_report(
+            PointerButton::Middle,
+            PointerAction::Press,
+            0,
+            0,
+            vt100::MouseProtocolEncoding::Sgr,
+        );
+        assert_eq!(middle, b"\x1b[<1;1;1M");
+        let right = encode_mouse_button_report(
+            PointerButton::Right,
+            PointerAction::Press,
+            0,
+            0,
+            vt100::MouseProtocolEncoding::Sgr,
+        );
+        assert_eq!(right, b"\x1b[<2;1;1M");
+    }
+
+    #[test]
+    fn button_report_default_release_collapses_to_button_three() {
+        // Legacy encoding: a release of any button is reported as
+        // `3` (the xterm-era "no button held" sentinel) + 32 = 35.
+        // This is intentionally lossy — the app pairs it with the
+        // most recent press to know which physical button lifted.
+        let bytes = encode_mouse_button_report(
+            PointerButton::Left,
+            PointerAction::Release,
+            0,
+            0,
+            vt100::MouseProtocolEncoding::Default,
+        );
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 35, 33, 33]);
+
+        let right_release = encode_mouse_button_report(
+            PointerButton::Right,
+            PointerAction::Release,
+            0,
+            0,
+            vt100::MouseProtocolEncoding::Default,
+        );
+        assert_eq!(
+            right_release, bytes,
+            "legacy release must be button-agnostic — right release encodes identically to left"
+        );
+    }
+
+    #[test]
+    fn button_report_default_drag_adds_motion_offset() {
+        // Legacy drag: button_code + 32 (motion) + 32 (base offset)
+        // = 0 + 32 + 32 = 64 for left-button drag.
+        let bytes = encode_mouse_button_report(
+            PointerButton::Left,
+            PointerAction::Drag,
+            0,
+            0,
+            vt100::MouseProtocolEncoding::Default,
+        );
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 64, 33, 33]);
+    }
+
+    #[test]
+    fn button_report_utf8_wide_coords() {
+        // Same UTF-8 boundary case as the wheel test: row coord
+        // crossing 0x80 must multi-byte encode.
+        let bytes = encode_mouse_button_report(
+            PointerButton::Left,
+            PointerAction::Press,
+            0,
+            100,
+            vt100::MouseProtocolEncoding::Utf8,
+        );
+        // Cb = 0 + 32 = 32 for left press
+        assert_eq!(bytes[0..4], [0x1b, b'[', b'M', 32]);
+        // col=0 -> 1-origin 1, +32 = 33, single byte
+        assert_eq!(bytes[4], 33);
+        // row=100 -> 1-origin 101, +32 = 133 (0x85), 2-byte UTF-8
+        assert_eq!(bytes[5], 0xC2);
+        assert_eq!(bytes[6], 0x85);
     }
 
     #[test]

@@ -10,7 +10,7 @@ use ratatui::layout::Rect;
 use crate::filetree::FileTree;
 use crate::ipc::{self, PaneInfo, PaneRef};
 use crate::layout_config::{DirectionSpec, LayoutConfig, LayoutNodeSpec};
-use crate::pane::Pane;
+use crate::pane::{Pane, PointerAction, PointerButton};
 use crate::preview::Preview;
 
 /// Commands that flow from the IPC server thread into the App's event
@@ -126,6 +126,23 @@ pub enum DragTarget {
     PreviewBorder,
     PaneSplit(Vec<bool>, SplitDirection, Rect),
     Scrollbar(usize, Rect), // pane_id, inner area
+    /// A mouse press was forwarded to a pane running a TUI that
+    /// subscribed to mouse reporting (Claude Code `/tui fullscreen`,
+    /// vim, lazygit, etc.). Subsequent Drag and Up events must go to
+    /// the same pane so the app sees a consistent press → drag* →
+    /// release sequence, even if the cursor has wandered off the
+    /// original pane by the time the drag continues. Stores the
+    /// workspace index + pane id of the press target (so a tab
+    /// switch mid-drag still routes back to the right pane — panes
+    /// belong to workspaces, and `self.ws()` would otherwise resolve
+    /// to whichever tab is active *now*), its outer rect (for local-
+    /// coordinate math), and the button that started it.
+    PaneMouseReport(
+        /* ws_idx */ usize,
+        /* pane_id */ usize,
+        Rect,
+        crate::pane::PointerButton,
+    ),
 }
 
 // ─── Layout Tree ──────────────────────────────────────────
@@ -1859,6 +1876,44 @@ impl App {
             }
         }
 
+        // First, see if this event belongs to an in-progress mouse-
+        // report session (Issue #52 follow-up: clicks in alt-screen
+        // TUIs). A Press set `dragging = PaneMouseReport(...)`; keep
+        // every Drag / Up bound to the same pane even if the cursor
+        // has wandered off it, so the app sees a coherent press →
+        // drag* → release sequence. Skipping this early-return would
+        // let a drag land in a neighbouring pane or get picked up by
+        // ccmux's border-drag handler instead.
+        if let Some(DragTarget::PaneMouseReport(ws_idx, pane_id, rect, btn)) = self.dragging.clone()
+        {
+            match mouse.kind {
+                MouseEventKind::Drag(_) => {
+                    self.forward_pointer_to_pane(
+                        ws_idx,
+                        pane_id,
+                        rect,
+                        btn,
+                        PointerAction::Drag,
+                        &mouse,
+                    );
+                    return;
+                }
+                MouseEventKind::Up(_) => {
+                    self.forward_pointer_to_pane(
+                        ws_idx,
+                        pane_id,
+                        rect,
+                        btn,
+                        PointerAction::Release,
+                        &mouse,
+                    );
+                    self.dragging = None;
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 let col = mouse.column;
@@ -2005,6 +2060,27 @@ impl App {
                         self.ws_mut().focused_pane_id = pane_id;
                         self.ws_mut().focus_target = FocusTarget::Pane;
 
+                        // Try forwarding the click to the pane's PTY
+                        // when a TUI in there subscribed to mouse
+                        // reporting. `Shift+click` is reserved for
+                        // ccmux-side text selection (same escape
+                        // hatch as tmux / alacritty), and
+                        // CCMUX_DISABLE_MOUSE_FORWARD=1 disables
+                        // forwarding entirely — mirrors the wheel
+                        // handler's opt-out (Issue #52 / PR #53).
+                        if !mouse.modifiers.contains(KeyModifiers::SHIFT)
+                            && !mouse_forward_disabled()
+                            && self.try_forward_pane_press(
+                                pane_id,
+                                rect,
+                                PointerButton::Left,
+                                col,
+                                row,
+                            )
+                        {
+                            return;
+                        }
+
                         // Check if clicking on scrollbar (rightmost column inside border)
                         let scrollbar_col = rect.x + rect.width - 2; // -1 border, -1 scrollbar
                         if col >= scrollbar_col {
@@ -2017,6 +2093,35 @@ impl App {
                             self.scroll_pane_to_click(pane_id, row, &inner);
                             self.dragging = Some(DragTarget::Scrollbar(pane_id, inner));
                         }
+                        return;
+                    }
+                }
+            }
+            MouseEventKind::Down(btn @ (MouseButton::Middle | MouseButton::Right)) => {
+                // Middle / right clicks don't drive any ccmux-side
+                // shortcut today, so the only reason to see them here
+                // is to forward to a TUI that asked for full mouse
+                // reporting. Shift-held stays ccmux-native for
+                // symmetry with the left-button path (callers who
+                // want a plain paste/context-menu still get one).
+                let col = mouse.column;
+                let row = mouse.row;
+                if mouse.modifiers.contains(KeyModifiers::SHIFT) || mouse_forward_disabled() {
+                    return;
+                }
+                let pointer_btn = match btn {
+                    MouseButton::Middle => PointerButton::Middle,
+                    MouseButton::Right => PointerButton::Right,
+                    MouseButton::Left => unreachable!(),
+                };
+                let pane_rects = self.ws().last_pane_rects.clone();
+                for (pane_id, rect) in pane_rects {
+                    if col >= rect.x
+                        && col < rect.x + rect.width
+                        && row >= rect.y
+                        && row < rect.y + rect.height
+                    {
+                        self.try_forward_pane_press(pane_id, rect, pointer_btn, col, row);
                         return;
                     }
                 }
@@ -2056,6 +2161,16 @@ impl App {
                         }
                         DragTarget::Scrollbar(pane_id, inner) => {
                             self.scroll_pane_to_click(*pane_id, row, inner);
+                        }
+                        DragTarget::PaneMouseReport(..) => {
+                            // Unreachable: the early-return at the
+                            // top of `handle_mouse_event` intercepts
+                            // every Drag/Up while this variant is
+                            // active, so by the time a Drag reaches
+                            // this arm `self.dragging` has already
+                            // been steered to one of the border /
+                            // split / scrollbar variants above.
+                            debug_assert!(false, "PaneMouseReport leaked to border-drag match");
                         }
                     }
                     return;
@@ -2307,9 +2422,7 @@ impl App {
             }
         }
 
-        let disable_forward = std::env::var("CCMUX_DISABLE_MOUSE_FORWARD")
-            .map(|v| !v.is_empty() && v != "0")
-            .unwrap_or(false);
+        let disable_forward = mouse_forward_disabled();
 
         let pane_rects = self.ws().last_pane_rects.clone();
         for (pane_id, rect) in pane_rects {
@@ -2350,6 +2463,83 @@ impl App {
                 self.dirty = true;
             }
             return;
+        }
+    }
+
+    /// Try to forward a button press inside `pane_id`'s rect to the
+    /// PTY as an xterm mouse report. Returns `true` when the press was
+    /// forwarded (and the caller should skip ccmux-side handling for
+    /// this pane); `false` when the pane has mouse reporting off and
+    /// the caller should fall through to its existing behavior
+    /// (scrollbar, focus, etc.).
+    ///
+    /// On success the drag state is set to [`DragTarget::PaneMouseReport`]
+    /// so subsequent Drag and Up events route back to the same pane.
+    fn try_forward_pane_press(
+        &mut self,
+        pane_id: usize,
+        rect: Rect,
+        button: PointerButton,
+        col: u16,
+        row: u16,
+    ) -> bool {
+        let (local_col, local_row) = match pane_local_coords(rect, col, row) {
+            Some(lc) => lc,
+            None => return false,
+        };
+        let bytes = self.ws().panes.get(&pane_id).and_then(|p| {
+            p.click_forward_bytes(button, PointerAction::Press, local_col, local_row)
+        });
+        let Some(data) = bytes else {
+            return false;
+        };
+        let ws_idx = self.active_tab;
+        if let Some(pane) = self.ws_mut().panes.get_mut(&pane_id) {
+            let _ = pane.write_input(&data);
+            self.dragging = Some(DragTarget::PaneMouseReport(ws_idx, pane_id, rect, button));
+            self.dirty = true;
+            return true;
+        }
+        false
+    }
+
+    /// Forward a drag / release back to the pane where the originating
+    /// press landed. Coordinates are clamped to the pane content area
+    /// so an app seeing the report never gets an out-of-bounds cell.
+    /// Silently drops the event if the pane has since been closed, the
+    /// originating workspace has been removed, or the pane's mouse-
+    /// reporting mode no longer covers this action (e.g. `Press`-only
+    /// mode seeing a drag).
+    fn forward_pointer_to_pane(
+        &mut self,
+        ws_idx: usize,
+        pane_id: usize,
+        rect: Rect,
+        button: PointerButton,
+        action: PointerAction,
+        mouse: &MouseEvent,
+    ) {
+        let (local_col, local_row) = pane_local_coords_clamped(rect, mouse.column, mouse.row);
+        let bytes = self
+            .workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.panes.get(&pane_id))
+            .and_then(|p| p.click_forward_bytes(button, action, local_col, local_row));
+        let Some(data) = bytes else {
+            return;
+        };
+        if let Some(pane) = self
+            .workspaces
+            .get_mut(ws_idx)
+            .and_then(|ws| ws.panes.get_mut(&pane_id))
+        {
+            let _ = pane.write_input(&data);
+            // Only request a redraw when the affected pane is still on
+            // the active tab — otherwise we'd dirty the frame for a
+            // pane the user isn't looking at.
+            if ws_idx == self.active_tab {
+                self.dirty = true;
+            }
         }
     }
 
@@ -2929,6 +3119,60 @@ pub fn key_event_to_bytes_pub(key: &KeyEvent) -> Option<Vec<u8>> {
     key_event_to_bytes(key)
 }
 
+/// True when the user set `CCMUX_DISABLE_MOUSE_FORWARD=1` (or any non-
+/// empty non-`"0"` value) to opt out of PTY-side mouse handling. Used
+/// by both wheel and click forwarding as a joint escape hatch for
+/// nested ccmux sessions or terminals with a mismatched mouse-
+/// protocol encoding.
+fn mouse_forward_disabled() -> bool {
+    std::env::var("CCMUX_DISABLE_MOUSE_FORWARD")
+        .map(|v| !v.is_empty() && v != "0")
+        .unwrap_or(false)
+}
+
+/// Convert screen-space (col, row) to pane-local content coords, 0-
+/// origin. Returns `None` when the rect is too small to hold a content
+/// cell, or when the point falls on (or outside) the pane border — a
+/// press exactly on a border could be a border-drag attempt, so we
+/// decline to forward it and let the caller fall through to the
+/// border-drag handler. All arithmetic is saturating to keep extreme
+/// `u16` rects (width/height 0/1, or origins near `u16::MAX`) from
+/// overflowing in debug builds.
+fn pane_local_coords(rect: Rect, col: u16, row: u16) -> Option<(u16, u16)> {
+    // Need at least 1×1 of interior after stripping the 1-cell border.
+    if rect.width < 3 || rect.height < 3 {
+        return None;
+    }
+    let right = rect.x.saturating_add(rect.width);
+    let bottom = rect.y.saturating_add(rect.height);
+    if col <= rect.x || col.saturating_add(1) >= right {
+        return None;
+    }
+    if row <= rect.y || row.saturating_add(1) >= bottom {
+        return None;
+    }
+    Some((col - rect.x - 1, row - rect.y - 1))
+}
+
+/// Same as [`pane_local_coords`] but used for Drag / Up events where
+/// the cursor may have wandered onto the border or off-pane entirely.
+/// The xterm protocol expects every press to pair with a release, so
+/// we clamp to the pane content area and keep sending reports instead
+/// of dropping them. Returns `(0, 0)` for degenerate rects (< 3×3) —
+/// those can't originate a press in the first place, but we still
+/// need to return something callable from the drag/up routing path.
+fn pane_local_coords_clamped(rect: Rect, col: u16, row: u16) -> (u16, u16) {
+    let inner_x = rect.x.saturating_add(1);
+    let inner_y = rect.y.saturating_add(1);
+    let inner_w = rect.width.saturating_sub(2);
+    let inner_h = rect.height.saturating_sub(2);
+    let max_col = inner_w.saturating_sub(1);
+    let max_row = inner_h.saturating_sub(1);
+    let local_col = col.saturating_sub(inner_x).min(max_col);
+    let local_row = row.saturating_sub(inner_y).min(max_row);
+    (local_col, local_row)
+}
+
 /// Convert a crossterm KeyEvent into bytes suitable for PTY input.
 fn key_event_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -3001,6 +3245,108 @@ fn key_event_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- pane_local_coords / pane_local_coords_clamped ---------------
+
+    #[test]
+    fn pane_local_coords_rejects_border_clicks() {
+        // A 10×5 pane at origin (2, 3): border at col 2 / col 11 /
+        // row 3 / row 7. A click on any border cell must decline to
+        // forward so the caller can fall through to the border-drag
+        // handler instead.
+        let rect = Rect::new(2, 3, 10, 5);
+        assert!(pane_local_coords(rect, 2, 5).is_none(), "left border");
+        assert!(pane_local_coords(rect, 11, 5).is_none(), "right border");
+        assert!(pane_local_coords(rect, 5, 3).is_none(), "top border");
+        assert!(pane_local_coords(rect, 5, 7).is_none(), "bottom border");
+    }
+
+    #[test]
+    fn pane_local_coords_translates_to_content_0_origin() {
+        // Pane outer at (2, 3), content starts at (3, 4). A click at
+        // screen (3, 4) must land on content (0, 0); (10, 6) maps
+        // to (7, 2).
+        let rect = Rect::new(2, 3, 10, 5);
+        assert_eq!(pane_local_coords(rect, 3, 4), Some((0, 0)));
+        assert_eq!(pane_local_coords(rect, 10, 6), Some((7, 2)));
+    }
+
+    #[test]
+    fn pane_local_coords_clamped_stays_inside_content() {
+        // Clamp is used on Drag/Up where the cursor may wander off-
+        // pane. Ensure clamp never produces an out-of-bounds cell.
+        let rect = Rect::new(2, 3, 10, 5);
+        // Cursor well to the right of the pane — should pin to the
+        // last content column (width - 2 = 8 inner cells, 0..=7).
+        assert_eq!(pane_local_coords_clamped(rect, 50, 50), (7, 2));
+        // Cursor above/left of the pane — should pin to (0, 0).
+        assert_eq!(pane_local_coords_clamped(rect, 0, 0), (0, 0));
+        // Cursor inside — untouched.
+        assert_eq!(pane_local_coords_clamped(rect, 5, 5), (2, 1));
+    }
+
+    #[test]
+    fn pane_local_coords_rejects_rects_too_small_for_content() {
+        // A 2×2 or narrower rect has no interior after stripping the
+        // 1-cell border. Codex review flagged that the pre-fix version
+        // underflowed with `rect.width == 1`; the guard keeps such a
+        // press from ever reaching the forward path.
+        for (w, h) in [(0, 5), (1, 5), (2, 5), (5, 0), (5, 1), (5, 2)] {
+            let rect = Rect::new(2, 3, w, h);
+            assert!(
+                pane_local_coords(rect, 3, 4).is_none(),
+                "{}×{} rect must be rejected before the arithmetic fires",
+                w,
+                h
+            );
+        }
+    }
+
+    #[test]
+    fn pane_local_coords_survives_extreme_u16_origins() {
+        // `rect.x = u16::MAX - 5` means `rect.x + rect.width` would
+        // overflow in unchecked arithmetic. Saturating math keeps this
+        // from panicking in debug builds.
+        let rect = Rect::new(u16::MAX - 5, 0, 10, 5);
+        // The call must return, not panic. Result content is
+        // secondary — whatever it yields, it yields safely.
+        let _ = pane_local_coords(rect, u16::MAX - 3, 2);
+        let _ = pane_local_coords_clamped(rect, u16::MAX, u16::MAX);
+    }
+
+    // -- mouse_forward_disabled env gate -----------------------------
+
+    #[test]
+    fn mouse_forward_disabled_reads_env_var() {
+        // Serialize against the global env so parallel tests don't
+        // see each other's values. We only toggle within this test.
+        use std::sync::Mutex;
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _guard = LOCK.lock().unwrap();
+
+        std::env::remove_var("CCMUX_DISABLE_MOUSE_FORWARD");
+        assert!(!mouse_forward_disabled(), "unset → false");
+
+        std::env::set_var("CCMUX_DISABLE_MOUSE_FORWARD", "1");
+        assert!(mouse_forward_disabled(), "\"1\" → true");
+
+        std::env::set_var("CCMUX_DISABLE_MOUSE_FORWARD", "0");
+        assert!(
+            !mouse_forward_disabled(),
+            "\"0\" must be treated as opt-in-off, matching the wheel-handler convention"
+        );
+
+        std::env::set_var("CCMUX_DISABLE_MOUSE_FORWARD", "");
+        assert!(!mouse_forward_disabled(), "empty string → false");
+
+        std::env::set_var("CCMUX_DISABLE_MOUSE_FORWARD", "yes");
+        assert!(
+            mouse_forward_disabled(),
+            "any non-empty non-\"0\" value → true (permissive)"
+        );
+
+        std::env::remove_var("CCMUX_DISABLE_MOUSE_FORWARD");
+    }
 
     #[test]
     fn hotkey_mode_esc_closes_overlay_and_discards_buffer() {
