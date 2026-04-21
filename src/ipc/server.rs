@@ -510,6 +510,16 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
                 }
             }
         }
+        // Peer-messaging handlers are staged: Stage 1 ships the wire
+        // types and stubs; Stage 2 wires them into App peer routing.
+        // Returning NOT_IMPLEMENTED here keeps the request surface
+        // discoverable (clients can call it and get a deterministic
+        // code) without blocking the rest of the PR sequence on peer
+        // state.
+        Request::PeerList { .. } | Request::PeerSend { .. } => Response::err_coded(
+            err_code::NOT_IMPLEMENTED,
+            "peer messaging routing not wired yet (stage 2 of issue #97)",
+        ),
     }
 }
 

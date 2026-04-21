@@ -132,6 +132,27 @@ pub enum Request {
         #[serde(default)]
         include_cursor: bool,
     },
+    /// List peers visible from the caller's pane. Scope is always
+    /// "panes in the same workspace as `from_pane`, excluding
+    /// `from_pane` itself". Used by the bundled MCP peer server
+    /// (`ccmux mcp-peer`) to serve its `list_peers` tool. Wire-compat
+    /// with claude-peers-mcp's tool signature is handled in the MCP
+    /// layer; this request is ccmux-internal.
+    PeerList {
+        /// The caller's own pane id (from `CCMUX_PANE_ID` env).
+        from_pane: usize,
+    },
+    /// Deliver `body` to `target`'s peer inbox. Silently no-ops if
+    /// `target` resolves to a pane outside `from_pane`'s workspace —
+    /// cross-tab messaging is not exposed in v1. On success the server
+    /// emits an `Event::PeerInbox` on the event bus so any MCP peer
+    /// subprocess subscribed on behalf of the target can push it out
+    /// as a `notifications/claude/channel` frame.
+    PeerSend {
+        from_pane: usize,
+        target: PaneRef,
+        body: String,
+    },
 }
 
 /// Identifies a pane in a request. Names are user-friendly and stable
@@ -266,6 +287,10 @@ pub mod err_code {
     /// remaining tab. Refused so the TUI doesn't end up with an empty
     /// layout; the caller should shut down ccmux instead.
     pub const LAST_PANE: &str = "last_pane";
+    /// Request type is known but the server has no handler wired up
+    /// yet. Used by the staged MCP peer rollout so Stage 1 can ship
+    /// wire types independently of Stage 2's routing work.
+    pub const NOT_IMPLEMENTED: &str = "not_implemented";
 }
 
 /// App-side error carrying a free-form message plus an optional
@@ -374,6 +399,25 @@ pub enum Event {
     /// accepting). Clients can safely ignore it, or surface it as a
     /// liveness indicator.
     Heartbeat { ts_ms: u64 },
+    /// A peer message destined for `target_pane`. Emitted by the server
+    /// in response to a `Request::PeerSend` that resolved to a pane in
+    /// the sender's workspace. Subscribers filter on `target_pane` to
+    /// pick out their own inbox; all other subscribers ignore the
+    /// event. Workspace isolation is enforced at send time, so an
+    /// emitted `PeerInbox` is always intra-tab by construction.
+    PeerInbox {
+        /// Pane the message is addressed to.
+        target_pane: usize,
+        /// Pane that originated the message.
+        from_pane: usize,
+        /// Sender's stable IPC name (if any). Clients display this in
+        /// the channel notification meta so recipients know who is
+        /// talking.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_name: Option<String>,
+        body: String,
+        ts_ms: u64,
+    },
 }
 
 impl Response {
@@ -778,5 +822,47 @@ mod tests {
             } => {}
             other => panic!("expected Inspect defaults, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn peer_list_request_roundtrips() {
+        let r = Request::PeerList { from_pane: 3 };
+        assert_eq!(roundtrip(&r), r);
+    }
+
+    #[test]
+    fn peer_send_request_roundtrips() {
+        let r = Request::PeerSend {
+            from_pane: 1,
+            target: PaneRef::Name("worker".into()),
+            body: "hi".into(),
+        };
+        assert_eq!(roundtrip(&r), r);
+    }
+
+    #[test]
+    fn peer_inbox_event_roundtrips() {
+        let ev = Event::PeerInbox {
+            target_pane: 2,
+            from_pane: 1,
+            from_name: Some("leader".into()),
+            body: "ping".into(),
+            ts_ms: 42,
+        };
+        let parsed: Event = serde_json::from_str(&serde_json::to_string(&ev).unwrap()).unwrap();
+        assert_eq!(parsed, ev);
+    }
+
+    #[test]
+    fn peer_inbox_event_omits_name_when_none() {
+        let ev = Event::PeerInbox {
+            target_pane: 5,
+            from_pane: 6,
+            from_name: None,
+            body: "no name".into(),
+            ts_ms: 1,
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(!s.contains("\"from_name\""), "should omit from_name: {s}");
     }
 }
