@@ -4369,6 +4369,119 @@ mod tests {
     }
 
     #[test]
+    fn handle_peer_send_emits_peer_inbox_to_sibling_in_same_tab() {
+        // Split pane A's workspace to create a sibling. Sending from
+        // A to the sibling should emit Event::PeerInbox carrying the
+        // sender id, the body, and a stable timestamp. This is the
+        // core happy-path of #97: without this event the MCP peer
+        // subprocess has nothing to push as a channel notification.
+        let mut app = App::new(40, 80).expect("App::new");
+        let (_sub_id, rx) = app.event_bus.subscribe();
+        let sender_id = app.ws().focused_pane_id;
+        let sibling_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                None,
+                None,
+            )
+            .expect("split succeeds");
+        // Drain PaneStarted events from the split so the assertion below
+        // only sees the PeerInbox we care about.
+        while let Ok(ev) = rx.try_recv() {
+            if !matches!(ev, ipc::Event::PaneStarted { .. }) {
+                panic!("unexpected event before peer send: {ev:?}");
+            }
+        }
+        app.handle_peer_send(
+            sender_id,
+            &ipc::PaneRef::Id(sibling_id),
+            "hello sibling".to_string(),
+        )
+        .expect("peer send");
+        let mut found = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let ipc::Event::PeerInbox {
+                target_pane,
+                from_pane,
+                body,
+                ..
+            } = ev
+            {
+                assert_eq!(target_pane, sibling_id);
+                assert_eq!(from_pane, sender_id);
+                assert_eq!(body, "hello sibling");
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "expected PeerInbox event after handle_peer_send");
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_peer_send_silently_drops_cross_tab_target() {
+        // Cross-tab delivery is a silent no-op by design — callers
+        // cannot enumerate panes in other tabs by probing ids. A
+        // PeerInbox event would leak "pane X exists somewhere", so
+        // the handler must emit nothing at all.
+        let mut app = App::new(40, 80).expect("App::new");
+        let (_sub_id, rx) = app.event_bus.subscribe();
+        let sender_id = app.ws().focused_pane_id;
+        // Open a fresh tab; its pane id is distinct from sender's.
+        let other_tab_pane = app
+            .handle_new_tab(None, None, None, None)
+            .expect("new tab succeeds");
+        assert_ne!(
+            other_tab_pane, sender_id,
+            "new_tab must allocate a fresh pane id"
+        );
+        // Drain PaneStarted / tab-switch events.
+        while rx.try_recv().is_ok() {}
+
+        app.handle_peer_send(
+            sender_id,
+            &ipc::PaneRef::Id(other_tab_pane),
+            "should be silently dropped".to_string(),
+        )
+        .expect("cross-tab send reports success");
+        let got_inbox = std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|ev| matches!(ev, ipc::Event::PeerInbox { .. }));
+        assert!(
+            !got_inbox,
+            "cross-tab PeerSend must NOT emit a PeerInbox event"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_peer_list_excludes_caller_and_lists_siblings() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let sender_id = app.ws().focused_pane_id;
+        let sibling_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                Some("sibling".into()),
+                Some("worker".into()),
+            )
+            .expect("split succeeds");
+        let peers = app.handle_peer_list(sender_id).expect("peer list");
+        assert_eq!(peers.len(), 1, "expected one sibling, got {peers:?}");
+        assert_eq!(peers[0].id, sibling_id);
+        assert_eq!(peers[0].name.as_deref(), Some("sibling"));
+        assert_eq!(peers[0].role.as_deref(), Some("worker"));
+        // Caller must be excluded.
+        assert!(
+            peers.iter().all(|p| p.id != sender_id),
+            "peer list must not include the caller"
+        );
+        app.shutdown();
+    }
+
+    #[test]
     fn default_command_for_role_returns_claude_launch_for_claude_role() {
         // Strategy C from #97: `ccmux split --role claude` must pre-fill
         // the peer-channel flag so the user doesn't need to know the
