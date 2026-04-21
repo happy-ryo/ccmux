@@ -156,10 +156,7 @@ impl Messages {
     /// round number in code).
     pub fn image_too_large(&self, size_mb: f64, max_mb: f64) -> String {
         match self.lang {
-            Lang::Ja => format!(
-                "画像が大きすぎます（{:.1}MB > {:.0}MB）",
-                size_mb, max_mb
-            ),
+            Lang::Ja => format!("画像が大きすぎます（{:.1}MB > {:.0}MB）", size_mb, max_mb),
             Lang::En => format!("Image too large ({:.1}MB > {:.0}MB)", size_mb, max_mb),
         }
     }
