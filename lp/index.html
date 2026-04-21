@@ -204,6 +204,68 @@
       <pre><code>$ npm uninstall -g ccmux-cli
 $ npm install -g ccmux-fork</code></pre>
 
+      <h2>macOS setup: Option as Meta</h2>
+      <p style="color: var(--muted); font-size: 0.9rem; margin-top: -4px;">
+        macOS terminals bind <code>Option+&lt;key&gt;</code> to Unicode
+        input (<code>å</code>, <code>∫</code>, <code>π</code> …) by
+        default, so ccmux's <code>Alt+T</code> / <code>Alt+P</code> /
+        <code>Alt+R</code> / <code>Alt+S</code> / <code>Alt+1..9</code>
+        / <code>Alt+Left/Right</code> shortcuts never reach the app.
+        Flip Option to act as a Meta key — a one-line change in every
+        modern terminal. Plain <code>Terminal.app</code> works too,
+        but we recommend one of the others for IME, ligatures, and
+        the image preview panel.
+      </p>
+      <table class="diff">
+        <thead>
+          <tr>
+            <th>Terminal</th>
+            <th>Setting</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>WezTerm<br /><span style="color: var(--muted); font-size: 0.85em;"><code>~/.wezterm.lua</code></span></td>
+            <td>
+              <code>config.send_composed_key_when_left_alt_is_pressed&nbsp;=&nbsp;false</code>
+              <br /><code>config.send_composed_key_when_right_alt_is_pressed&nbsp;=&nbsp;false</code>
+            </td>
+          </tr>
+          <tr>
+            <td>iTerm2</td>
+            <td>Settings → Profiles → Keys → set <strong>Left Option key</strong> and <strong>Right Option key</strong> to <strong>Esc+</strong></td>
+          </tr>
+          <tr>
+            <td>Alacritty<br /><span style="color: var(--muted); font-size: 0.85em;"><code>~/.config/alacritty/alacritty.toml</code></span></td>
+            <td>
+              <code>[window]</code><br /><code>option_as_alt&nbsp;=&nbsp;"Both"</code>
+              <span style="color: var(--muted); font-size: 0.85em;"> (or <code>"OnlyLeft"</code> / <code>"OnlyRight"</code>)</span>
+            </td>
+          </tr>
+          <tr>
+            <td>Ghostty<br /><span style="color: var(--muted); font-size: 0.85em;"><code>~/.config/ghostty/config</code></span></td>
+            <td><code>macos-option-as-alt&nbsp;=&nbsp;true</code></td>
+          </tr>
+          <tr>
+            <td>Kitty<br /><span style="color: var(--muted); font-size: 0.85em;"><code>~/.config/kitty/kitty.conf</code></span></td>
+            <td><code>macos_option_as_alt&nbsp;yes</code></td>
+          </tr>
+          <tr>
+            <td>Terminal.app</td>
+            <td>Settings → Profiles → Keyboard → tick <strong>Use Option as Meta key</strong></td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="color: var(--muted); font-size: 0.85rem;">
+        Some macOS IMEs (Kotoeri's Romaji toggle, kana layouts, …)
+        bind Option themselves — if the Meta setup breaks IME for
+        you, try the <code>OnlyLeft</code> / <code>OnlyRight</code>
+        variants so one Option key stays native to the OS.
+        <code>Alt+1..9</code> can also collide with macOS Mission
+        Control / Spaces shortcuts; <code>Alt+Left/Right</code>
+        still cycles tabs when that happens.
+      </p>
+
       <h2>Differences from upstream</h2>
       <p style="color: var(--muted); font-size: 0.9rem; margin-top: -4px;">
         The fork is a strict superset of the current upstream
@@ -315,26 +377,6 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>Mouse wheel forwarding to alt-screen TUIs (Claude <code>/tui</code>, vim, lazygit)</td>
-            <td class="mark">—</td>
-            <td class="mark has">✓</td>
-          </tr>
-          <tr>
-            <td>
-              First-launch macOS Option-as-Meta banner
-              <br /><span style="color: var(--muted); font-size: 0.85em;">
-                macOS terminals bind <code>Option+&lt;key&gt;</code> to Unicode
-                input by default, so <code>Alt+T</code> / <code>Alt+P</code> /
-                <code>Alt+1..9</code> never reach ccmux. A 2-line banner on
-                first launch points users at the per-terminal (WezTerm /
-                iTerm2 / Alacritty / Ghostty / Kitty / Terminal.app) fix.
-                Dismisses on any key or after 20&nbsp;s, writes a zero-byte
-                marker at
-                <code>~/.config/ccmux/.macos_tip_dismissed</code> so
-                returning users never see it twice. Override with
-                <code>--no-macos-tip</code> / <code>--show-macos-tip</code>
-                or <code>CCMUX_NO_MACOS_TIP</code>.
-              </span>
-            </td>
             <td class="mark">—</td>
             <td class="mark has">✓</td>
           </tr>

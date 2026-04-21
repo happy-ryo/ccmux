@@ -198,6 +198,68 @@
       <pre><code>$ npm uninstall -g ccmux-cli
 $ npm install -g ccmux-fork</code></pre>
 
+      <h2>macOS の設定: Option をメタキーにする</h2>
+      <p style="color: var(--muted); font-size: 0.9rem; margin-top: -4px;">
+        macOS のターミナルは既定で <code>Option+&lt;キー&gt;</code> を
+        Unicode 入力 (<code>å</code>、<code>∫</code>、<code>π</code>
+        など) に割り当てているため、ccmux の <code>Alt+T</code> /
+        <code>Alt+P</code> / <code>Alt+R</code> / <code>Alt+S</code> /
+        <code>Alt+1..9</code> / <code>Alt+Left/Right</code>
+        ショートカットが発火しません。Option をメタキー扱いに切り替え
+        れば解決します。どのターミナルも 1 行の設定変更で済みます。
+        <code>Terminal.app</code> でも動きますが、IME / ligature /
+        画像プレビュー全般で下記の端末の方が快適です。
+      </p>
+      <table class="diff">
+        <thead>
+          <tr>
+            <th>ターミナル</th>
+            <th>設定</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>WezTerm<br /><span style="color: var(--muted); font-size: 0.85em;"><code>~/.wezterm.lua</code></span></td>
+            <td>
+              <code>config.send_composed_key_when_left_alt_is_pressed&nbsp;=&nbsp;false</code>
+              <br /><code>config.send_composed_key_when_right_alt_is_pressed&nbsp;=&nbsp;false</code>
+            </td>
+          </tr>
+          <tr>
+            <td>iTerm2</td>
+            <td>Settings → Profiles → Keys → <strong>Left Option key</strong> と <strong>Right Option key</strong> を <strong>Esc+</strong> に設定</td>
+          </tr>
+          <tr>
+            <td>Alacritty<br /><span style="color: var(--muted); font-size: 0.85em;"><code>~/.config/alacritty/alacritty.toml</code></span></td>
+            <td>
+              <code>[window]</code><br /><code>option_as_alt&nbsp;=&nbsp;"Both"</code>
+              <span style="color: var(--muted); font-size: 0.85em;"> (<code>"OnlyLeft"</code> / <code>"OnlyRight"</code> も可)</span>
+            </td>
+          </tr>
+          <tr>
+            <td>Ghostty<br /><span style="color: var(--muted); font-size: 0.85em;"><code>~/.config/ghostty/config</code></span></td>
+            <td><code>macos-option-as-alt&nbsp;=&nbsp;true</code></td>
+          </tr>
+          <tr>
+            <td>Kitty<br /><span style="color: var(--muted); font-size: 0.85em;"><code>~/.config/kitty/kitty.conf</code></span></td>
+            <td><code>macos_option_as_alt&nbsp;yes</code></td>
+          </tr>
+          <tr>
+            <td>Terminal.app</td>
+            <td>Settings → Profiles → Keyboard → <strong>Use Option as Meta key</strong> にチェック</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="color: var(--muted); font-size: 0.85rem;">
+        一部の macOS IME (ことえりの「英字」切替、日本語キー配列など)
+        は Option を独自に使っているため、Meta 化と両立しない場合が
+        あります。IME が壊れたら <code>OnlyLeft</code> /
+        <code>OnlyRight</code> で片側だけ Meta にすると妥協できます。
+        <code>Alt+1..9</code> は macOS の Mission Control / Spaces
+        ショートカットと衝突することがあり、奪われたときは
+        <code>Alt+Left/Right</code> でタブ巡回して回避してください。
+      </p>
+
       <h2>上流との差分</h2>
       <p style="color: var(--muted); font-size: 0.9rem; margin-top: -4px;">
         このフォークは現時点の upstream <code>master</code> の完全な上位互換です。上流にあるものは全部入っています。
@@ -306,26 +368,6 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>alt-screen で動く TUI (Claude <code>/tui</code>、vim、lazygit など) へのマウスホイール転送</td>
-            <td class="mark">—</td>
-            <td class="mark has">✓</td>
-          </tr>
-          <tr>
-            <td>
-              macOS 初回起動時の Option=Meta 設定バナー
-              <br /><span style="color: var(--muted); font-size: 0.85em;">
-                macOS では既定で <code>Option+&lt;キー&gt;</code> が Unicode
-                入力に割り当てられているため <code>Alt+T</code> /
-                <code>Alt+P</code> / <code>Alt+1..9</code> が発火しない。
-                初回起動時に 2 行のバナーを出して、各端末 (WezTerm /
-                iTerm2 / Alacritty / Ghostty / Kitty / Terminal.app) での
-                1 行設定方法に誘導する。任意キー押下または 20
-                秒経過で消え、
-                <code>~/.config/ccmux/.macos_tip_dismissed</code> に 0
-                バイトのマーカーを残すので 2 回目以降は非表示。
-                <code>--no-macos-tip</code> / <code>--show-macos-tip</code>
-                や <code>CCMUX_NO_MACOS_TIP</code> で上書き可能。
-              </span>
-            </td>
             <td class="mark">—</td>
             <td class="mark has">✓</td>
           </tr>
