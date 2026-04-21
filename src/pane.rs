@@ -394,14 +394,20 @@ impl Pane {
     }
 
     /// Whether it is safe to synthesize a shell command line into this
-    /// pane's PTY. Returns `false` when the pane is in alternate-screen
-    /// mode (a TUI like Claude Code or vim has captured the terminal),
-    /// since writing raw text there lands as user input to that TUI,
-    /// not at a shell prompt. Callers that want to inject a command
-    /// (`Alt+P`, orchestrator scripts) should gate on this.
+    /// pane's PTY. Returns `false` when any other foreground process
+    /// has captured the terminal — `alternate_screen()` catches TUIs
+    /// like vim / less / lazygit; `is_claude_running()` catches Claude
+    /// Code's `/tui fullscreen` mode, which enables mouse reporting
+    /// without entering the alt screen (see the mouse-forwarding path
+    /// in `map_wheel_for_pane_buffer` for the same distinction).
+    /// Callers that want to inject a command (`Alt+P`, orchestrator
+    /// scripts) should gate on this.
     pub fn shell_accepts_command_injection(&self) -> bool {
-        let parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
-        !parser.screen().alternate_screen()
+        let alt_screen = {
+            let parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
+            parser.screen().alternate_screen()
+        };
+        !alt_screen && !self.is_claude_running()
     }
 
     /// Kill the PTY child process.

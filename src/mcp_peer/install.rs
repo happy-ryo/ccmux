@@ -37,12 +37,24 @@ fn install(force: bool) -> Result<()> {
     ensure_claude_cli_available()?;
     let exe = current_ccmux_exe()?;
 
+    // Validate the exe path can even be registered BEFORE we touch
+    // any existing state. If we did this after `remove_silent()` on
+    // the --force path, a non-UTF-8 path would leave the user with
+    // neither the old registration nor a new one. Refuse early so
+    // the existing entry stays intact when we can't replace it.
+    let exe_str = exe.to_str().ok_or_else(|| {
+        anyhow!(
+            "ccmux binary path is not valid UTF-8 ({}); cannot register as an MCP command. \
+             Move the binary to a UTF-8 path and re-run `ccmux mcp install`.",
+            exe.display()
+        )
+    })?;
+
     if let Some(existing) = find_existing_entry()? {
         if !force {
             println!(
                 "ccmux-peers is already registered → {existing}\n\
-                 Re-run with `ccmux mcp install --force` to overwrite with: {}",
-                exe.display()
+                 Re-run with `ccmux mcp install --force` to overwrite with: {exe_str}"
             );
             return Ok(());
         }
@@ -51,17 +63,6 @@ fn install(force: bool) -> Result<()> {
         remove_silent()?;
     }
 
-    // Refuse a non-UTF-8 exe path outright rather than silently
-    // replacing the offending bytes with U+FFFD via to_string_lossy —
-    // the registered command would be an unexecutable mojibake string
-    // that later fails inside Claude Code with no useful error.
-    let exe_str = exe.to_str().ok_or_else(|| {
-        anyhow!(
-            "ccmux binary path is not valid UTF-8 ({}); cannot register as an MCP command. \
-             Move the binary to a UTF-8 path and re-run `ccmux mcp install`.",
-            exe.display()
-        )
-    })?;
     let payload = serde_json::json!({
         "type": "stdio",
         "command": exe_str,
@@ -85,12 +86,11 @@ fn install(force: bool) -> Result<()> {
     }
 
     println!(
-        "Registered {SERVER_NAME} → {}\n\
+        "Registered {SERVER_NAME} → {exe_str}\n\
          Next: launch Claude Code with \
          `claude --dangerously-load-development-channels server:{SERVER_NAME}` \
          from inside a ccmux pane (or press Alt+P in a pane to insert the \
-         same command).",
-        exe.display()
+         same command)."
     );
     Ok(())
 }
