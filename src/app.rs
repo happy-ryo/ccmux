@@ -540,6 +540,12 @@ pub struct App {
     /// cwd update) still repaint because those affect non-pane UI
     /// (tab labels, sidebar).
     pub ime_freeze_panes_on_overlay: bool,
+    /// Resolved UI language for status bar hints and preview error
+    /// messages. `App::apply_config` collapses `[ui] lang`, `--lang`,
+    /// and OS locale detection into this single value so renderers
+    /// can dereference `app.messages()` without caring about the
+    /// precedence chain.
+    pub lang: crate::i18n::Lang,
     /// When freeze is enabled, optionally force a single repaint every
     /// `ime_overlay_catchup_ms` milliseconds so the user sees body-
     /// content progress periodically without the flicker of live
@@ -628,6 +634,7 @@ impl App {
             clipboard: None,
             event_bus,
             ime_mode: crate::config::ImeMode::default(),
+            lang: crate::i18n::Lang::default(),
             ime_freeze_panes_on_overlay: false,
             ime_overlay_catchup_ms: 0,
             last_overlay_repaint: None,
@@ -643,6 +650,15 @@ impl App {
     /// collapsed into a single resolved value.
     pub fn apply_config(&mut self, cfg: &crate::config::Config) {
         self.ime_mode = cfg.ime.mode;
+        // Resolve `auto` against the live OS locale here rather than at
+        // field-apply time so test harnesses can stub `current_os_locale`
+        // by setting `cfg.ui.lang` to an explicit variant instead of
+        // mutating environment state. Production callers hit the real
+        // sys-locale path.
+        self.lang = cfg
+            .ui
+            .lang
+            .resolve(crate::i18n::current_os_locale().as_deref());
         self.ime_freeze_panes_on_overlay = cfg.ime.freeze_panes_on_overlay;
         // 0 means "catch-up disabled"; any non-zero value is floored
         // at MIN_OVERLAY_CATCHUP_MS so a fat-fingered `--…-catchup-ms 5`
@@ -654,6 +670,13 @@ impl App {
                 .overlay_catchup_ms
                 .max(crate::config::MIN_OVERLAY_CATCHUP_MS)
         };
+    }
+
+    /// Resolved message table for the current UI language. Prefer this
+    /// over hand-rolled `Lang::messages()` calls so renderers never
+    /// have to care about the enum → static-table indirection.
+    pub fn messages(&self) -> &'static crate::i18n::Messages {
+        self.lang.messages()
     }
 
     /// Time-based catch-up for the freeze-panes-on-overlay path.
@@ -1177,8 +1200,9 @@ impl App {
                 let path = self.ws_mut().file_tree.toggle_or_select();
                 if let Some(path) = path {
                     self.clear_selection_if_preview();
+                    let messages = self.messages();
                     let mut picker = self.image_picker.take();
-                    self.ws_mut().preview.load(&path, picker.as_mut());
+                    self.ws_mut().preview.load(&path, picker.as_mut(), messages);
                     self.image_picker = picker;
                 }
                 Ok(true)
@@ -1948,8 +1972,9 @@ impl App {
                             let path = self.ws_mut().file_tree.toggle_or_select();
                             if let Some(path) = path {
                                 self.clear_selection_if_preview();
+                                let messages = self.messages();
                                 let mut picker = self.image_picker.take();
-                                self.ws_mut().preview.load(&path, picker.as_mut());
+                                self.ws_mut().preview.load(&path, picker.as_mut(), messages);
                                 self.image_picker = picker;
                             }
                         }
