@@ -14,7 +14,23 @@ name = "ccmux"
 # claude` auto-launches Claude Code with the channel flag. The new
 # keybinding and the user-visible `ccmux mcp` subcommand tree are why
 # this is a minor bump.
-version = "0.9.0"
+# 0.10.0 centers on macOS Alt-key ergonomics:
+# - #107 documents the per-terminal Option=Meta setup (WezTerm /
+#   iTerm2 / Alacritty / Ghostty / Kitty / Terminal.app) in the
+#   README and cross-links it from the IME overlay Alt+Enter note.
+# - #108 adds a first-launch banner on macOS that surfaces the same
+#   setup hint at runtime and links to the README anchor, dismissed
+#   by any key or a 20 s timeout and persisted via a zero-byte
+#   marker at `~/.config/ccmux/.macos_tip_dismissed`. Two new
+#   override flags (`--no-macos-tip` / `--show-macos-tip`) and the
+#   `CCMUX_NO_MACOS_TIP` env var are the user-visible surface. The
+#   landing page (`lp/index.html` / `lp/ja.html`) also grows a
+#   dedicated "macOS setup: Option as Meta" section so visitors can
+#   read the configuration before installing.
+# Minor bump (not patch) because the banner is a first-launch
+# behavior change on macOS and the CLI surface grows — patch is
+# reserved for bug-only fixes per the release policy.
+version = "0.10.0"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
