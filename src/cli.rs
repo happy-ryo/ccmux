@@ -82,6 +82,21 @@ pub struct Cli {
     /// A value of `0` is clamped to `1` at runtime. Default: 5.
     #[arg(long, value_name = "ROWS", default_value_t = 5)]
     pub min_pane_height: u16,
+
+    /// Suppress the first-launch macOS Option-as-Meta banner for this
+    /// run without touching the dismissal marker. Use when automated
+    /// sessions shouldn't count as a user dismissal. Also settable via
+    /// `CCMUX_NO_MACOS_TIP=1` env var. No-op on non-macOS hosts.
+    #[arg(long, conflicts_with = "show_macos_tip")]
+    pub no_macos_tip: bool,
+
+    /// Force the macOS Option-as-Meta banner on, ignoring the dismissal
+    /// marker. Useful after editing your terminal config to verify the
+    /// banner copy, or to re-read the hint without `rm`-ing the marker.
+    /// Still macOS-gated — showing a macOS-specific setup tip on Linux
+    /// would just be noise.
+    #[arg(long, conflicts_with = "no_macos_tip")]
+    pub show_macos_tip: bool,
 }
 
 /// Subcommands dispatched to a running ccmux instance via its IPC
@@ -907,6 +922,33 @@ mod tests {
                 .unwrap();
         assert_eq!(cli2.min_pane_width, 12);
         assert_eq!(cli2.min_pane_height, 4);
+    }
+
+    #[test]
+    fn macos_tip_flags_default_to_false() {
+        let cli = Cli::try_parse_from(["ccmux"]).unwrap();
+        assert!(!cli.no_macos_tip);
+        assert!(!cli.show_macos_tip);
+    }
+
+    #[test]
+    fn parses_no_macos_tip_flag() {
+        let cli = Cli::try_parse_from(["ccmux", "--no-macos-tip"]).unwrap();
+        assert!(cli.no_macos_tip);
+        assert!(!cli.show_macos_tip);
+    }
+
+    #[test]
+    fn parses_show_macos_tip_flag() {
+        let cli = Cli::try_parse_from(["ccmux", "--show-macos-tip"]).unwrap();
+        assert!(cli.show_macos_tip);
+        assert!(!cli.no_macos_tip);
+    }
+
+    #[test]
+    fn macos_tip_flags_are_mutually_exclusive() {
+        let err = Cli::try_parse_from(["ccmux", "--show-macos-tip", "--no-macos-tip"]);
+        assert!(err.is_err(), "flags should conflict");
     }
 
     #[test]

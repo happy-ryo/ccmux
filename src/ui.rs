@@ -67,20 +67,30 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 
     let show_status = app.status_bar_visible || app.rename_input.is_some();
     let status_h = if show_status { 1 } else { 0 };
+    let show_macos_tip = app.macos_tip_visible;
+    // Two rows: line 1 is the warning + what the user needs to fix,
+    // line 2 is the README URL + dismiss hint. We don't shrink to
+    // one row on narrow terminals because the URL is the whole point
+    // — better to let line 2 truncate horizontally than drop it.
+    let macos_tip_h: u16 = if show_macos_tip { 2 } else { 0 };
     let show_overlay = app.overlay.is_some();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),        // tab bar
-            Constraint::Min(1),           // main area
-            Constraint::Length(status_h), // status bar
+            Constraint::Length(1),           // tab bar
+            Constraint::Min(1),              // main area
+            Constraint::Length(macos_tip_h), // first-launch macOS tip
+            Constraint::Length(status_h),    // status bar
         ])
         .split(area);
 
     render_tab_bar(app, frame, chunks[0]);
     render_main_area(app, frame, chunks[1]);
+    if show_macos_tip {
+        render_macos_tip(app, frame, chunks[2]);
+    }
     if show_status {
-        render_status_bar(app, frame, chunks[2]);
+        render_status_bar(app, frame, chunks[3]);
     }
     // The IME composition overlay is drawn last so its centered box
     // and its caret anchor land on top of the pane content without
@@ -1057,6 +1067,31 @@ fn render_preview(app: &mut App, frame: &mut Frame, area: Rect) {
             }
         }
     }
+}
+
+// ─── macOS first-launch tip banner ────────────────────────
+
+/// Warm yellow for the warning glyph + headline — visually distinct
+/// from the status-bar hints directly below (dim gray + accent blue).
+const TIP_WARN: Color = Color::Rgb(0xe3, 0xb3, 0x41);
+
+/// Renders the 2-row Option-as-Meta banner. See `crate::macos_tip`
+/// for the gating logic; this function is only called when the
+/// banner has been surfaced, so there's no OS check here.
+fn render_macos_tip(app: &App, frame: &mut Frame, area: Rect) {
+    let m = app.messages();
+    let para = Paragraph::new(vec![
+        Line::from(Span::styled(
+            m.macos_tip_line1,
+            Style::default().fg(TIP_WARN).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            m.macos_tip_line2,
+            Style::default().fg(ACCENT_BLUE),
+        )),
+    ])
+    .style(Style::default().bg(HEADER_BG));
+    frame.render_widget(para, area);
 }
 
 // ─── Status bar (context-aware) ───────────────────────────

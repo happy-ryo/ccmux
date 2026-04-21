@@ -148,6 +148,9 @@ pub struct Messages {
     pub preview_binary: &'static str,
     pub preview_read_failed: &'static str,
     pub preview_not_regular: &'static str,
+    // ── macOS first-launch banner ─────────────────────────
+    pub macos_tip_line1: &'static str,
+    pub macos_tip_line2: &'static str,
 }
 
 impl Messages {
@@ -203,6 +206,9 @@ pub static MESSAGES_JA: Messages = Messages {
     preview_binary: "\u{2718} バイナリファイルです",
     preview_read_failed: "ファイルを読み込めませんでした",
     preview_not_regular: "通常ファイルではありません",
+    macos_tip_line1: "\u{26A0} macOS: Alt+<キー> には端末の Option=Meta 設定が必要です",
+    macos_tip_line2:
+        "  https://github.com/happy-ryo/ccmux#macos-option-as-meta  (任意のキーで消去)",
 };
 
 pub static MESSAGES_EN: Messages = Messages {
@@ -235,6 +241,9 @@ pub static MESSAGES_EN: Messages = Messages {
     preview_binary: "\u{2718} Binary file",
     preview_read_failed: "Failed to read file",
     preview_not_regular: "Not a regular file",
+    macos_tip_line1: "\u{26A0} macOS: Alt+<key> shortcuts require Option=Meta in your terminal",
+    macos_tip_line2:
+        "  https://github.com/happy-ryo/ccmux#macos-option-as-meta  (press any key to dismiss)",
 };
 
 #[cfg(test)]
