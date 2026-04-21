@@ -35,8 +35,9 @@ pub struct Cli {
     /// updating, so Claude's thinking spinner can't flicker the
     /// overlay. Panes catch up instantly when the overlay closes.
     /// Overrides `[ime] freeze_panes_on_overlay` in config.toml.
-    /// Pass `--ime-freeze-panes=false` to force-disable a config
-    /// value of `true`.
+    /// **On by default** — the freeze is inert for users who never
+    /// open the overlay. Pass `--ime-freeze-panes=false` to force-
+    /// disable and keep live repaints during composition.
     #[arg(
         long,
         value_name = "BOOL",
@@ -49,11 +50,13 @@ pub struct Cli {
     /// While `--ime-freeze-panes` is active, force a single repaint
     /// every `<MS>` milliseconds so body-content progress (Claude
     /// writing new lines, shell output scrolling) stays visible
-    /// through an open overlay. `0` (default) keeps the freeze
-    /// pure — the screen stops updating until the overlay closes.
-    /// Non-zero values are clamped to at least 100 ms. Has no
-    /// effect while freeze is disabled. Overrides `[ime]
-    /// overlay_catchup_ms` in config.toml.
+    /// through an open overlay. **Defaults to 3000 ms** (the
+    /// README-documented sweet spot: flicker stays barely noticeable
+    /// while Claude's output still advances at a readable pace).
+    /// Pass `0` for a pure freeze — the screen stops updating until
+    /// the overlay closes. Non-zero values are clamped to at least
+    /// 100 ms. Has no effect while freeze is disabled. Overrides
+    /// `[ime] overlay_catchup_ms` in config.toml.
     #[arg(long, value_name = "MS")]
     pub ime_overlay_catchup_ms: Option<u64>,
 

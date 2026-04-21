@@ -38,27 +38,50 @@ pub struct UiConfig {
 /// IME overlay settings. See Issue #39 for the full mode design;
 /// `always_on` lives behind Issue #40 and is explicitly not accepted
 /// here yet.
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ImeConfig {
     pub mode: ImeMode,
     /// When `true`, pane repaints driven by PTY output are suppressed
     /// while the IME composition overlay is open (Issue #37 / #82
     /// Phase 2). vt100 parsers keep advancing in the background, so
-    /// panes catch up instantly when the overlay closes. Off by
-    /// default because it's a user-visible behavior change (the
-    /// screen literally stops updating during composition) even
-    /// though it's the intended way to kill overlay flicker on hosts
-    /// where `overlay_poll_ms` throttling alone isn't enough.
+    /// panes catch up instantly when the overlay closes.
+    ///
+    /// **On by default** since the freeze only takes effect while the
+    /// overlay is open, and users who don't open the overlay (non-IME
+    /// users, `mode = "off"`) never see a behavior change. Users who
+    /// specifically want live repaints during composition can override
+    /// with `--ime-freeze-panes=false` or `freeze_panes_on_overlay =
+    /// false` in config.toml.
     pub freeze_panes_on_overlay: bool,
-    /// When [`ImeConfig::freeze_panes_on_overlay`] is true, optionally
-    /// force a single repaint every `overlay_catchup_ms` milliseconds
-    /// so the user sees body-content progress (Claude writing new
-    /// lines, shell output scrolling) periodically without the
-    /// continuous flicker of unthrottled repaints. `0` disables the
-    /// periodic catch-up and gives a pure freeze. Non-zero values are
-    /// clamped to [`MIN_OVERLAY_CATCHUP_MS`] at apply time.
+    /// When [`ImeConfig::freeze_panes_on_overlay`] is true, force a
+    /// single repaint every `overlay_catchup_ms` milliseconds so the
+    /// user sees body-content progress (Claude writing new lines,
+    /// shell output scrolling) periodically without the continuous
+    /// flicker of unthrottled repaints. `0` disables the periodic
+    /// catch-up and gives a pure freeze. Non-zero values are clamped
+    /// to [`MIN_OVERLAY_CATCHUP_MS`] at apply time.
+    ///
+    /// **Defaults to 3000 ms** (the sweet spot documented in the
+    /// README: flicker stays barely noticeable while Claude's
+    /// streaming output still advances at a readable pace).
     pub overlay_catchup_ms: u64,
+}
+
+impl Default for ImeConfig {
+    fn default() -> Self {
+        // Explicit Default impl rather than `#[derive(Default)]` so the
+        // booleans / numeric defaults don't silently collapse back to
+        // `false` / `0` if someone re-derives it. The `[ime]` section
+        // ships with freeze + periodic-catchup on because the behavior
+        // is inert for users who never open the overlay (see the
+        // struct docs above).
+        Self {
+            mode: ImeMode::default(),
+            freeze_panes_on_overlay: true,
+            overlay_catchup_ms: 3000,
+        }
+    }
 }
 
 /// Floor for `overlay_catchup_ms` when non-zero. Below this the
@@ -363,21 +386,27 @@ mod tests {
     }
 
     #[test]
-    fn freeze_panes_defaults_to_false() {
+    fn freeze_panes_defaults_to_true() {
+        // Flipped from the initial `false` default: the freeze is
+        // inert for users who never open the overlay, so turning it
+        // on by default helps IME users without affecting anyone else.
         let cfg = Config::default();
-        assert!(!cfg.ime.freeze_panes_on_overlay);
+        assert!(cfg.ime.freeze_panes_on_overlay);
     }
 
     #[test]
     fn parses_freeze_panes_from_toml() {
+        // Explicit `false` in the config must still round-trip through
+        // serde — pinning this so the new default-on can be overridden
+        // by users who prefer live repaints during composition.
         let cfg: Config = toml::from_str(
             r#"
             [ime]
-            freeze_panes_on_overlay = true
+            freeze_panes_on_overlay = false
             "#,
         )
         .unwrap();
-        assert!(cfg.ime.freeze_panes_on_overlay);
+        assert!(!cfg.ime.freeze_panes_on_overlay);
     }
 
     #[test]
@@ -398,9 +427,13 @@ mod tests {
     }
 
     #[test]
-    fn overlay_catchup_ms_defaults_to_zero() {
+    fn overlay_catchup_ms_defaults_to_3000() {
+        // Default catch-up interval: a single repaint every 3 s while
+        // the overlay is open, matching the value previously suggested
+        // as the "sweet spot" in README's JP IME setup section. `0`
+        // (pure freeze) is still available as an explicit override.
         let cfg = Config::default();
-        assert_eq!(cfg.ime.overlay_catchup_ms, 0);
+        assert_eq!(cfg.ime.overlay_catchup_ms, 3000);
     }
 
     #[test]
@@ -432,7 +465,9 @@ mod tests {
         cfg2.apply_cli_overrides(None, None, Some(10), None);
         assert_eq!(cfg2.ime.overlay_catchup_ms, MIN_OVERLAY_CATCHUP_MS);
 
-        // Zero must stay zero (means "disabled").
+        // Zero must stay zero (means "disabled") even when the default
+        // is a non-zero value — an explicit `--ime-overlay-catchup-ms 0`
+        // must still give a pure freeze.
         let mut cfg3 = Config::default();
         cfg3.apply_cli_overrides(None, None, Some(0), None);
         assert_eq!(cfg3.ime.overlay_catchup_ms, 0);
