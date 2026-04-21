@@ -143,7 +143,7 @@ The overlay opens as a centered multi-line composition box. Host-terminal IME ca
 | Key | Action |
 |-----|--------|
 | `Enter` | Insert newline (also `Shift+Enter`) |
-| `Alt+Enter` | Send buffer to the pane and close (portable across all tier-1 terminals, incl. macOS `Option+Return`) |
+| `Alt+Enter` | Send buffer to the pane and close (portable across all tier-1 terminals, incl. macOS `Option+Return` — see [macOS: Option as Meta](#macos-option-as-meta) if Option doesn't fire) |
 | `Ctrl+Enter` | Send buffer — alternative commit for Windows Terminal / wezterm / VS Code / most Linux terminals |
 | `Esc` / `Ctrl+C` | Cancel — closes the overlay and discards the buffer |
 | `←` `→` `↑` `↓` | Navigate |
@@ -229,6 +229,8 @@ Claude B sees a `<channel source="ccmux-peers">can you read src/app.rs...</chann
 
 ## Keybindings
 
+> **macOS users:** the default macOS terminal swallows `Option+<key>` before ccmux sees it, so `Alt+T`, `Alt+P`, `Alt+1..9`, `Alt+Left/Right` etc. won't fire out of the box. See [macOS: Option as Meta](#macos-option-as-meta) for the one-line fix per terminal (WezTerm / iTerm2 / Alacritty / Ghostty / Kitty / Terminal.app).
+
 ### Pane mode (default)
 
 | Key | Action |
@@ -247,6 +249,24 @@ Claude B sees a `<channel source="ccmux-peers">can you read src/app.rs...</chann
 | `Ctrl+Right/Left` | Cycle focus (sidebar, preview, panes) |
 | `Ctrl+;` / `Alt+;` / `Alt+I` | Open IME composition overlay (centered multi-line — see below). `Alt+;` and `Alt+I` are fallbacks for terminals that swallow `Ctrl+;` (WSL under Windows Terminal, VS Code terminal on Linux, some tmux configs). |
 | `Ctrl+Q` | Quit |
+
+### macOS: Option as Meta
+
+By default macOS terminals bind `Option+<key>` to Unicode input (`å`, `∫`, `π`, …), so ccmux's `Alt+T` / `Alt+P` / `Alt+R` / `Alt+S` / `Alt+1..9` / `Alt+Left/Right` shortcuts never reach the app. Flip Option to act as a Meta key — it's a one-line change in every modern terminal. If you're on plain **Terminal.app**, consider switching to one of the terminals below first; they all handle IME, ligatures, and the image preview panel better than Terminal.app anyway.
+
+| Terminal | Setting |
+|---|---|
+| **WezTerm** (`~/.wezterm.lua`) | `config.send_composed_key_when_left_alt_is_pressed = false` <br> `config.send_composed_key_when_right_alt_is_pressed = false` |
+| **iTerm2** | Settings → Profiles → Keys → set **Left Option key** and **Right Option key** to **Esc+** |
+| **Alacritty** (`~/.config/alacritty/alacritty.toml`) | `[window]` <br> `option_as_alt = "Both"` (or `"OnlyLeft"` / `"OnlyRight"`) |
+| **Ghostty** (`~/.config/ghostty/config`) | `macos-option-as-alt = true` |
+| **Kitty** (`~/.config/kitty/kitty.conf`) | `macos_option_as_alt yes` |
+| **Terminal.app** | Settings → Profiles → Keyboard → tick **Use Option as Meta key** |
+
+**Known gaps**
+
+- Some macOS IMEs (Kotoeri's "Romaji" toggle, kana layouts, …) bind Option themselves. If flipping Option breaks IME for you, try the `OnlyLeft` / `OnlyRight` variants so one Option stays native to the OS.
+- `Alt+1..9` can collide with macOS Mission Control / Spaces shortcuts on some setups. If the OS swallows the number keys, `Alt+Left/Right` still cycles tabs.
 
 ### File tree mode (after `Ctrl+F`)
 
