@@ -1,0 +1,28 @@
+#!/usr/bin/env sh
+# ccmux pre-commit hook: refuse the commit if `cargo fmt` would change
+# anything. CI (`.github/workflows/ci.yml`) runs the same check, so this
+# exists to surface the failure locally ~8 seconds earlier than the
+# remote runner does — the v0.7.2 i18n PR tripped on exactly this and
+# needed a follow-up fix commit just for whitespace.
+#
+# Opt-in: run `git config core.hooksPath .githooks` once per clone to
+# enable. Not auto-installed because that would rewrite a contributor's
+# existing `.git/hooks` without consent.
+#
+# Scope: format check only. Clippy/test live in CI — running them on
+# every commit would add ~30 s of latency and make fixup commits
+# painful. Contributors who want the full CI check locally can extend
+# this hook or wire a pre-push hook with `cargo clippy && cargo test`.
+
+set -eu
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: cargo not found in PATH — skipping fmt check" >&2
+    exit 0
+fi
+
+if ! cargo fmt --all -- --check; then
+    echo >&2
+    echo "pre-commit: rustfmt would modify staged files. Run \`cargo fmt --all\` and re-stage." >&2
+    exit 1
+fi

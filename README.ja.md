@@ -59,6 +59,14 @@ cargo build --release
 
 [Rust](https://rustup.rs/) のツールチェインが必要です。
 
+PR を送る予定があるなら、クローン後に一度だけ git hooks を有効化しておいてください:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+pre-commit hook が `cargo fmt --all -- --check` を走らせるので、整形漏れが CI ではなく手元で落ちます。既存の `.git/hooks` を勝手に書き換えないよう opt-in にしています。
+
 ## 使い方
 
 ```bash

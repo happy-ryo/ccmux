@@ -56,3 +56,4 @@ cargo run            # Run the app
 
 ## Workflow Rules
 - **Every implementation must be reviewed by the evaluator agent** before reporting done. This is a Rust TUI app, so Playwright MCP is not available — the evaluator should perform static review (diff analysis, edge cases, logic correctness, key conflict checks, layout math consistency).
+- **Run `cargo fmt --all` before committing.** CI's `rustfmt` job fails fast on unformatted code, so an unformatted commit costs an extra push-and-wait cycle. The repo ships a `.githooks/pre-commit` that enforces this; enable it with `git config core.hooksPath .githooks` once after cloning.

@@ -1,0 +1,4 @@
+# Git hooks must keep LF line endings even on Windows checkouts —
+# sh + Git Bash chokes on a `#!/usr/bin/env sh\r\n` shebang because
+# the `\r` ends up as part of the interpreter path.
+.githooks/*        text eol=lf
