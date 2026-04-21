@@ -4,7 +4,11 @@ name = "ccmux"
 # users can tell fork and upstream apart at a glance, and reflects the
 # breaking change in `mode = "always"` removal (#90) plus the shipped
 # IME overlay rework (#85 / #86) and image-preview sync (#91).
-version = "0.7.1"
+# 0.8.0 rolls up the i18n auto-locale (#98), click-event forwarding
+# (#100), and IME freeze-on-overlay defaults flipped ON (#101); the
+# last is a user-visible behavior change for anyone who opens the
+# IME overlay, hence the minor bump rather than a patch.
+version = "0.8.0"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
