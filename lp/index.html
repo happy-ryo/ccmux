@@ -295,6 +295,16 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
+              MCP pane control from inside Claude Code
+              <br /><span style="color: var(--muted); font-size: 0.85em;">
+                Same <code>ccmux mcp install</code> exposes <code>list_panes</code>, <code>spawn_pane</code>, <code>close_pane</code>, <code>focus_pane</code>, <code>new_tab</code> so a Claude instance can split the layout, spin up a sibling Claude, or switch focus — without the user leaving the conversation. A bare <code>command="claude"</code> is auto-upgraded to the <code>Alt+P</code> peer-enabled launch, so new Claude panes join the peer network automatically.
+              </span>
+            </td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
+            <td>
               Centered multi-line IME composition overlay (JP / CN / KR on Windows + third-party terminals)
               <br /><span style="color: var(--muted); font-size: 0.85em;">
                 <code>Alt+Enter</code> to send, <code>Enter</code> for newline,

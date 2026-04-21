@@ -219,12 +219,24 @@ Claude B の次のターンのコンテキストに `<channel source="ccmux-peer
 
 **提供ツール:**
 
+_ペインメッセージング:_
+
 | ツール | 役割 |
 |---|---|
 | `list_peers` | 同じ ccmux タブにいる他のペインを返す。自分自身は除外。 |
 | `send_message(to_id, message)` | 同じタブの相方にメッセージを送る。数字の id でも、ペインに付けた名前でも指定可能。別タブ宛は何も配送せず成功として返す (他タブのペインを id 探索で列挙されないようにするため)。 |
 | `check_messages` | 受信箱を手動で取り出す。通常は channel 経由で push されてくるので出番は少なく、取りこぼしを疑うときの確認用。 |
 | `set_summary` | v1 では受け付けるだけで保存しない。ccmux はペイン名と役割 (role) を代わりに使います。 |
+
+_ペイン操作 (`new_tab` を除き同一タブ内):_
+
+| ツール | 役割 |
+|---|---|
+| `list_panes` | 同じタブの全ペインを id / 名前 / role / フォーカス状態 / レイアウト位置込みで一覧する。 |
+| `spawn_pane(direction, …)` | 指定ペインを分割して新ペインを生やす。`command`・`name`・`role` はどれもオプション。`command="claude"` (または `claude <args>`) を渡したときは `Alt+P` と同じ peer 対応コマンドに自動書き換えするので、毎回 `--dangerously-load-development-channels` を覚えていなくてもメッセージング付きの Claude が立ち上がる。 |
+| `close_pane(target)` | ペインを閉じる。最後のタブの最後のペインを閉じようとしたときは `last_pane` で拒否。 |
+| `focus_pane(target)` | 同じタブ内でフォーカス移動。ユーザーの手元からフォーカスを奪うことになるので使いどころに注意。 |
+| `new_tab(…)` | 新しいタブを 1 枚開いてそこへフォーカスを移す。`spawn_pane` と同じ `claude` 自動アップグレードが効く。 |
 
 ### うまく動かないとき
 

@@ -3312,12 +3312,16 @@ impl App {
     }
 }
 
-/// Flag-preloaded launch command for `ccmux split --role claude`.
+/// Flag-preloaded launch command for `ccmux split --role claude` and
+/// Alt+P. Also consumed by `crate::mcp_peer` so `spawn_pane` /
+/// `new_tab` upgrade a bare `claude` invocation to the peer-enabled
+/// form, mirroring what Alt+P types into the focused pane.
+///
 /// Kept as a string (not a shell-escaped arg vector) because the pane
 /// startup-command path feeds it through the shell, which handles the
 /// `--dangerously-load-development-channels` spelling uniformly across
 /// bash / zsh / pwsh.
-const CLAUDE_PEER_LAUNCH_CMD: &str =
+pub(crate) const CLAUDE_PEER_LAUNCH_CMD: &str =
     "claude --dangerously-load-development-channels server:ccmux-peers";
 
 /// If `role == "claude"` and the caller did not specify an explicit
