@@ -1095,15 +1095,25 @@ impl App {
         // this on "is ccmux-peers installed": pressing Alt+P already
         // means the user wants peer mode, and a missing MCP entry will
         // surface itself when Claude starts.
+        //
+        // Refuse when the pane is in alternate-screen mode (a TUI —
+        // Claude Code itself, vim, less, lazygit — has captured the
+        // terminal). Writing the command bytes there would land as
+        // keystrokes inside that TUI instead of at a shell prompt,
+        // which could accidentally send a prompt to a running Claude.
         if key.modifiers == KeyModifiers::ALT
             && matches!(key.code, KeyCode::Char('p') | KeyCode::Char('P'))
         {
-            let cmd = format!("{CLAUDE_PEER_LAUNCH_CMD} ");
             let ws = self.ws_mut();
             let focused_id = ws.focused_pane_id;
             if let Some(pane) = ws.panes.get_mut(&focused_id) {
-                let _ = pane.write_input(cmd.as_bytes());
-                self.dirty = true;
+                if pane.shell_accepts_command_injection() {
+                    let cmd = format!("{CLAUDE_PEER_LAUNCH_CMD} ");
+                    let _ = pane.write_input(cmd.as_bytes());
+                    self.dirty = true;
+                }
+                // else: silently no-op; the pane is in an alt-screen
+                // TUI. Users can switch to a shell pane and retry.
             }
             return Ok(true);
         }
@@ -4524,6 +4534,40 @@ mod tests {
         assert!(default_command_for_role(None).is_none());
         assert!(default_command_for_role(Some("worker")).is_none());
         assert!(default_command_for_role(Some("")).is_none());
+    }
+
+    #[test]
+    fn handle_split_explicit_command_wins_over_role_claude_default() {
+        // Regression guard for #97 Stage 5a: `--role claude` pre-fills
+        // the peer-flagged launch command only when no explicit
+        // `--command` was given. A caller who wants a custom claude
+        // invocation (say with `/some-workflow` args) must not have
+        // their command silently stomped by the default.
+        let mut app = App::new(40, 80).expect("App::new");
+        let new_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                Some("echo custom".into()),
+                None,
+                Some("claude".into()),
+            )
+            .expect("split succeeds");
+        let pane = app.ws().panes.get(&new_id).expect("pane exists");
+        let queued = pane
+            .pending_startup
+            .as_ref()
+            .expect("explicit --command queued");
+        let queued_str = std::str::from_utf8(queued).expect("utf8");
+        assert!(
+            queued_str.starts_with("echo custom"),
+            "explicit command should win; got: {queued_str:?}"
+        );
+        assert!(
+            !queued_str.contains("--dangerously-load-development-channels"),
+            "role default must not be appended when --command was explicit; got: {queued_str:?}"
+        );
+        app.shutdown();
     }
 
     #[test]

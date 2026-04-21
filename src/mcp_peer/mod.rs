@@ -456,9 +456,12 @@ fn stdio_loop(ctx: &PeerCtx) -> Result<()> {
         let value: Value = match serde_json::from_str(trimmed) {
             Ok(v) => v,
             Err(e) => {
-                log_stderr(&format!(
-                    "malformed JSON frame dropped: {e} — raw={trimmed}"
-                ));
+                log_stderr(&format!("malformed JSON frame: {e} — raw={trimmed}"));
+                // JSON-RPC 2.0 §5.1: on parse error, the server MUST
+                // respond with id=null + code -32700. Clients that
+                // correlate replies by id will otherwise hang.
+                let parse_err = err_response(&Value::Null, -32700, &format!("parse error: {e}"));
+                let _ = write_frame(&parse_err);
                 continue;
             }
         };
@@ -499,15 +502,14 @@ fn spawn_inbox_subscriber(ctx: PeerCtx) {
         .name("ccmux-mcp-peer-inbox".into())
         .spawn(move || {
             let result = client::subscribe_events(&endpoint_clone, |event| {
-                if let ipc::Event::PeerInbox {
-                    target_pane,
-                    from_pane,
-                    from_name,
-                    body,
-                    ..
-                } = event
-                {
-                    if target_pane == pane_id {
+                match event {
+                    ipc::Event::PeerInbox {
+                        target_pane,
+                        from_pane,
+                        from_name,
+                        body,
+                        ..
+                    } if target_pane == pane_id => {
                         let note = channel_notification(
                             &body,
                             &from_pane.to_string(),
@@ -517,6 +519,33 @@ fn spawn_inbox_subscriber(ctx: PeerCtx) {
                             log_stderr(&format!("failed to push channel notification: {e}"));
                         }
                     }
+                    // The EventBus bounds each subscriber at 256 events
+                    // and drops new events for slow consumers, reporting
+                    // the gap via EventsDropped. If this thread couldn't
+                    // keep up, a peer message may have been silently
+                    // lost — surface that as a channel notice so Claude
+                    // knows to ask the peer to resend instead of
+                    // assuming all is well.
+                    ipc::Event::EventsDropped { count, .. } => {
+                        log_stderr(&format!(
+                            "event bus dropped {count} event(s) due to slow subscriber"
+                        ));
+                        let note = channel_notification(
+                            &format!(
+                                "ccmux event bus dropped {count} event(s) before they reached this Claude Code instance. A peer message may have been lost — consider asking the sender to retry."
+                            ),
+                            "ccmux",
+                            Some("ccmux runtime"),
+                        );
+                        if let Err(e) = write_frame(&note) {
+                            log_stderr(&format!("failed to push drop notice: {e}"));
+                        }
+                    }
+                    // PaneStarted / PaneExited / Heartbeat / other
+                    // PeerInbox not addressed to us: intentionally
+                    // ignored — the MCP subprocess only surfaces its
+                    // own inbox and the drop notice above.
+                    _ => {}
                 }
                 true
             });

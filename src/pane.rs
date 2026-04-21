@@ -393,6 +393,17 @@ impl Pane {
         }
     }
 
+    /// Whether it is safe to synthesize a shell command line into this
+    /// pane's PTY. Returns `false` when the pane is in alternate-screen
+    /// mode (a TUI like Claude Code or vim has captured the terminal),
+    /// since writing raw text there lands as user input to that TUI,
+    /// not at a shell prompt. Callers that want to inject a command
+    /// (`Alt+P`, orchestrator scripts) should gate on this.
+    pub fn shell_accepts_command_injection(&self) -> bool {
+        let parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
+        !parser.screen().alternate_screen()
+    }
+
     /// Kill the PTY child process.
     pub fn kill(&mut self) {
         let _ = self.child.kill();

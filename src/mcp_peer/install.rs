@@ -51,9 +51,20 @@ fn install(force: bool) -> Result<()> {
         remove_silent()?;
     }
 
+    // Refuse a non-UTF-8 exe path outright rather than silently
+    // replacing the offending bytes with U+FFFD via to_string_lossy —
+    // the registered command would be an unexecutable mojibake string
+    // that later fails inside Claude Code with no useful error.
+    let exe_str = exe.to_str().ok_or_else(|| {
+        anyhow!(
+            "ccmux binary path is not valid UTF-8 ({}); cannot register as an MCP command. \
+             Move the binary to a UTF-8 path and re-run `ccmux mcp install`.",
+            exe.display()
+        )
+    })?;
     let payload = serde_json::json!({
         "type": "stdio",
-        "command": exe.to_string_lossy().to_string(),
+        "command": exe_str,
         "args": ["mcp-peer"],
     });
     let payload_str = serde_json::to_string(&payload).context("serialize mcp config payload")?;
