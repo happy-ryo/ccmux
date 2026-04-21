@@ -427,6 +427,14 @@ impl Pane {
         self.pending_startup = Some(data);
     }
 
+    /// Queue raw text to be inserted at the shell prompt without an
+    /// automatic newline. Mirrors `Alt+P`'s "insert but don't submit"
+    /// semantics so the user can review / edit before pressing Enter.
+    /// Use [`queue_startup_command`] when the command should auto-run.
+    pub fn queue_startup_text(&mut self, text: &str) {
+        self.pending_startup = Some(text.as_bytes().to_vec());
+    }
+
     /// If a startup command is queued and the shell prompt has been
     /// observed, write the command into the PTY and clear the queue.
     /// Returns `Ok(true)` if a flush happened, `Ok(false)` otherwise.

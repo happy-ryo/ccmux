@@ -1130,6 +1130,8 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
                 Span::styled(m.tree_parent_child, Style::default().fg(TEXT_DIM)),
                 Span::styled("Enter", Style::default().fg(ACCENT_BLUE)),
                 Span::styled(m.tree_open, Style::default().fg(TEXT_DIM)),
+                Span::styled("c/v", Style::default().fg(ACCENT_BLUE)),
+                Span::styled(m.tree_claude_launch, Style::default().fg(TEXT_DIM)),
                 Span::styled(".", Style::default().fg(ACCENT_BLUE)),
                 Span::styled(m.tree_hidden, Style::default().fg(TEXT_DIM)),
                 Span::styled("Esc", Style::default().fg(ACCENT_BLUE)),
