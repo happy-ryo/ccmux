@@ -1244,13 +1244,13 @@ impl App {
 
         match (key.modifiers, key.code) {
             (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
-                if let Some(new_id) = self.split_focused_pane(SplitDirection::Vertical)? {
+                if let Some(new_id) = self.split_focused_pane(SplitDirection::Vertical, None)? {
                     self.emit_pane_started(new_id);
                 }
                 Ok(true)
             }
             (KeyModifiers::CONTROL, KeyCode::Char('e')) => {
-                if let Some(new_id) = self.split_focused_pane(SplitDirection::Horizontal)? {
+                if let Some(new_id) = self.split_focused_pane(SplitDirection::Horizontal, None)? {
                     self.emit_pane_started(new_id);
                 }
                 Ok(true)
@@ -1346,6 +1346,28 @@ impl App {
             }
             KeyCode::Char('.') => {
                 self.ws_mut().file_tree.toggle_hidden();
+                Ok(true)
+            }
+            // `c` / `v` — spawn a Claude-ready pane in the file-tree
+            // selection's directory (dir → itself, file → parent,
+            // nothing → tree root). `c` splits left/right (Ctrl+D
+            // layout), `v` splits top/bottom (Ctrl+E layout,
+            // mnemonic: "v" for vertically-stacked). The launch line
+            // is queued without a trailing newline (Alt+P semantics)
+            // so the user reviews and presses Enter to actually
+            // start Claude.
+            //
+            // Modifier gating: plain `c` / `v` must not swallow
+            // `Ctrl+C` / `Ctrl+V`, which fall through to this handler
+            // on the "no selection" path (see the global Ctrl+C
+            // branch above). Require `NONE` modifiers so only the
+            // bare keystroke triggers the launch.
+            KeyCode::Char('c') if key.modifiers == KeyModifiers::NONE => {
+                self.spawn_claude_in_selected_dir(SplitDirection::Vertical)?;
+                Ok(true)
+            }
+            KeyCode::Char('v') if key.modifiers == KeyModifiers::NONE => {
+                self.spawn_claude_in_selected_dir(SplitDirection::Horizontal)?;
                 Ok(true)
             }
             // Vim-like root navigation: `h` moves the tree root up
@@ -1566,7 +1588,11 @@ impl App {
     /// firing the event after they've attached metadata (name, role) so
     /// subscribers see the pane with its final identity — otherwise the
     /// event races the metadata and lands with `name: None, role: None`.
-    fn split_focused_pane(&mut self, direction: SplitDirection) -> Result<Option<usize>> {
+    fn split_focused_pane(
+        &mut self,
+        direction: SplitDirection,
+        cwd_override: Option<PathBuf>,
+    ) -> Result<Option<usize>> {
         if self.ws().layout.pane_count() >= Self::MAX_PANES {
             return Ok(None);
         }
@@ -1594,14 +1620,15 @@ impl App {
         let new_id = self.next_pane_id;
         self.next_pane_id = self.next_pane_id.wrapping_add(1);
 
-        // Inherit CWD from the focused pane
-        let parent_cwd = self
-            .ws()
-            .panes
-            .get(&self.ws().focused_pane_id)
-            .map(|p| p.cwd.clone());
+        // Explicit override wins; otherwise inherit the focused pane's cwd.
+        let cwd = cwd_override.or_else(|| {
+            self.ws()
+                .panes
+                .get(&self.ws().focused_pane_id)
+                .map(|p| p.cwd.clone())
+        });
 
-        let pane = Pane::new_with_cwd(new_id, 10, 40, self.event_tx.clone(), parent_cwd)?;
+        let pane = Pane::new_with_cwd(new_id, 10, 40, self.event_tx.clone(), cwd)?;
         let ws = self.ws_mut();
         ws.panes.insert(new_id, pane);
         ws.layout.split_pane(ws.focused_pane_id, new_id, direction);
@@ -1611,6 +1638,43 @@ impl App {
 
         self.mark_layout_change();
         Ok(Some(new_id))
+    }
+
+    /// Split the focused pane in `direction`, open the freshly-created
+    /// pane in the directory currently selected in the FILES sidebar,
+    /// and queue the Alt+P launch line (without a trailing newline) so
+    /// the user reviews and presses Enter to start Claude.
+    ///
+    /// `direction`: `Vertical` = left/right (Ctrl+D layout), `Horizontal`
+    /// = top/bottom (Ctrl+E layout). Bound to `c` and `v` respectively
+    /// in the FILES key handler.
+    ///
+    /// No-op when the split is refused (MAX_PANES or pane too small) —
+    /// the same refusal path as Ctrl+D/Ctrl+E.
+    fn spawn_claude_in_selected_dir(&mut self, direction: SplitDirection) -> Result<()> {
+        let raw_cwd = self.ws().file_tree.selected_launch_cwd();
+        // Canonicalize to resolve symlinks; on failure fall back to the
+        // raw path (e.g. network FS, permission errors). If the path
+        // still isn't a real directory (deleted after the tree snapshot,
+        // or a file whose parent vanished), fall back to the tree root
+        // — turning a UI keypress into a shell-spawn error is worse
+        // than silently widening the cwd scope.
+        let cwd = raw_cwd.canonicalize().unwrap_or(raw_cwd);
+        let cwd = if cwd.is_dir() {
+            cwd
+        } else {
+            self.ws().file_tree.root_path.clone()
+        };
+
+        let Some(new_id) = self.split_focused_pane(direction, Some(cwd))? else {
+            return Ok(());
+        };
+
+        if let Some(pane) = self.ws_mut().panes.get_mut(&new_id) {
+            pane.queue_startup_text(&format!("{CLAUDE_PEER_LAUNCH_CMD} "));
+        }
+        self.emit_pane_started(new_id);
+        Ok(())
     }
 
     /// Apply a multi-pane layout to the active workspace.
@@ -1663,7 +1727,7 @@ impl App {
                     DirectionSpec::Vertical => SplitDirection::Vertical,
                     DirectionSpec::Horizontal => SplitDirection::Horizontal,
                 };
-                let new_pane_id = self.split_focused_pane(split_dir)?.ok_or_else(|| {
+                let new_pane_id = self.split_focused_pane(split_dir, None)?.ok_or_else(|| {
                     anyhow::anyhow!(
                         "layout split refused (too small or MAX_PANES) while applying layout"
                     )
@@ -3211,7 +3275,7 @@ impl App {
             ipc::Direction::Horizontal => SplitDirection::Horizontal,
         };
         let new_pane_id = match self
-            .split_focused_pane(split_dir)
+            .split_focused_pane(split_dir, None)
             .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?
         {
             Some(id) => id,

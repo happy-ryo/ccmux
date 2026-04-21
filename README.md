@@ -276,6 +276,8 @@ By default macOS terminals bind `Option+<key>` to Unicode input (`å`, `∫`, `�
 | `Enter` | Open file / expand directory (inline) |
 | `h` | Move the tree root up one level |
 | `l` | Descend into the selected directory (no-op on files) |
+| `c` | Split left/right and queue the Claude+peer launch line in the selection's directory (file → parent, empty → tree root). Not executed until you press Enter, same as `Alt+P`. |
+| `v` | Same as `c` but splits top/bottom. |
 | `.` | Toggle hidden files |
 | `Esc` | Return to pane |
 

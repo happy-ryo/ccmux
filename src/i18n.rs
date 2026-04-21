@@ -133,6 +133,7 @@ pub struct Messages {
     pub tree_back: &'static str,
     pub tree_close: &'static str,
     pub tree_quit: &'static str,
+    pub tree_claude_launch: &'static str,
     // ── status bar: pane focus ─────────────────────────────
     pub pane_split_vertical: &'static str,
     pub pane_split_horizontal: &'static str,
@@ -193,6 +194,7 @@ pub static MESSAGES_JA: Messages = Messages {
     tree_back: " 戻る  ",
     tree_close: " 閉じる  ",
     tree_quit: " 終了",
+    tree_claude_launch: " Claude左右/上下  ",
     pane_split_vertical: " 縦分割  ",
     pane_split_horizontal: " 横分割  ",
     pane_close: " 閉じる  ",
@@ -228,6 +230,7 @@ pub static MESSAGES_EN: Messages = Messages {
     tree_back: " back  ",
     tree_close: " close  ",
     tree_quit: " quit",
+    tree_claude_launch: " claude split  ",
     pane_split_vertical: " v-split  ",
     pane_split_horizontal: " h-split  ",
     pane_close: " close  ",

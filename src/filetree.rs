@@ -204,6 +204,24 @@ impl FileTree {
         }
     }
 
+    /// Decide the cwd to use when launching an external command
+    /// (e.g. Claude via the `c` key) from the current selection.
+    /// Directory → itself; file → its parent; no selection → tree root.
+    /// Never returns an empty path: a file at the root falls back to
+    /// the tree root rather than returning an unusable empty `PathBuf`.
+    pub fn selected_launch_cwd(&self) -> PathBuf {
+        match self.flat_entries.get(self.selected_index) {
+            Some(entry) if entry.is_dir => entry.path.clone(),
+            Some(entry) => entry
+                .path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| self.root_path.clone()),
+            None => self.root_path.clone(),
+        }
+    }
+
     /// Handle Enter key on selected entry.
     /// Returns Some(path) if a file was selected for preview.
     pub fn toggle_or_select(&mut self) -> Option<PathBuf> {
@@ -432,6 +450,41 @@ mod tests {
             assert_eq!(tree.root_path, target);
             assert_eq!(tree.selected_index, 0);
         }
+    }
+
+    #[test]
+    fn test_selected_launch_cwd_directory_returns_self() {
+        let mut tree = FileTree::new(PathBuf::from("."));
+        let dir_idx = tree
+            .visible_entries()
+            .iter()
+            .position(|e| e.is_dir)
+            .expect("project root should contain at least one directory");
+        tree.selected_index = dir_idx;
+        let expected = tree.visible_entries()[dir_idx].path.clone();
+        assert_eq!(tree.selected_launch_cwd(), expected);
+    }
+
+    #[test]
+    fn test_selected_launch_cwd_file_returns_parent() {
+        let mut tree = FileTree::new(PathBuf::from("."));
+        let file_idx = tree
+            .visible_entries()
+            .iter()
+            .position(|e| !e.is_dir)
+            .expect("project root should contain at least one file");
+        tree.selected_index = file_idx;
+        let file_path = tree.visible_entries()[file_idx].path.clone();
+        let expected = file_path.parent().unwrap().to_path_buf();
+        assert_eq!(tree.selected_launch_cwd(), expected);
+    }
+
+    #[test]
+    fn test_selected_launch_cwd_empty_selection_falls_back_to_root() {
+        let mut tree = FileTree::new(PathBuf::from("."));
+        // Force selected_index past the end so get() returns None.
+        tree.selected_index = tree.visible_entries().len() + 10;
+        assert_eq!(tree.selected_launch_cwd(), tree.root_path);
     }
 
     #[test]
