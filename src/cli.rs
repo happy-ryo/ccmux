@@ -57,6 +57,16 @@ pub struct Cli {
     #[arg(long, value_name = "MS")]
     pub ime_overlay_catchup_ms: Option<u64>,
 
+    /// UI language for status bar hints and preview error messages.
+    /// Overrides `[ui] lang` in config.toml.
+    ///
+    /// * `auto` (default) — detect from OS locale via `sys-locale`;
+    ///   JA on `ja*` tags, EN otherwise.
+    /// * `ja` — force Japanese regardless of locale.
+    /// * `en` — force English regardless of locale.
+    #[arg(long, value_name = "LANG", value_enum, ignore_case = true)]
+    pub lang: Option<crate::i18n::UiLang>,
+
     /// Minimum columns each child pane must retain after a vertical
     /// split. Splits that would produce a narrower child are refused.
     /// A value of `0` is clamped to `1` at runtime to avoid degenerate
@@ -784,6 +794,39 @@ mod tests {
     fn parses_ime_overlay_catchup_ms_override() {
         let cli = Cli::try_parse_from(["ccmux", "--ime-overlay-catchup-ms", "3000"]).unwrap();
         assert_eq!(cli.ime_overlay_catchup_ms, Some(3000));
+    }
+
+    #[test]
+    fn lang_defaults_to_none() {
+        let cli = Cli::try_parse_from(["ccmux"]).unwrap();
+        assert_eq!(cli.lang, None);
+    }
+
+    #[test]
+    fn parses_lang_auto_ja_en() {
+        let cli = Cli::try_parse_from(["ccmux", "--lang", "auto"]).unwrap();
+        assert_eq!(cli.lang, Some(crate::i18n::UiLang::Auto));
+        let cli = Cli::try_parse_from(["ccmux", "--lang", "ja"]).unwrap();
+        assert_eq!(cli.lang, Some(crate::i18n::UiLang::Ja));
+        let cli = Cli::try_parse_from(["ccmux", "--lang", "en"]).unwrap();
+        assert_eq!(cli.lang, Some(crate::i18n::UiLang::En));
+    }
+
+    #[test]
+    fn parses_lang_case_insensitive() {
+        // `ignore_case = true` on the clap attr — a user typing
+        // `--lang JA` shouldn't hit a parse error that would kill
+        // startup.
+        let cli = Cli::try_parse_from(["ccmux", "--lang", "JA"]).unwrap();
+        assert_eq!(cli.lang, Some(crate::i18n::UiLang::Ja));
+        let cli = Cli::try_parse_from(["ccmux", "--lang", "En"]).unwrap();
+        assert_eq!(cli.lang, Some(crate::i18n::UiLang::En));
+    }
+
+    #[test]
+    fn rejects_unknown_lang() {
+        assert!(Cli::try_parse_from(["ccmux", "--lang", "zh"]).is_err());
+        assert!(Cli::try_parse_from(["ccmux", "--lang", "banana"]).is_err());
     }
 
     #[test]

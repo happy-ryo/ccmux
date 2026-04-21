@@ -37,6 +37,11 @@ humantime = "2"
 # picker / protocol detection for the preview panel.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 ratatui-image = { version = "10", default-features = false, features = ["crossterm"] }
+# OS locale detection for auto UI-language selection. Wraps
+# `nl_langinfo` on Unix and `GetUserDefaultLocaleName` on Windows so
+# users without `LANG`/`LC_*` env vars (notably vanilla Windows Terminal
+# + PowerShell, PR #94's target audience) still get the right default.
+sys-locale = "0.3"
 
 [target.'cfg(unix)'.dependencies]
 # getuid() for the IPC endpoint directory name. Used only on Unix;

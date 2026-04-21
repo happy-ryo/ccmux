@@ -58,8 +58,21 @@ impl Preview {
         self.image_protocol.is_some()
     }
 
-    /// Load a file for preview.
-    pub fn load(&mut self, path: &Path, picker: Option<&mut Picker>) {
+    /// Load a file for preview. `messages` carries the resolved UI
+    /// language so error placeholders ("File too large", etc.) render
+    /// in the user's chosen language without `Preview` having to carry
+    /// a persistent `Lang` field — a new messages pointer is injected
+    /// on every load, which is enough because ccmux doesn't support
+    /// mid-session language switching. If that ever changes, the
+    /// `file_path == path` early-return below must also invalidate
+    /// any cached error lines so they get re-rendered in the new
+    /// language.
+    pub fn load(
+        &mut self,
+        path: &Path,
+        picker: Option<&mut Picker>,
+        messages: &'static crate::i18n::Messages,
+    ) {
         if self.file_path.as_deref() == Some(path) {
             return;
         }
@@ -75,23 +88,22 @@ impl Preview {
         let metadata = match std::fs::metadata(path) {
             Ok(m) => m,
             Err(_) => {
-                self.lines = vec!["ファイルを読み込めませんでした".to_string()];
+                self.lines = vec![messages.preview_read_failed.to_string()];
                 return;
             }
         };
 
         if !metadata.is_file() {
-            self.lines = vec!["通常ファイルではありません".to_string()];
+            self.lines = vec![messages.preview_not_regular.to_string()];
             return;
         }
 
         // Try loading as image first (by extension)
         if is_image_extension(path) {
             if metadata.len() > MAX_IMAGE_SIZE {
-                self.lines = vec![format!(
-                    "画像が大きすぎます（{:.1}MB > {:.0}MB）",
+                self.lines = vec![messages.image_too_large(
                     metadata.len() as f64 / 1024.0 / 1024.0,
-                    MAX_IMAGE_SIZE as f64 / 1024.0 / 1024.0
+                    MAX_IMAGE_SIZE as f64 / 1024.0 / 1024.0,
                 )];
                 return;
             }
@@ -113,10 +125,9 @@ impl Preview {
         }
 
         if metadata.len() > MAX_FILE_SIZE {
-            self.lines = vec![format!(
-                "ファイルが大きすぎます（{:.1}MB > {:.0}MB）",
+            self.lines = vec![messages.file_too_large(
                 metadata.len() as f64 / 1024.0 / 1024.0,
-                MAX_FILE_SIZE as f64 / 1024.0 / 1024.0
+                MAX_FILE_SIZE as f64 / 1024.0 / 1024.0,
             )];
             return;
         }
@@ -137,7 +148,7 @@ impl Preview {
                     .collect();
             }
             Err(_) => {
-                self.lines = vec!["ファイルを読み込めませんでした".to_string()];
+                self.lines = vec![messages.preview_read_failed.to_string()];
                 return;
             }
         }
@@ -345,7 +356,7 @@ mod tests {
     #[test]
     fn test_preview_load_text_file() {
         let mut preview = Preview::new();
-        preview.load(Path::new("Cargo.toml"), None);
+        preview.load(Path::new("Cargo.toml"), None, &crate::i18n::MESSAGES_EN);
         assert!(preview.is_active());
         assert!(!preview.is_binary);
         assert!(!preview.lines.is_empty());
@@ -355,7 +366,7 @@ mod tests {
     #[test]
     fn test_preview_close() {
         let mut preview = Preview::new();
-        preview.load(Path::new("Cargo.toml"), None);
+        preview.load(Path::new("Cargo.toml"), None, &crate::i18n::MESSAGES_EN);
         assert!(preview.is_active());
 
         preview.close();
@@ -379,7 +390,7 @@ mod tests {
     #[test]
     fn test_preview_highlight_rust() {
         let mut preview = Preview::new();
-        preview.load(Path::new("src/main.rs"), None);
+        preview.load(Path::new("src/main.rs"), None, &crate::i18n::MESSAGES_EN);
         assert!(!preview.highlighted_lines.is_empty());
         // Highlighted lines should have colored spans
         let first = &preview.highlighted_lines[0];

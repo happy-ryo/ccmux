@@ -3,6 +3,7 @@ mod claude_monitor;
 mod cli;
 mod config;
 mod filetree;
+mod i18n;
 mod input;
 mod ipc;
 mod layout_config;
@@ -130,7 +131,12 @@ fn main() -> Result<()> {
 
     // Load user config + apply CLI override (CLI > file > default).
     let mut user_config = config::Config::load();
-    user_config.apply_cli_overrides(cli.ime, cli.ime_freeze_panes, cli.ime_overlay_catchup_ms);
+    user_config.apply_cli_overrides(
+        cli.ime,
+        cli.ime_freeze_panes,
+        cli.ime_overlay_catchup_ms,
+        cli.lang,
+    );
 
     // Create app (spawns the initial pane, which captures the env above).
     let mut app = app::App::new(size.height, size.width)?;

@@ -915,7 +915,7 @@ fn render_preview(app: &mut App, frame: &mut Frame, area: Rect) {
     }
 
     if is_binary {
-        let msg = Paragraph::new("\u{2718} バイナリファイルです")
+        let msg = Paragraph::new(app.messages().preview_binary)
             .style(Style::default().fg(TEXT_DIM).bg(PANEL_BG));
         frame.render_widget(msg, inner);
         return;
@@ -1063,65 +1063,66 @@ fn render_preview(app: &mut App, frame: &mut Frame, area: Rect) {
 
 fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
     let focus = app.ws().focus_target;
+    let m = app.messages();
 
     // Rename mode overrides focus-specific hints — key input is being
     // captured by the buffer regardless of which pane/panel is focused.
     let hints = if app.rename_input.is_some() {
         Line::from(vec![
             Span::styled(" Enter", Style::default().fg(ACCENT_BLUE)),
-            Span::styled(" 決定  ", Style::default().fg(TEXT_DIM)),
+            Span::styled(m.rename_confirm, Style::default().fg(TEXT_DIM)),
             Span::styled("Esc", Style::default().fg(ACCENT_BLUE)),
-            Span::styled(" 取消  ", Style::default().fg(TEXT_DIM)),
-            Span::styled("空Enter", Style::default().fg(ACCENT_BLUE)),
-            Span::styled(" 元に戻す", Style::default().fg(TEXT_DIM)),
+            Span::styled(m.rename_cancel, Style::default().fg(TEXT_DIM)),
+            Span::styled(m.rename_empty_enter_label, Style::default().fg(ACCENT_BLUE)),
+            Span::styled(m.rename_reset, Style::default().fg(TEXT_DIM)),
         ])
     } else {
         match focus {
             FocusTarget::Preview => Line::from(vec![
                 Span::styled(" Scroll", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" スクロール  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.preview_scroll, Style::default().fg(TEXT_DIM)),
                 Span::styled("^W", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 閉じる  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.preview_close, Style::default().fg(TEXT_DIM)),
                 Span::styled("^P", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 配置替  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.preview_swap, Style::default().fg(TEXT_DIM)),
                 Span::styled("^Q", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 終了", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.preview_quit, Style::default().fg(TEXT_DIM)),
             ]),
             FocusTarget::FileTree => Line::from(vec![
                 Span::styled(" j/k", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 移動  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.tree_move, Style::default().fg(TEXT_DIM)),
                 Span::styled("h/l", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 親/下へ  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.tree_parent_child, Style::default().fg(TEXT_DIM)),
                 Span::styled("Enter", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 開く  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.tree_open, Style::default().fg(TEXT_DIM)),
                 Span::styled(".", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 隠しファイル  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.tree_hidden, Style::default().fg(TEXT_DIM)),
                 Span::styled("Esc", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 戻る  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.tree_back, Style::default().fg(TEXT_DIM)),
                 Span::styled("^F", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 閉じる  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.tree_close, Style::default().fg(TEXT_DIM)),
                 Span::styled("^Q", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 終了", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.tree_quit, Style::default().fg(TEXT_DIM)),
             ]),
             FocusTarget::Pane => Line::from(vec![
                 Span::styled(" ^D", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 縦分割  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.pane_split_vertical, Style::default().fg(TEXT_DIM)),
                 Span::styled("^E", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 横分割  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.pane_split_horizontal, Style::default().fg(TEXT_DIM)),
                 Span::styled("^W", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 閉じる  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.pane_close, Style::default().fg(TEXT_DIM)),
                 Span::styled("A-T", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 新タブ  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.pane_new_tab, Style::default().fg(TEXT_DIM)),
                 Span::styled("A-R", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" タブ名  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.pane_rename_tab, Style::default().fg(TEXT_DIM)),
                 Span::styled("^F", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" ツリー  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.pane_tree, Style::default().fg(TEXT_DIM)),
                 Span::styled("^P", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 配置替  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.pane_swap, Style::default().fg(TEXT_DIM)),
                 Span::styled("^;/A-;", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" IME入力  ", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.pane_ime, Style::default().fg(TEXT_DIM)),
                 Span::styled("^Q", Style::default().fg(ACCENT_BLUE)),
-                Span::styled(" 終了", Style::default().fg(TEXT_DIM)),
+                Span::styled(m.pane_quit, Style::default().fg(TEXT_DIM)),
             ]),
         }
     };

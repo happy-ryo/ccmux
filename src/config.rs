@@ -17,6 +17,22 @@ use std::path::PathBuf;
 #[serde(default)]
 pub struct Config {
     pub ime: ImeConfig,
+    pub ui: UiConfig,
+}
+
+/// Top-level UI settings. Currently only carries the language pick;
+/// future display-affecting options (theme overrides, etc.) can hang
+/// off the same section.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default)]
+pub struct UiConfig {
+    /// UI language for status bar hints and preview error messages.
+    /// `auto` (default) picks based on the OS locale; `ja` / `en`
+    /// force a specific language regardless of locale. Case-insensitive
+    /// in TOML (`"JA"` / `"Ja"` / `"ja"` all work) because the existing
+    /// `[ime] mode` convention is lowercase and we don't want a fat-
+    /// finger to fail the whole config parse silently.
+    pub lang: crate::i18n::UiLang,
 }
 
 /// IME overlay settings. See Issue #39 for the full mode design;
@@ -163,6 +179,7 @@ impl Config {
         ime_mode: Option<ImeMode>,
         freeze_panes_on_overlay: Option<bool>,
         overlay_catchup_ms: Option<u64>,
+        ui_lang: Option<crate::i18n::UiLang>,
     ) {
         if let Some(mode) = ime_mode {
             self.ime.mode = mode;
@@ -172,6 +189,9 @@ impl Config {
         }
         if let Some(ms) = overlay_catchup_ms {
             self.ime.overlay_catchup_ms = ms;
+        }
+        if let Some(lang) = ui_lang {
+            self.ui.lang = lang;
         }
         // Clamp any non-zero value regardless of origin so the main
         // loop never sees a sub-floor interval.
@@ -287,7 +307,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(Some(ImeMode::Off), None, None);
+        cfg.apply_cli_overrides(Some(ImeMode::Off), None, None, None);
         assert_eq!(cfg.ime.mode, ImeMode::Off);
     }
 
@@ -300,7 +320,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(None, None, None);
+        cfg.apply_cli_overrides(None, None, None, None);
         assert_eq!(cfg.ime.mode, ImeMode::Off);
     }
 
@@ -369,11 +389,11 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(None, Some(false), None);
+        cfg.apply_cli_overrides(None, Some(false), None, None);
         assert!(!cfg.ime.freeze_panes_on_overlay);
 
         let mut cfg2 = Config::default();
-        cfg2.apply_cli_overrides(None, Some(true), None);
+        cfg2.apply_cli_overrides(None, Some(true), None, None);
         assert!(cfg2.ime.freeze_panes_on_overlay);
     }
 
@@ -404,17 +424,17 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(None, None, Some(3000));
+        cfg.apply_cli_overrides(None, None, Some(3000), None);
         assert_eq!(cfg.ime.overlay_catchup_ms, 3000);
 
         let mut cfg2 = Config::default();
         // Non-zero sub-floor value must be clamped up.
-        cfg2.apply_cli_overrides(None, None, Some(10));
+        cfg2.apply_cli_overrides(None, None, Some(10), None);
         assert_eq!(cfg2.ime.overlay_catchup_ms, MIN_OVERLAY_CATCHUP_MS);
 
         // Zero must stay zero (means "disabled").
         let mut cfg3 = Config::default();
-        cfg3.apply_cli_overrides(None, None, Some(0));
+        cfg3.apply_cli_overrides(None, None, Some(0), None);
         assert_eq!(cfg3.ime.overlay_catchup_ms, 0);
     }
 
@@ -428,5 +448,101 @@ mod tests {
             "`always` was removed and must no longer parse"
         );
         assert!(ImeMode::from_str("banana").is_err());
+    }
+
+    // ── [ui] lang ────────────────────────────────────────
+
+    #[test]
+    fn ui_lang_defaults_to_auto() {
+        let cfg = Config::default();
+        assert_eq!(cfg.ui.lang, crate::i18n::UiLang::Auto);
+    }
+
+    #[test]
+    fn parses_ui_lang_from_toml_lowercase() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [ui]
+            lang = "ja"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.ui.lang, crate::i18n::UiLang::Ja);
+    }
+
+    #[test]
+    fn parses_ui_lang_case_insensitive() {
+        // TOML config is forgiving of casing — `"JA"` / `"En"` / `"Auto"`
+        // all accepted so fat-fingers don't silently null out the pick.
+        let cfg_ja: Config = toml::from_str(
+            r#"
+            [ui]
+            lang = "JA"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg_ja.ui.lang, crate::i18n::UiLang::Ja);
+
+        let cfg_en: Config = toml::from_str(
+            r#"
+            [ui]
+            lang = "En"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg_en.ui.lang, crate::i18n::UiLang::En);
+
+        let cfg_auto: Config = toml::from_str(
+            r#"
+            [ui]
+            lang = "AUTO"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg_auto.ui.lang, crate::i18n::UiLang::Auto);
+    }
+
+    #[test]
+    fn rejects_unknown_ui_lang_value() {
+        // An unknown value must bubble up as a parse error instead of
+        // silently falling through to a default — otherwise a typo
+        // like `lang = "jp"` would masquerade as `lang = "auto"`.
+        let err = toml::from_str::<Config>(
+            r#"
+            [ui]
+            lang = "jp"
+            "#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("jp") || err.to_string().contains("invalid"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn cli_ui_lang_beats_file() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [ui]
+            lang = "ja"
+            "#,
+        )
+        .unwrap();
+        cfg.apply_cli_overrides(None, None, None, Some(crate::i18n::UiLang::En));
+        assert_eq!(cfg.ui.lang, crate::i18n::UiLang::En);
+    }
+
+    #[test]
+    fn cli_ui_lang_none_leaves_file_value() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [ui]
+            lang = "en"
+            "#,
+        )
+        .unwrap();
+        cfg.apply_cli_overrides(None, None, None, None);
+        assert_eq!(cfg.ui.lang, crate::i18n::UiLang::En);
     }
 }

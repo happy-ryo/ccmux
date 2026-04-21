@@ -74,6 +74,7 @@ Launch from any directory. The file tree shows the current working directory.
 - `--min-pane-height <ROWS>` — minimum child rows a split may produce (default `5`). Same clamp rule as `--min-pane-width`.
 - `--ime-freeze-panes[=BOOL]` — freeze pane repaints while the IME composition overlay is open (default `false`). Suppresses flicker from Claude's thinking spinner and other background PTY output during JP composition; panes catch up instantly when the overlay closes. Pass the bare flag to enable, or `=false` to force-disable a config `true`. Also settable via `[ime] freeze_panes_on_overlay` in `config.toml`.
 - `--ime-overlay-catchup-ms <MS>` — when `--ime-freeze-panes` is active, force a single repaint every `<MS>` milliseconds so body-content progress stays visible through an open overlay (default `0` = disabled, pure freeze). `3000`–`5000` is the sweet spot: flicker stays barely noticeable while Claude's streaming output still advances at a readable pace. Non-zero values are clamped to at least `100`. Also settable via `[ime] overlay_catchup_ms` in `config.toml`.
+- `--lang <auto\|ja\|en>` — UI language for status bar hints and preview error messages (default `auto`). `auto` detects from the OS locale: `ja*` tags use Japanese, everything else falls back to English. `ja` / `en` force a specific language regardless of locale. Values are case-insensitive (`--lang JA` / `--lang En` both work). Also settable via `[ui] lang` in `config.toml`.
 
 ## Configuration
 
@@ -145,6 +146,23 @@ The overlay opens as a centered multi-line composition box. Host-terminal IME ca
 | `Home` / `End` | Start / end of current line |
 | `Ctrl+Home` / `Ctrl+End` | Start / end of whole buffer |
 | `Backspace` | Delete char left of caret |
+
+### `[ui]` — UI language
+
+Controls the language used for status bar hints and preview panel error messages. ccmux started out JP-only because the fork's primary users are Japanese speakers, but everything now flips automatically based on the OS locale.
+
+```toml
+[ui]
+lang = "auto"   # "auto" | "ja" | "en"
+```
+
+| Value | Behavior |
+|-------|----------|
+| `auto` (default) | Detect from the OS locale via `sys-locale` (wraps `nl_langinfo` on Unix and `GetUserDefaultLocaleName` on Windows). Locales starting with `ja` render in Japanese; everything else falls back to English. Works even when `LANG` / `LC_*` are unset — handy for vanilla Windows Terminal + PowerShell. |
+| `ja` | Force Japanese regardless of locale. |
+| `en` | Force English regardless of locale. |
+
+The `--lang auto\|ja\|en` CLI flag overrides the config file for a single run. Values are case-insensitive in both CLI (`--lang JA`) and TOML (`lang = "Ja"`). Precedence is **CLI > config > OS locale detection > English fallback**.
 
 ## Keybindings
 
