@@ -80,8 +80,8 @@ Launch from any directory. The file tree shows the current working directory.
 
 - `--min-pane-width <COLS>` — minimum child columns a split may produce (default `20`). Splits whose halved pane would be narrower are refused. `0` is clamped to `1` to avoid zero-width children.
 - `--min-pane-height <ROWS>` — minimum child rows a split may produce (default `5`). Same clamp rule as `--min-pane-width`.
-- `--ime-freeze-panes[=BOOL]` — freeze pane repaints while the IME composition overlay is open (default `false`). Suppresses flicker from Claude's thinking spinner and other background PTY output during JP composition; panes catch up instantly when the overlay closes. Pass the bare flag to enable, or `=false` to force-disable a config `true`. Also settable via `[ime] freeze_panes_on_overlay` in `config.toml`.
-- `--ime-overlay-catchup-ms <MS>` — when `--ime-freeze-panes` is active, force a single repaint every `<MS>` milliseconds so body-content progress stays visible through an open overlay (default `0` = disabled, pure freeze). `3000`–`5000` is the sweet spot: flicker stays barely noticeable while Claude's streaming output still advances at a readable pace. Non-zero values are clamped to at least `100`. Also settable via `[ime] overlay_catchup_ms` in `config.toml`.
+- `--ime-freeze-panes[=BOOL]` — freeze pane repaints while the IME composition overlay is open (default `true`). Suppresses flicker from Claude's thinking spinner and other background PTY output during JP composition; panes catch up instantly when the overlay closes. Only takes effect while the overlay is open, so users who never press `Ctrl+;` see no change — which is why it's on by default. Pass `=false` to force-disable and keep live repaints during composition. Also settable via `[ime] freeze_panes_on_overlay` in `config.toml`.
+- `--ime-overlay-catchup-ms <MS>` — when `--ime-freeze-panes` is active, force a single repaint every `<MS>` milliseconds so body-content progress stays visible through an open overlay (default `3000` ms — the sweet spot: flicker stays barely noticeable while Claude's streaming output still advances at a readable pace). Pass `0` for a pure freeze. Non-zero values are clamped to at least `100`. Also settable via `[ime] overlay_catchup_ms` in `config.toml`.
 - `--lang <auto\|ja\|en>` — UI language for status bar hints and preview error messages (default `auto`). `auto` detects from the OS locale: `ja*` tags use Japanese, everything else falls back to English. `ja` / `en` force a specific language regardless of locale. Values are case-insensitive (`--lang JA` / `--lang En` both work). Also settable via `[ui] lang` in `config.toml`.
 
 ## Configuration
@@ -112,23 +112,18 @@ The `--ime hotkey\|off` CLI flag overrides the config file for a single run. Pre
 
 > A third mode, `always`, used to auto-open the overlay on every Claude pane focus. It was removed because the auto-open never worked reliably in practice. Users who want the overlay ready on focus should just press `Ctrl+;` once.
 
-### Recommended setup for JP / CJK IME users
+### JP / CJK IME composition
 
-If you regularly compose Japanese (or any IME-heavy language) prompts for Claude, launch ccmux with this pair:
+Freeze-on-overlay and periodic catch-up are **on by default** (see the flag table above). No setup is needed — press `Ctrl+;` on a focused pane and the overlay opens with the pane frozen behind it, unfreezing for one frame every 3 s so Claude's streaming output stays visible.
 
-```bash
-ccmux --ime-freeze-panes --ime-overlay-catchup-ms 3000
-```
-
-Or set it once in `config.toml` so every session starts this way:
+The defaults are opt-out-friendly because the freeze only takes effect while the overlay is open; users who don't use IME never see a behavior change. If you specifically want live repaints during composition (or a pure freeze with no catch-up), override in `config.toml`:
 
 ```toml
 [ime]
-freeze_panes_on_overlay = true
-overlay_catchup_ms = 3000
+freeze_panes_on_overlay = false    # live repaints during composition
+# or
+overlay_catchup_ms = 0             # pure freeze, no periodic catch-up
 ```
-
-Press `Ctrl+;` on a focused pane to open the overlay — the freeze + catch-up behavior kicks in automatically while the overlay is open.
 
 ![Centered IME overlay with a Japanese conversion candidate window anchored right under the caret, Claude panes frozen behind it](ime-overlay.png)
 

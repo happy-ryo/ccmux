@@ -79,8 +79,8 @@ ccmux
 
 - `--min-pane-width <COLS>` — 分割後の各ペインが確保する最小幅 (デフォルト `20`)。これを下回る分割は拒否します。`0` を渡した場合は `1` に丸めて、幅 0 のペインが生まれないようにします。
 - `--min-pane-height <ROWS>` — 分割後の最小行数 (デフォルト `5`)。`--min-pane-width` と同じ丸め規則。
-- `--ime-freeze-panes[=BOOL]` — IME overlay を開いている間、背後のペインの再描画を止めます (デフォルト `false`)。日本語入力中に Claude の Thinking スピナーや裏で流れる出力がちらついて候補窓を邪魔するのを防ぎます。overlay を閉じた瞬間に最新の画面へ追いつきます。フラグだけ渡すと有効、`=false` を付けると config 側の `true` を打ち消せます。`config.toml` の `[ime] freeze_panes_on_overlay` でも指定できます。
-- `--ime-overlay-catchup-ms <MS>` — `--ime-freeze-panes` が有効なとき、指定ミリ秒ごとに 1 フレームだけ再描画を挟み込みます (デフォルト `0` = 無効、完全に凍結)。overlay を開いたまま Claude の出力が進む様子を確認できます。体感では `3000`〜`5000` がちょうど良く、ちらつきはほぼ気にならないまま、Claude の出力を追える程度の間隔で更新されます。`100` 未満は `100` に丸めます。`config.toml` の `[ime] overlay_catchup_ms` でも指定できます。
+- `--ime-freeze-panes[=BOOL]` — IME overlay を開いている間、背後のペインの再描画を止めます (デフォルト `true`)。日本語入力中に Claude の Thinking スピナーや裏で流れる出力がちらついて候補窓を邪魔するのを防ぎます。overlay を閉じた瞬間に最新の画面へ追いつきます。overlay を開かないユーザー (IME を使わない人) には影響しないので ON がデフォルト。入力中も生の再描画を見たい場合は `=false` で無効化できます。`config.toml` の `[ime] freeze_panes_on_overlay` でも指定できます。
+- `--ime-overlay-catchup-ms <MS>` — `--ime-freeze-panes` が有効なとき、指定ミリ秒ごとに 1 フレームだけ再描画を挟み込みます (デフォルト `3000` ms — README の sweet spot。ちらつきはほぼ気にならないまま、Claude の出力を追える程度の間隔で更新)。完全凍結したいなら `0` を渡してください。`100` 未満は `100` に丸めます。`config.toml` の `[ime] overlay_catchup_ms` でも指定できます。
 - `--lang <auto\|ja\|en>` — ステータスバーのヒントやプレビューのエラーメッセージの表示言語 (デフォルト `auto`)。`auto` は OS ロケールを見て、`ja` 系なら日本語、それ以外は英語にフォールバックします。`ja` / `en` はロケールに関わらず言語を固定します。大小文字は区別しません (`--lang JA` / `--lang En` も通ります)。`config.toml` の `[ui] lang` でも指定できます。
 
 ## 設定ファイル
@@ -111,20 +111,17 @@ CLI フラグ `--ime hotkey|off` は config を 1 回だけ上書きします。
 
 > 以前は `Claude` のペインにフォーカスするたびに overlay が自動で開く `always` モードもありましたが、実運用で不安定だったため削除しました。フォーカス直後から overlay を使いたい場合は `Ctrl+;` を 1 回押してください。
 
-### 日本語 (CJK) で使うときのおすすめ設定
+### 日本語 (CJK) IME での入力
 
-日本語などの IME 依存が強い言語で Claude にプロンプトを書くことが多いなら、次の 2 つを合わせて起動するのが楽です。
+**ちらつき防止 (freeze) + 3 秒ごとの catch-up は on がデフォルト**です (上の flag 表を参照)。追加の設定不要で、ペインにフォーカスして `Ctrl+;` を押せば overlay が開き、裏のペインは凍結されて 3 秒ごとに 1 フレームだけ更新されます。
 
-```bash
-ccmux --ime-freeze-panes --ime-overlay-catchup-ms 3000
-```
-
-毎回同じ設定で起動するなら `config.toml` に書き込んでおきます。
+overlay を開かないユーザー (IME を使わない人) には影響しないので ON をデフォルトにしています。どうしても入力中に生の再描画を見たい / 完全凍結にしたい場合は `config.toml` で上書きできます:
 
 ```toml
 [ime]
-freeze_panes_on_overlay = true
-overlay_catchup_ms = 3000
+freeze_panes_on_overlay = false    # 入力中も生の再描画
+# あるいは
+overlay_catchup_ms = 0             # 完全凍結 (catch-up 無効)
 ```
 
 あとはペインにフォーカスして `Ctrl+;` を押せば overlay が開き、凍結 + 周期再描画が自動で効きます。
