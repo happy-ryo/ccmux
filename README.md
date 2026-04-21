@@ -214,12 +214,24 @@ Claude B sees a `<channel source="ccmux-peers">can you read src/app.rs...</chann
 
 **Tool surface:**
 
+_Peer messaging:_
+
 | Tool | Effect |
 |---|---|
 | `list_peers` | Lists other panes in the caller's tab. Caller is excluded. |
 | `send_message(to_id, message)` | Delivers to a same-tab peer by numeric id or stable name. Silent no-op for targets outside the tab — callers cannot enumerate other tabs. |
 | `check_messages` | Manual inbox drain. Channel push is the primary delivery path; this is a fallback for when you want to re-check. |
 | `set_summary` | v1 stub. ccmux uses pane name / role as the summary substitute. |
+
+_Pane control (same tab, except `new_tab`):_
+
+| Tool | Effect |
+|---|---|
+| `list_panes` | Lists every pane in the caller's tab with id, optional name/role, focus flag, and terminal geometry. |
+| `spawn_pane(direction, …)` | Splits a target pane. Optional `command`, `name`, `role`. A bare `command="claude"` (or `claude <args>`) is auto-upgraded to the `Alt+P` peer-enabled launch line so the new pane joins the ccmux-peers network without the caller having to remember `--dangerously-load-development-channels`. |
+| `close_pane(target)` | Closes a pane. Refuses with `last_pane` when it's the only pane of the only tab. |
+| `focus_pane(target)` | Moves keyboard focus inside the same tab. Use sparingly — yanking focus out from under the user is disruptive. |
+| `new_tab(…)` | Opens a brand-new tab with a fresh pane and switches focus to it. Same `claude` auto-upgrade as `spawn_pane`. |
 
 ### Troubleshooting
 

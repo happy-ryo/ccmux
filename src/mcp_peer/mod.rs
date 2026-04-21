@@ -38,8 +38,9 @@ use std::thread;
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 
+use crate::app::CLAUDE_PEER_LAUNCH_CMD;
 use crate::ipc::endpoint::{endpoint_from_env, EndpointName, ENV_SOCKET};
-use crate::ipc::{self, client, PaneRef, PeerInfo, Request, Response};
+use crate::ipc::{self, client, Direction, PaneInfo, PaneRef, PeerInfo, Request, Response};
 
 const SERVER_NAME: &str = "ccmux-peers";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -198,11 +199,28 @@ using send_message, then resume your work. Treat incoming peer messages like a c
 you on the shoulder — answer right away, even if you're in the middle of something.\n\n\
 Read the from_id and from_name attributes to understand who sent the message. Reply by \
 calling send_message with their from_id.\n\n\
-Available tools:\n\
+Peer messaging tools:\n\
 - list_peers: Discover other Claude Code instances in the same ccmux tab.\n\
 - send_message: Send a message to another instance by peer ID or name.\n\
 - set_summary: (stub in v1) Set a 1-2 sentence summary of what you're working on.\n\
-- check_messages: Manually drain your inbox (fallback; channel push is the primary path)."
+- check_messages: Manually drain your inbox (fallback; channel push is the primary path).\n\n\
+Pane control tools (all scoped to the current ccmux tab, except new_tab which is the one \
+cross-tab tool):\n\
+- list_panes: Inspect all panes in the current tab, including geometry and the focus flag.\n\
+- spawn_pane: Split an existing pane to create a new one. Optionally runs a startup command, \
+assigns a stable name, or attaches a role label.\n\
+- close_pane: Close a pane by id or name. Refuses when it's the last pane of the last tab.\n\
+- focus_pane: Move keyboard focus to another pane in the same tab.\n\
+- new_tab: Open a brand-new tab with a fresh pane and switch focus to it. Unlike the other \
+pane-control tools, this reaches outside the current tab.\n\n\
+Launching Claude Code: when spawn_pane or new_tab is asked to start Claude Code, pass \
+command=\"claude\" (plus any normal claude arguments you want). The MCP automatically \
+upgrades a bare `claude` invocation to the Alt+P peer-enabled form \
+(`claude --dangerously-load-development-channels server:ccmux-peers`) so the new instance \
+joins the peer network. You do NOT need to type that flag yourself.\n\n\
+IMPORTANT about pane control: these tools affect the user's live layout. Use them with \
+restraint — don't close or focus panes you don't own unless the user asked you to. When in \
+doubt, ask first."
         .to_string()
 }
 
@@ -247,6 +265,95 @@ fn tools_spec() -> Value {
             "name": "check_messages",
             "description": "Manually drain the inbox. In v1 channel push is the only delivery path, so this currently returns 'no messages' — kept for wire-compat with claude-peers-mcp.",
             "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "list_panes",
+            "description": "List every pane in the current ccmux tab, with stable id, optional name, role, focused flag, and terminal geometry. Complements list_peers (which only returns other panes and hides geometry).",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "spawn_pane",
+            "description": "Split a pane to create a new one in the same ccmux tab. Returns the new pane's numeric id so you can address it from later tool calls. Refuses if the target is already at minimum size or the tab has hit its pane cap.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "enum": ["vertical", "horizontal"],
+                        "description": "`vertical` splits side-by-side (new pane to the right); `horizontal` splits top/bottom (new pane on the bottom)."
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Pane to split. Numeric id (from list_panes), stable name, or the literal 'focused'. Defaults to 'focused' when omitted. All-digit strings are always interpreted as ids — a pane literally named '7' cannot be addressed by name, use its id instead."
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "Optional shell command to run in the new pane once the shell is ready (e.g. 'claude', 'cargo test'). A bare `claude` (or `claude <args>`) is auto-upgraded to the Alt+P form so the new instance joins the ccmux-peers network — you don't need to pass the --dangerously-load-development-channels flag yourself. If you pass that flag explicitly, it is left alone."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Optional stable id for the new pane so it can be addressed by name later."
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "Optional free-form role label (e.g. 'worker', 'leader'). Shown in the UI and in list_panes output."
+                    }
+                },
+                "required": ["direction"]
+            }
+        },
+        {
+            "name": "close_pane",
+            "description": "Close a pane in the current ccmux tab, terminating its process. Fails with code 'last_pane' when the target is the last pane of the only remaining tab.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Pane to close. Numeric id (from list_panes), stable name, or the literal 'focused'. All-digit strings are always interpreted as ids — a pane literally named '7' cannot be addressed by name, use its id instead."
+                    }
+                },
+                "required": ["target"]
+            }
+        },
+        {
+            "name": "focus_pane",
+            "description": "Move keyboard focus to another pane in the current ccmux tab. The focused pane is what the user's keystrokes go to, so use sparingly — yanking focus away from the user is disruptive.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Pane to focus. Numeric id (from list_panes), stable name, or the literal 'focused' (a no-op, kept for symmetry with the other pane tools). All-digit strings are always interpreted as ids — a pane literally named '7' cannot be addressed by name, use its id instead."
+                    }
+                },
+                "required": ["target"]
+            }
+        },
+        {
+            "name": "new_tab",
+            "description": "Create a new ccmux tab with a fresh single pane. Focus switches to the new tab. Returns the new pane's numeric id.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Optional shell command to run in the new pane once the shell is ready. A bare `claude` (or `claude <args>`) is auto-upgraded to the Alt+P peer-enabled form so the new instance joins the ccmux-peers network. If you pass --dangerously-load-development-channels explicitly, it is left alone."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Optional stable id for the new pane."
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Optional tab label. Defaults to a label derived from the cwd."
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "Optional free-form role label attached to the new pane."
+                    }
+                }
+            }
         }
     ])
 }
@@ -390,8 +497,321 @@ fn handle_tools_call(id: &Value, params: &Value, ctx: &PeerCtx) -> Result<Value>
                 "No queued messages. Channel push is the primary delivery path in v1.",
             ),
         ),
+        "list_panes" => handle_list_panes(id, ctx),
+        "spawn_pane" => handle_spawn_pane(id, &args, ctx),
+        "close_pane" => handle_close_pane(id, &args, ctx),
+        "focus_pane" => handle_focus_pane(id, &args, ctx),
+        "new_tab" => handle_new_tab(id, &args, ctx),
         other => err_response(id, -32601, &format!("unknown tool: {other}")),
     })
+}
+
+// ── pane control handlers ────────────────────────────────────
+
+/// Resolve a tool `target` argument string into a [`PaneRef`].
+///
+/// Resolution order (first match wins):
+/// 1. `None`, empty, whitespace-only, or `"focused"` (case-insensitive)
+///    → `PaneRef::Focused`.
+/// 2. Parses cleanly as `usize` → `PaneRef::Id(n)`.
+/// 3. Otherwise → `PaneRef::Name(s)` (trimmed).
+///
+/// Edge cases folded into step 3 on purpose: negative-sign strings
+/// like `"-1"` and digit strings that overflow `usize` both resolve
+/// to `Name`. (Rust's `usize::from_str` accepts a leading `+`, so
+/// `"+3"` still parses as `Id(3)` — a quirk inherited from the
+/// stdlib, not a ccmux decision.) ccmux pane ids live in a small
+/// fixed range (capped by `MAX_PANES`), so an overflow-sized "id"
+/// can't refer to a real pane either way — letting the server reply
+/// with `pane_not_found` on a bogus `Name` is indistinguishable from
+/// erroring on `Id`, and keeps `parse_target` infallible.
+fn parse_target(raw: Option<&str>) -> PaneRef {
+    let Some(s) = raw else {
+        return PaneRef::Focused;
+    };
+    let trimmed = s.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("focused") {
+        return PaneRef::Focused;
+    }
+    match trimmed.parse::<usize>() {
+        Ok(n) => PaneRef::Id(n),
+        Err(_) => PaneRef::Name(trimmed.to_string()),
+    }
+}
+
+fn parse_direction(raw: Option<&str>) -> std::result::Result<Direction, String> {
+    match raw.map(str::trim) {
+        Some("vertical") => Ok(Direction::Vertical),
+        Some("horizontal") => Ok(Direction::Horizontal),
+        Some(other) => Err(format!(
+            "invalid direction {other:?}; expected 'vertical' or 'horizontal'"
+        )),
+        None => Err("direction is required ('vertical' or 'horizontal')".to_string()),
+    }
+}
+
+/// Optional string-valued argument extractor. Empty strings map to None
+/// so Claude can send `{"command": ""}` without accidentally shoving an
+/// empty command line into the new pane.
+fn opt_string(args: &Value, key: &str) -> Option<String> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Upgrade a bare `claude …` command to the peer-enabled invocation
+/// that Alt+P types into a pane. When the caller asks to spawn Claude
+/// Code without the `--dangerously-load-development-channels
+/// server:ccmux-peers` flag, the new instance can't see the peer
+/// network, which silently defeats half the reason ccmux wraps it.
+/// Injecting the flag at this seam keeps the MCP as a "launch Claude
+/// and have it join the network" affordance without making the LLM
+/// remember the exact incantation.
+///
+/// Rules:
+/// - If the command already contains
+///   `--dangerously-load-development-channels`, leave it alone — the
+///   caller knew what they wanted.
+/// - Match only when the first whitespace-delimited token is exactly
+///   `claude`. `claude-mobile`, `claudex`, `./claude`, or `cargo run
+///   -- claude` all fall through untouched so we never rewrite an
+///   unrelated command by accident.
+/// - Preserve the caller's trailing arguments: `"claude --resume"`
+///   becomes `"claude --dangerously-load-development-channels
+///   server:ccmux-peers --resume"`.
+fn upgrade_claude_command(cmd: &str) -> String {
+    if cmd.contains("--dangerously-load-development-channels") {
+        return cmd.to_string();
+    }
+    let trimmed = cmd.trim_start();
+    let leading_ws_len = cmd.len() - trimmed.len();
+    let Some(rest) = trimmed.strip_prefix("claude") else {
+        return cmd.to_string();
+    };
+    // Reject `claudex`, `claude-mobile`, etc. — the next char after
+    // the literal token `claude` must be whitespace or end-of-string.
+    if !rest.is_empty() && !rest.starts_with(|c: char| c.is_whitespace()) {
+        return cmd.to_string();
+    }
+    let leading = &cmd[..leading_ws_len];
+    format!("{leading}{CLAUDE_PEER_LAUNCH_CMD}{rest}")
+}
+
+/// Require `Mode::Connected`, otherwise respond with a user-visible
+/// "ccmux unreachable" text result (not a JSON-RPC error, so Claude
+/// surfaces the explanation to the user instead of treating the tool
+/// as broken).
+fn require_connected<'a>(
+    ctx: &'a PeerCtx,
+    id: &Value,
+    action: &str,
+) -> std::result::Result<(usize, &'a EndpointName), Value> {
+    match &ctx.mode {
+        Mode::Connected { pane_id, endpoint } => Ok((*pane_id, endpoint)),
+        Mode::Detached { reason } => Err(ok_response(
+            id,
+            tool_text_result(&format!(
+                "(cannot {action} — ccmux not reachable: {reason})"
+            )),
+        )),
+    }
+}
+
+fn handle_list_panes(id: &Value, ctx: &PeerCtx) -> Value {
+    let (_caller_pane, endpoint) = match require_connected(ctx, id, "list panes") {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    match client::send_request(endpoint, &Request::List) {
+        Ok(Response::Ok { data }) => match serde_json::from_value::<Vec<PaneInfo>>(data) {
+            Ok(panes) => ok_response(id, tool_text_result(&format_pane_list(&panes))),
+            Err(e) => err_response(id, -32603, &format!("decode pane list: {e}")),
+        },
+        Ok(Response::Err { message, code }) => err_response(
+            id,
+            -32603,
+            &format!("ccmux refused list_panes: {}", fmt_code(&message, &code)),
+        ),
+        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+    }
+}
+
+fn format_pane_list(panes: &[PaneInfo]) -> String {
+    if panes.is_empty() {
+        return "No panes in this tab.".to_string();
+    }
+    let mut out = String::from("Panes in this tab:\n\n");
+    for p in panes {
+        out.push_str(&format!("- id={}", p.id));
+        if let Some(name) = &p.name {
+            out.push_str(&format!(" name={name}"));
+        }
+        if let Some(role) = &p.role {
+            out.push_str(&format!(" role={role}"));
+        }
+        if p.focused {
+            out.push_str(" (focused)");
+        }
+        out.push_str(&format!(
+            "\n  geometry: x={} y={} width={} height={}",
+            p.x, p.y, p.width, p.height
+        ));
+        out.push('\n');
+    }
+    out
+}
+
+fn handle_spawn_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
+    let direction = match parse_direction(args.get("direction").and_then(|v| v.as_str())) {
+        Ok(d) => d,
+        Err(msg) => return err_response(id, -32602, &msg),
+    };
+    let target = parse_target(args.get("target").and_then(|v| v.as_str()));
+    let command = opt_string(args, "command").map(|c| upgrade_claude_command(&c));
+    let name = opt_string(args, "name");
+    let role = opt_string(args, "role");
+
+    let (_caller_pane, endpoint) = match require_connected(ctx, id, "spawn pane") {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    match client::send_request(
+        endpoint,
+        &Request::Split {
+            target,
+            direction,
+            command,
+            id: name,
+            role,
+        },
+    ) {
+        Ok(Response::Ok { data }) => {
+            let new_id = data.get("id").and_then(|v| v.as_u64());
+            let msg = match new_id {
+                Some(n) => format!("Spawned pane id={n}."),
+                None => "Spawned pane (id not reported).".to_string(),
+            };
+            ok_response(id, tool_text_result(&msg))
+        }
+        Ok(Response::Err { message, code }) => err_response(
+            id,
+            -32603,
+            &format!("ccmux refused spawn_pane: {}", fmt_code(&message, &code)),
+        ),
+        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+    }
+}
+
+fn handle_close_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
+    let raw = args.get("target").and_then(|v| v.as_str()).unwrap_or("");
+    if raw.trim().is_empty() {
+        return err_response(
+            id,
+            -32602,
+            "close_pane requires a non-empty target (pane id or name)",
+        );
+    }
+    let target = parse_target(Some(raw));
+    let (_caller_pane, endpoint) = match require_connected(ctx, id, "close pane") {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    match client::send_request(endpoint, &Request::Close { target }) {
+        Ok(Response::Ok { data }) => {
+            let closed_id = data.get("id").and_then(|v| v.as_u64());
+            let msg = match closed_id {
+                Some(n) => format!("Closed pane id={n}."),
+                None => "Closed pane.".to_string(),
+            };
+            ok_response(id, tool_text_result(&msg))
+        }
+        Ok(Response::Err { message, code }) => err_response(
+            id,
+            -32603,
+            &format!("ccmux refused close_pane: {}", fmt_code(&message, &code)),
+        ),
+        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+    }
+}
+
+fn handle_focus_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
+    let raw = args.get("target").and_then(|v| v.as_str()).unwrap_or("");
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return err_response(
+            id,
+            -32602,
+            "focus_pane requires a non-empty target (pane id or name)",
+        );
+    }
+    let target = parse_target(Some(trimmed));
+    let (_caller_pane, endpoint) = match require_connected(ctx, id, "focus pane") {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    match client::send_request(endpoint, &Request::Focus { target }) {
+        // Focus replies with `ok_unit` per the IPC contract (see
+        // `src/ipc/server.rs`), so there's no resolved id to echo.
+        // Echoing the trimmed user input is the most informative thing
+        // we can do without a second round-trip.
+        Ok(Response::Ok { .. }) => {
+            ok_response(id, tool_text_result(&format!("Focused {trimmed}.")))
+        }
+        Ok(Response::Err { message, code }) => err_response(
+            id,
+            -32603,
+            &format!("ccmux refused focus_pane: {}", fmt_code(&message, &code)),
+        ),
+        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+    }
+}
+
+fn handle_new_tab(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
+    let command = opt_string(args, "command").map(|c| upgrade_claude_command(&c));
+    let name = opt_string(args, "name");
+    let label = opt_string(args, "label");
+    let role = opt_string(args, "role");
+
+    let (_caller_pane, endpoint) = match require_connected(ctx, id, "open new tab") {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    match client::send_request(
+        endpoint,
+        &Request::NewTab {
+            command,
+            id: name,
+            label,
+            role,
+        },
+    ) {
+        Ok(Response::Ok { data }) => {
+            // The IPC contract for `Request::NewTab` replies with the
+            // id of the single pane that was created inside the new
+            // tab — that pane is also the focused one after the
+            // switch, so surfacing it as "new pane id" is both
+            // accurate and what a caller needs to address it later.
+            let new_id = data.get("id").and_then(|v| v.as_u64());
+            let msg = match new_id {
+                Some(n) => format!("Opened new tab; new pane id={n} (now focused)."),
+                None => "Opened new tab.".to_string(),
+            };
+            ok_response(id, tool_text_result(&msg))
+        }
+        Ok(Response::Err { message, code }) => err_response(
+            id,
+            -32603,
+            &format!("ccmux refused new_tab: {}", fmt_code(&message, &code)),
+        ),
+        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+    }
 }
 
 // ── stdin dispatch loop ───────────────────────────────────────
@@ -555,4 +975,427 @@ fn spawn_inbox_subscriber(ctx: PeerCtx) {
             }
         })
         .expect("spawn inbox subscriber thread");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_target_defaults_to_focused_on_none() {
+        assert!(matches!(parse_target(None), PaneRef::Focused));
+    }
+
+    #[test]
+    fn parse_target_empty_string_is_focused() {
+        assert!(matches!(parse_target(Some("")), PaneRef::Focused));
+        assert!(matches!(parse_target(Some("   ")), PaneRef::Focused));
+    }
+
+    #[test]
+    fn parse_target_focused_literal_is_case_insensitive() {
+        assert!(matches!(parse_target(Some("focused")), PaneRef::Focused));
+        assert!(matches!(parse_target(Some("FOCUSED")), PaneRef::Focused));
+        assert!(matches!(parse_target(Some("Focused")), PaneRef::Focused));
+    }
+
+    #[test]
+    fn parse_target_numeric_string_is_id() {
+        match parse_target(Some("7")) {
+            PaneRef::Id(n) => assert_eq!(n, 7),
+            other => panic!("expected Id(7), got {other:?}"),
+        }
+        match parse_target(Some("  42  ")) {
+            PaneRef::Id(n) => assert_eq!(n, 42),
+            other => panic!("expected Id(42), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_target_non_numeric_string_is_name() {
+        match parse_target(Some("worker")) {
+            PaneRef::Name(n) => assert_eq!(n, "worker"),
+            other => panic!("expected Name, got {other:?}"),
+        }
+        // Names with digits mixed in stay as names, not ids.
+        match parse_target(Some("worker-1")) {
+            PaneRef::Name(n) => assert_eq!(n, "worker-1"),
+            other => panic!("expected Name, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_direction_maps_known_values() {
+        assert!(matches!(
+            parse_direction(Some("vertical")),
+            Ok(Direction::Vertical)
+        ));
+        assert!(matches!(
+            parse_direction(Some("horizontal")),
+            Ok(Direction::Horizontal)
+        ));
+    }
+
+    #[test]
+    fn parse_direction_rejects_unknown_and_missing() {
+        assert!(parse_direction(Some("diagonal")).is_err());
+        assert!(parse_direction(None).is_err());
+    }
+
+    #[test]
+    fn upgrade_claude_command_bare_claude_becomes_peer_enabled() {
+        assert_eq!(
+            upgrade_claude_command("claude"),
+            "claude --dangerously-load-development-channels server:ccmux-peers"
+        );
+    }
+
+    #[test]
+    fn upgrade_claude_command_preserves_user_args_after_claude_token() {
+        // `claude --resume` should keep `--resume` at the end; the
+        // peer-channel flag is inserted right after the `claude` token.
+        let got = upgrade_claude_command("claude --resume");
+        assert_eq!(
+            got, "claude --dangerously-load-development-channels server:ccmux-peers --resume",
+            "got {got:?}"
+        );
+    }
+
+    #[test]
+    fn upgrade_claude_command_noop_when_flag_already_present() {
+        let already = "claude --dangerously-load-development-channels server:ccmux-peers --resume";
+        assert_eq!(upgrade_claude_command(already), already);
+        // A non-standard channel target the user may have hand-picked
+        // must also pass through untouched.
+        let custom = "claude --dangerously-load-development-channels server:other";
+        assert_eq!(upgrade_claude_command(custom), custom);
+    }
+
+    #[test]
+    fn upgrade_claude_command_ignores_non_claude_commands() {
+        // The trigger is a whole-word `claude` at the start of the
+        // first token only. `claude-mobile`, `claudex`, `./claude`,
+        // and unrelated tools must pass through verbatim so we don't
+        // rewrite a user script by accident.
+        for input in [
+            "cargo test",
+            "claude-mobile --help",
+            "claudex",
+            "./claude",
+            "env FOO=1 claude",
+            "",
+        ] {
+            assert_eq!(
+                upgrade_claude_command(input),
+                input,
+                "must not rewrite {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn upgrade_claude_command_preserves_leading_whitespace() {
+        // Leading whitespace on the command (unusual but legal) is
+        // preserved so indentation-sensitive shells don't get a
+        // surprising rewrite.
+        assert_eq!(
+            upgrade_claude_command("  claude --resume"),
+            "  claude --dangerously-load-development-channels server:ccmux-peers --resume"
+        );
+    }
+
+    #[test]
+    fn opt_string_trims_and_treats_empty_as_none() {
+        let args = json!({ "a": "hi", "b": "  ", "c": "  padded  ", "d": 42 });
+        assert_eq!(opt_string(&args, "a"), Some("hi".to_string()));
+        assert_eq!(opt_string(&args, "b"), None);
+        assert_eq!(opt_string(&args, "c"), Some("padded".to_string()));
+        // Non-string values silently drop to None so Claude can't crash
+        // the tool by passing an int where a string is expected.
+        assert_eq!(opt_string(&args, "d"), None);
+        assert_eq!(opt_string(&args, "missing"), None);
+    }
+
+    #[test]
+    fn format_pane_list_empty() {
+        assert_eq!(format_pane_list(&[]), "No panes in this tab.");
+    }
+
+    #[test]
+    fn format_pane_list_includes_focus_and_geometry() {
+        let panes = vec![
+            PaneInfo {
+                id: 1,
+                name: Some("leader".into()),
+                role: Some("foreman".into()),
+                focused: true,
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            PaneInfo {
+                id: 2,
+                name: None,
+                role: None,
+                focused: false,
+                x: 80,
+                y: 0,
+                width: 40,
+                height: 24,
+            },
+        ];
+        let text = format_pane_list(&panes);
+        assert!(text.contains("id=1"));
+        assert!(text.contains("name=leader"));
+        assert!(text.contains("role=foreman"));
+        assert!(text.contains("(focused)"));
+        assert!(text.contains("width=80"));
+        assert!(text.contains("id=2"));
+        assert!(!text.contains("id=2 name"));
+    }
+
+    #[test]
+    fn tools_spec_advertises_pane_control_tools() {
+        let spec = tools_spec();
+        let names: Vec<&str> = spec
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t.get("name").and_then(|v| v.as_str()))
+            .collect();
+        for expected in [
+            "list_peers",
+            "send_message",
+            "set_summary",
+            "check_messages",
+            "list_panes",
+            "spawn_pane",
+            "close_pane",
+            "focus_pane",
+            "new_tab",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "missing tool {expected} in {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn spawn_pane_schema_requires_direction() {
+        let spec = tools_spec();
+        let spawn = spec
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("spawn_pane"))
+            .expect("spawn_pane entry");
+        let required = spawn
+            .get("inputSchema")
+            .and_then(|s| s.get("required"))
+            .and_then(|r| r.as_array())
+            .expect("required array");
+        let required_names: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+        assert!(required_names.contains(&"direction"), "{required_names:?}");
+    }
+
+    #[test]
+    fn close_pane_schema_requires_target() {
+        let spec = tools_spec();
+        let close = spec
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("close_pane"))
+            .expect("close_pane entry");
+        let required: Vec<&str> = close
+            .get("inputSchema")
+            .and_then(|s| s.get("required"))
+            .and_then(|r| r.as_array())
+            .expect("required array")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(required.contains(&"target"), "{required:?}");
+    }
+
+    #[test]
+    fn detached_mode_surfaces_friendly_text_instead_of_error() {
+        // When CCMUX_PANE_ID/CCMUX_SOCKET are missing, pane-control
+        // tools must still return a Response::Ok with explanatory text
+        // rather than a JSON-RPC error, so Claude can relay the reason
+        // to the user instead of treating the tool as broken.
+        let ctx = PeerCtx {
+            mode: Mode::Detached {
+                reason: "CCMUX_PANE_ID not set".to_string(),
+            },
+        };
+        let id = json!(1);
+        let resp = handle_list_panes(&id, &ctx);
+        assert_eq!(
+            resp.get("result")
+                .and_then(|r| r.get("isError"))
+                .and_then(|v| v.as_bool()),
+            Some(false),
+            "expected Ok result, got {resp}"
+        );
+        let text = resp
+            .pointer("/result/content/0/text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("ccmux not reachable"),
+            "missing explanation in {text:?}"
+        );
+    }
+
+    #[test]
+    fn close_pane_rejects_empty_target_argument() {
+        // Even with a live ctx, close_pane must refuse an empty target
+        // at the tool layer without round-tripping to ccmux, so
+        // Claude gets an immediate JSON-RPC -32602 it can retry with a
+        // real id.
+        let ctx = PeerCtx {
+            mode: Mode::Detached {
+                reason: "not relevant".into(),
+            },
+        };
+        let id = json!(1);
+        let resp = handle_close_pane(&id, &json!({ "target": "   " }), &ctx);
+        assert_eq!(
+            resp.get("error")
+                .and_then(|e| e.get("code"))
+                .and_then(|v| v.as_i64()),
+            Some(-32602),
+            "expected invalid-params error, got {resp}"
+        );
+    }
+
+    #[test]
+    fn focus_pane_rejects_empty_target_argument() {
+        // Parallel to `close_pane_rejects_empty_target_argument`. A
+        // regression here would let a bare `focus_pane` call silently
+        // resolve to `PaneRef::Focused`, focusing the caller on itself
+        // instead of erroring on missing input.
+        let ctx = PeerCtx {
+            mode: Mode::Detached {
+                reason: "not relevant".into(),
+            },
+        };
+        let id = json!(1);
+        let resp = handle_focus_pane(&id, &json!({ "target": "" }), &ctx);
+        assert_eq!(
+            resp.get("error")
+                .and_then(|e| e.get("code"))
+                .and_then(|v| v.as_i64()),
+            Some(-32602),
+            "expected invalid-params error, got {resp}"
+        );
+    }
+
+    #[test]
+    fn spawn_pane_rejects_missing_direction() {
+        // `spawn_pane` validates direction before touching ccmux, so a
+        // missing or unknown value must come back as -32602 even when
+        // no server is reachable.
+        let ctx = PeerCtx {
+            mode: Mode::Detached {
+                reason: "not relevant".into(),
+            },
+        };
+        let id = json!(1);
+        let resp = handle_spawn_pane(&id, &json!({}), &ctx);
+        assert_eq!(
+            resp.get("error")
+                .and_then(|e| e.get("code"))
+                .and_then(|v| v.as_i64()),
+            Some(-32602),
+            "expected invalid-params error, got {resp}"
+        );
+        let resp = handle_spawn_pane(&id, &json!({ "direction": "diagonal" }), &ctx);
+        assert_eq!(
+            resp.get("error")
+                .and_then(|e| e.get("code"))
+                .and_then(|v| v.as_i64()),
+            Some(-32602),
+            "expected invalid-params error for bad direction, got {resp}"
+        );
+    }
+
+    #[test]
+    fn parse_target_overflow_and_negative_fall_back_to_name() {
+        // Documented behavior: strings that look numeric but can't be
+        // represented as usize (overflow, leading `-`) drop to
+        // `PaneRef::Name` rather than erroring. The server will return
+        // `pane_not_found` either way; the point of this test is to
+        // freeze the fallthrough so a refactor to a fallible
+        // `parse_target` has to revisit every caller.
+        let overflow = "99999999999999999999999999999999";
+        match parse_target(Some(overflow)) {
+            PaneRef::Name(n) => assert_eq!(n, overflow),
+            other => panic!("expected Name on overflow, got {other:?}"),
+        }
+        match parse_target(Some("-1")) {
+            PaneRef::Name(n) => assert_eq!(n, "-1"),
+            other => panic!("expected Name for negative, got {other:?}"),
+        }
+        // Leading `+` is accepted by `usize::from_str` in the stdlib,
+        // so "+3" parses cleanly as Id(3). Pin that quirk here so a
+        // future "strictly all-digit" rewrite notices it.
+        assert!(matches!(parse_target(Some("+3")), PaneRef::Id(3)));
+    }
+
+    #[test]
+    fn parse_target_pins_digit_string_to_id_not_name() {
+        // Pin the documented behavior: any all-digit string resolves
+        // to PaneRef::Id, even if the user meant a pane literally
+        // named "7". Tool descriptions warn about this; this test
+        // guards against someone "fixing" the ambiguity by checking
+        // for a matching name first.
+        assert!(matches!(parse_target(Some("7")), PaneRef::Id(7)));
+        assert!(matches!(parse_target(Some("0")), PaneRef::Id(0)));
+        // Names starting with a digit but containing non-digits stay
+        // as names (so "7worker" is still addressable).
+        match parse_target(Some("7worker")) {
+            PaneRef::Name(n) => assert_eq!(n, "7worker"),
+            other => panic!("expected Name(\"7worker\"), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tools_call_routes_to_pane_control_handlers() {
+        // Smoke test on the dispatch: each new tool name must route
+        // through handle_tools_call rather than falling through to
+        // the unknown-tool arm. In detached mode, list_panes /
+        // spawn_pane / close_pane / focus_pane / new_tab either emit
+        // the friendly "ccmux not reachable" text (result.isError =
+        // false) or the -32602 we already test for; none of them
+        // should ever surface a -32601 "unknown tool" here.
+        let ctx = PeerCtx {
+            mode: Mode::Detached {
+                reason: "not relevant".into(),
+            },
+        };
+        let id = json!(1);
+        for (name, args) in [
+            ("list_panes", json!({})),
+            ("spawn_pane", json!({ "direction": "vertical" })),
+            ("close_pane", json!({ "target": "1" })),
+            ("focus_pane", json!({ "target": "1" })),
+            ("new_tab", json!({})),
+        ] {
+            let params = json!({ "name": name, "arguments": args });
+            let resp = handle_tools_call(&id, &params, &ctx).expect("dispatch");
+            let err_code = resp
+                .get("error")
+                .and_then(|e| e.get("code"))
+                .and_then(|v| v.as_i64());
+            assert_ne!(
+                err_code,
+                Some(-32601),
+                "{name} fell through to unknown-tool arm: {resp}"
+            );
+        }
+    }
 }
