@@ -171,7 +171,9 @@ The overlay opens as a centered multi-line composition box. Host-terminal IME ca
 | Key | Action |
 |-----|--------|
 | `j` / `k` | Move selection |
-| `Enter` | Open file / expand directory |
+| `Enter` | Open file / expand directory (inline) |
+| `h` | Move the tree root up one level |
+| `l` | Descend into the selected directory (no-op on files) |
 | `.` | Toggle hidden files |
 | `Esc` | Return to pane |
 

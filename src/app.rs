@@ -1187,6 +1187,22 @@ impl App {
                 self.ws_mut().file_tree.toggle_hidden();
                 Ok(true)
             }
+            // Vim-like root navigation: `h` moves the tree root up
+            // one level, `l` descends into the selected directory.
+            // `Enter` stays as inline expand/collapse for the tree
+            // view; these two swap the whole sidebar onto a
+            // different root, handy for "just peek at the parent
+            // project" without having to `cd` in the shell. Pane-
+            // side `cd` tracking still overrides user navigation on
+            // the next `CwdChanged`.
+            KeyCode::Char('h') => {
+                self.ws_mut().file_tree.go_to_parent();
+                Ok(true)
+            }
+            KeyCode::Char('l') => {
+                self.ws_mut().file_tree.descend_into_selected();
+                Ok(true)
+            }
             KeyCode::Esc => {
                 // Return to pane, keep preview open
                 self.ws_mut().focus_target = FocusTarget::Pane;

@@ -1090,6 +1090,8 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
             FocusTarget::FileTree => Line::from(vec![
                 Span::styled(" j/k", Style::default().fg(ACCENT_BLUE)),
                 Span::styled(" 移動  ", Style::default().fg(TEXT_DIM)),
+                Span::styled("h/l", Style::default().fg(ACCENT_BLUE)),
+                Span::styled(" 親/下へ  ", Style::default().fg(TEXT_DIM)),
                 Span::styled("Enter", Style::default().fg(ACCENT_BLUE)),
                 Span::styled(" 開く  ", Style::default().fg(TEXT_DIM)),
                 Span::styled(".", Style::default().fg(ACCENT_BLUE)),
@@ -1116,6 +1118,8 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
                 Span::styled(" ツリー  ", Style::default().fg(TEXT_DIM)),
                 Span::styled("^P", Style::default().fg(ACCENT_BLUE)),
                 Span::styled(" 配置替  ", Style::default().fg(TEXT_DIM)),
+                Span::styled("^;/A-;", Style::default().fg(ACCENT_BLUE)),
+                Span::styled(" IME入力  ", Style::default().fg(TEXT_DIM)),
                 Span::styled("^Q", Style::default().fg(ACCENT_BLUE)),
                 Span::styled(" 終了", Style::default().fg(TEXT_DIM)),
             ]),

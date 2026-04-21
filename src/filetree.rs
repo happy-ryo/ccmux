@@ -253,6 +253,55 @@ impl FileTree {
         false
     }
 
+    /// Re-root the tree at `new_root` and reset selection / scroll.
+    /// Shared helper for [`FileTree::go_to_parent`] and
+    /// [`FileTree::descend_into_selected`].
+    fn reroot(&mut self, new_root: PathBuf) {
+        self.root_path = new_root;
+        self.entries = scan_directory_filtered(&self.root_path, 0, 1, self.show_hidden);
+        self.selected_index = 0;
+        self.scroll_offset = 0;
+        self.rebuild_flat();
+    }
+
+    /// Move the tree root up one level. Returns `true` on success,
+    /// `false` when already at the filesystem root. The pane-side
+    /// `cd` tracking still wins — when a pane emits `CwdChanged`,
+    /// the file tree gets rebuilt from that pane's cwd and the
+    /// user's parent navigation is overridden.
+    pub fn go_to_parent(&mut self) -> bool {
+        let Some(parent) = self.root_path.parent().map(Path::to_path_buf) else {
+            return false;
+        };
+        // `parent()` on relative paths without a slash returns
+        // `Some("")`; skip the re-root so we don't land on the
+        // empty path.
+        if parent.as_os_str().is_empty() {
+            return false;
+        }
+        self.reroot(parent);
+        true
+    }
+
+    /// If the current selection is a directory, re-root the tree
+    /// at that directory. No-op on files (the `Enter` key still
+    /// handles file preview). Returns `true` on success so
+    /// callers can flag the event as a layout change.
+    pub fn descend_into_selected(&mut self) -> bool {
+        let Some(entry) = self.flat_entries.get(self.selected_index) else {
+            return false;
+        };
+        if !entry.is_dir {
+            return false;
+        }
+        let target = entry.path.clone();
+        if !target.is_dir() {
+            return false;
+        }
+        self.reroot(target);
+        true
+    }
+
     /// Adjust scroll offset to keep selected item visible.
     pub fn ensure_visible(&mut self, visible_height: usize) {
         if visible_height == 0 {
@@ -321,6 +370,67 @@ mod tests {
             if entry.is_dir && seen_file {
                 panic!("Directory {} found after files", entry.name);
             }
+        }
+    }
+
+    #[test]
+    fn test_go_to_parent_from_subdir() {
+        // temp dir → drill into the project dir so parent() is a real
+        // ancestor rather than ""; confirm root shifts up one level.
+        let start = std::env::current_dir().unwrap();
+        let mut tree = FileTree::new(start.clone());
+        let original = tree.root_path.clone();
+        let moved = tree.go_to_parent();
+        assert!(moved, "should succeed when a parent exists");
+        assert_eq!(tree.root_path, original.parent().unwrap().to_path_buf());
+        // Selection / scroll reset happens so the caller doesn't land
+        // on a stale index into the previous directory listing.
+        assert_eq!(tree.selected_index, 0);
+        assert_eq!(tree.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_go_to_parent_at_filesystem_root_is_noop() {
+        let root: PathBuf = if cfg!(windows) {
+            // Use the drive root of the current dir to stay portable
+            // across agents that run from different drives.
+            std::env::current_dir()
+                .unwrap()
+                .ancestors()
+                .last()
+                .unwrap()
+                .to_path_buf()
+        } else {
+            PathBuf::from("/")
+        };
+        let mut tree = FileTree::new(root.clone());
+        let moved = tree.go_to_parent();
+        assert!(!moved, "filesystem root should have no parent");
+        assert_eq!(tree.root_path, root);
+    }
+
+    #[test]
+    fn test_descend_into_selected_requires_directory() {
+        let mut tree = FileTree::new(PathBuf::from("."));
+        // Find a directory and a file, drive descend on each.
+        let dir_idx = tree.visible_entries().iter().position(|e| e.is_dir);
+        let file_idx = tree.visible_entries().iter().position(|e| !e.is_dir);
+
+        if let Some(idx) = file_idx {
+            tree.selected_index = idx;
+            assert!(
+                !tree.descend_into_selected(),
+                "descending on a file must be a no-op"
+            );
+        }
+
+        if let Some(idx) = dir_idx {
+            tree.selected_index = idx;
+            let target = tree.visible_entries()[idx].path.clone();
+            let moved = tree.descend_into_selected();
+            assert!(moved, "descending on a directory must re-root");
+            assert_eq!(tree.root_path, target);
+            assert_eq!(tree.selected_index, 0);
         }
     }
 
