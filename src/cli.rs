@@ -210,6 +210,39 @@ pub enum IpcCommand {
     /// Code spawns it, inherits `CCMUX_PANE_ID` / `CCMUX_SOCKET` from
     /// the pane PTY, and never blocks on its own subcommand dispatch.
     McpPeer,
+    /// Manage the `ccmux-peers` MCP server registration in Claude
+    /// Code. Thin wrapper around `claude mcp add-json / remove / list`
+    /// so users get a zero-argument one-liner instead of having to
+    /// know the exact JSON payload. Requires the `claude` CLI on PATH.
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
+    },
+}
+
+/// Sub-subcommands of `ccmux mcp`. Kept as a separate enum so clap
+/// renders `ccmux mcp install` / `ccmux mcp status` as nested in
+/// `--help` output, which is the documentation affordance a first-time
+/// user expects.
+#[derive(Subcommand, Debug, Clone)]
+pub enum McpAction {
+    /// Register ccmux-peers in Claude Code's user-scope MCP config.
+    /// Idempotent — re-running overwrites the existing entry only when
+    /// `--force` is passed, otherwise prints the current entry and
+    /// bails so accidental re-runs don't silently repoint.
+    Install {
+        /// Overwrite any existing ccmux-peers entry without prompting.
+        /// Needed when upgrading ccmux and the command path changed.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Remove ccmux-peers from Claude Code's user-scope MCP config.
+    /// No-op if the entry is not present.
+    Uninstall,
+    /// Show whether ccmux-peers is currently registered, and if so
+    /// what command it points at. Prints `claude mcp list` output
+    /// filtered to the ccmux-peers line for easy eyeballing.
+    Status,
 }
 
 impl Cli {
@@ -311,6 +344,10 @@ impl IpcCommand {
             }),
             IpcCommand::McpPeer => anyhow::bail!(
                 "mcp-peer is a standalone subprocess, not an IPC request; \
+                 this variant must be intercepted before to_request() in main.rs"
+            ),
+            IpcCommand::Mcp { .. } => anyhow::bail!(
+                "mcp install/uninstall/status shells out to `claude mcp`; \
                  this variant must be intercepted before to_request() in main.rs"
             ),
         }

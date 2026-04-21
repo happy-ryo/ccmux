@@ -30,6 +30,8 @@
 //! MCP installed globally in `~/.claude/mcp_servers.json` from erroring
 //! out every time Claude starts outside ccmux.
 
+pub mod install;
+
 use std::io::{self, BufRead, Write};
 use std::thread;
 

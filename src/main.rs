@@ -39,14 +39,16 @@ fn main() -> Result<()> {
     // in, so the `CCMUX=1` env var set by the parent doesn't block
     // legitimate client invocations.
     //
-    // `mcp-peer` is the exception: it's a stdio MCP server spawned by
-    // Claude Code, not a one-shot IPC request, so route it directly to
-    // the peer module before the shared dispatcher.
+    // `mcp-peer` and `mcp {install,uninstall,status}` are exceptions:
+    // the first is a stdio MCP server (not an IPC request) and the
+    // second shells out to `claude mcp ...`. Route both directly to
+    // their handlers before the shared IPC dispatcher.
     if let Some(cmd) = cli.command.as_ref() {
-        if matches!(cmd, cli::IpcCommand::McpPeer) {
-            return mcp_peer::run();
+        match cmd {
+            cli::IpcCommand::McpPeer => return mcp_peer::run(),
+            cli::IpcCommand::Mcp { action } => return mcp_peer::install::run(action),
+            _ => return run_ipc_client(cmd),
         }
-        return run_ipc_client(cmd);
     }
 
     // No subcommand: we're about to launch another TUI. Refuse if we're
