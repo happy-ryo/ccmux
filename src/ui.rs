@@ -1121,6 +1121,8 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
                 Span::styled(m.pane_swap, Style::default().fg(TEXT_DIM)),
                 Span::styled("^;/A-;", Style::default().fg(ACCENT_BLUE)),
                 Span::styled(m.pane_ime, Style::default().fg(TEXT_DIM)),
+                Span::styled("A-P", Style::default().fg(ACCENT_BLUE)),
+                Span::styled(m.pane_peer_launch, Style::default().fg(TEXT_DIM)),
                 Span::styled("^Q", Style::default().fg(ACCENT_BLUE)),
                 Span::styled(m.pane_quit, Style::default().fg(TEXT_DIM)),
             ]),

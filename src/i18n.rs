@@ -142,6 +142,7 @@ pub struct Messages {
     pub pane_tree: &'static str,
     pub pane_swap: &'static str,
     pub pane_ime: &'static str,
+    pub pane_peer_launch: &'static str,
     pub pane_quit: &'static str,
     // ── preview panel ──────────────────────────────────────
     pub preview_binary: &'static str,
@@ -197,6 +198,7 @@ pub static MESSAGES_JA: Messages = Messages {
     pane_tree: " ツリー  ",
     pane_swap: " 配置替  ",
     pane_ime: " IME入力  ",
+    pane_peer_launch: " Claude起動  ",
     pane_quit: " 終了",
     preview_binary: "\u{2718} バイナリファイルです",
     preview_read_failed: "ファイルを読み込めませんでした",
@@ -228,6 +230,7 @@ pub static MESSAGES_EN: Messages = Messages {
     pane_tree: " tree  ",
     pane_swap: " swap  ",
     pane_ime: " ime  ",
+    pane_peer_launch: " claude  ",
     pane_quit: " quit",
     preview_binary: "\u{2718} Binary file",
     preview_read_failed: "Failed to read file",

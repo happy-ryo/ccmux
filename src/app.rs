@@ -1088,6 +1088,26 @@ impl App {
             return Ok(true);
         }
 
+        // Alt+P — insert the peer-enabled claude launch command into
+        // the focused pane (trailing space, no Enter). The user reviews,
+        // optionally edits, then presses Enter to actually run — a
+        // conscious action, which is why we deliberately don't gate
+        // this on "is ccmux-peers installed": pressing Alt+P already
+        // means the user wants peer mode, and a missing MCP entry will
+        // surface itself when Claude starts.
+        if key.modifiers == KeyModifiers::ALT
+            && matches!(key.code, KeyCode::Char('p') | KeyCode::Char('P'))
+        {
+            let cmd = format!("{CLAUDE_PEER_LAUNCH_CMD} ");
+            let ws = self.ws_mut();
+            let focused_id = ws.focused_pane_id;
+            if let Some(pane) = ws.panes.get_mut(&focused_id) {
+                let _ = pane.write_input(cmd.as_bytes());
+                self.dirty = true;
+            }
+            return Ok(true);
+        }
+
         // Alt+1 .. Alt+9 — jump to tab N
         if key.modifiers == KeyModifiers::ALT {
             if let KeyCode::Char(c) = key.code {
