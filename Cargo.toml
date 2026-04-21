@@ -8,7 +8,13 @@ name = "ccmux"
 # (#100), and IME freeze-on-overlay defaults flipped ON (#101); the
 # last is a user-visible behavior change for anyone who opens the
 # IME overlay, hence the minor bump rather than a patch.
-version = "0.8.0"
+# 0.9.0 ships per-tab peer messaging between Claude Code panes (#97 /
+# #104): `ccmux mcp install` registers a stdio MCP server, `Alt+P`
+# inserts the peer-enabled launch command, and `ccmux split --role
+# claude` auto-launches Claude Code with the channel flag. The new
+# keybinding and the user-visible `ccmux mcp` subcommand tree are why
+# this is a minor bump.
+version = "0.9.0"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
