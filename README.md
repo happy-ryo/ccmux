@@ -60,6 +60,14 @@ cargo build --release
 
 Requires [Rust](https://rustup.rs/) toolchain.
 
+If you plan to send PRs, enable the repo's git hooks once after cloning:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This wires up a pre-commit hook that runs `cargo fmt --all -- --check` so a formatting miss fails locally instead of on CI. Opt-in so the setting never rewrites your existing `.git/hooks` without consent.
+
 ## Usage
 
 ```bash
