@@ -30,7 +30,13 @@ name = "ccmux"
 # Minor bump (not patch) because the banner is a first-launch
 # behavior change on macOS and the CLI surface grows — patch is
 # reserved for bug-only fixes per the release policy.
-version = "0.10.0"
+# 0.11.0 adds FILES-sidebar Claude launcher keys (#110): `c`
+# splits the focused pane left/right and `v` splits it top/bottom,
+# each opening the new pane in the directory selected in the tree
+# and pre-filling the Alt+P launch line without pressing Enter so
+# the user reviews and commits. New keybindings are why this is a
+# minor bump rather than a patch.
+version = "0.11.0"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
