@@ -109,9 +109,10 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 /// small the caret can't fit.
 const OVERLAY_MIN_INNER_WIDTH: u16 = 20;
 const OVERLAY_MIN_INNER_HEIGHT: u16 = 1;
-/// Target visible height inside the box — content rows, not
-/// including borders. The box grows with the buffer up to this cap
-/// and then scrolls.
+/// Visible height inside the box — content rows, not including
+/// borders. The overlay opens at this height immediately so the user
+/// sees the full editing area on the first frame; buffers longer than
+/// this cap scroll instead of resizing the box.
 const OVERLAY_MAX_INNER_HEIGHT: u16 = 10;
 /// Target width as a percentage of the terminal columns, clamped
 /// below to 40 cols and above to 100 cols so the box is readable on
@@ -142,14 +143,14 @@ fn render_ime_overlay(app: &mut App, frame: &mut Frame, area: Rect) {
     let (wrapped, cursor_row_in_wrapped, cursor_col_in_wrapped) =
         wrap_overlay_buffer(&overlay.buffer, overlay.cursor, inner_w as usize);
 
-    // Box height: enough rows to show the cursor line, capped at
-    // OVERLAY_MAX_INNER_HEIGHT + 2 borders. If content exceeds the
-    // cap, scroll so the cursor line stays visible (prefer showing
-    // text around the cursor, not the top of the buffer).
-    let inner_h_wanted = wrapped
-        .len()
-        .max(OVERLAY_MIN_INNER_HEIGHT as usize)
-        .min(OVERLAY_MAX_INNER_HEIGHT as usize) as u16;
+    // Box height: always open at the configured maximum so the user
+    // sees the full editing area on the first frame, instead of a
+    // 1-row box that grows as they type. Buffers longer than the cap
+    // scroll (see scroll_y below) rather than resizing the box.
+    // `area.height` still bounds the box so a tiny terminal collapses
+    // gracefully — `OVERLAY_MIN_INNER_HEIGHT + 2` remains the floor
+    // below which the overlay simply refuses to render.
+    let inner_h_wanted = OVERLAY_MAX_INNER_HEIGHT;
     let box_h = (inner_h_wanted + 2).min(area.height);
     if box_h < OVERLAY_MIN_INNER_HEIGHT + 2 {
         return;
