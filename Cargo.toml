@@ -36,7 +36,12 @@ name = "ccmux"
 # and pre-filling the Alt+P launch line without pressing Enter so
 # the user reviews and commits. New keybindings are why this is a
 # minor bump rather than a patch.
-version = "0.11.0"
+# 0.12.0 opens the IME composition overlay at its configured maximum
+# height (`OVERLAY_MAX_INNER_HEIGHT` = 10 rows) on the first frame
+# instead of starting at a single row and growing as the user typed
+# (#112). Overlay-open dimensions are visible behavior so this is a
+# minor bump, not a patch.
+version = "0.12.0"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
