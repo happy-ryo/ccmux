@@ -611,6 +611,19 @@ pub struct App {
     /// files fall back to the textual "binary file" placeholder in
     /// the preview panel.
     pub image_picker: Option<ratatui_image::picker::Picker>,
+    /// First-launch macOS tip: when `true`, a 2-row banner above the
+    /// status bar points users at the Option-as-Meta README section
+    /// so `Alt+T` / `Alt+P` / `Alt+1..9` actually fire (see
+    /// `crate::macos_tip`). Dismissed by any key press or the
+    /// 10-second auto timeout; dismissal is persisted via the
+    /// zero-byte marker file resolved by `macos_tip::marker_path`.
+    pub macos_tip_visible: bool,
+    /// Instant the banner was shown; `None` outside a banner session.
+    /// Consumed by [`App::check_macos_tip_timeout`] every frame.
+    macos_tip_shown_at: Option<Instant>,
+    /// Marker path to touch on dismissal. `None` when the config dir
+    /// couldn't be resolved — dismissal stays in-memory for this run.
+    macos_tip_marker: Option<PathBuf>,
 }
 
 impl App {
@@ -678,7 +691,52 @@ impl App {
             min_pane_width: 20,
             min_pane_height: 5,
             image_picker: None,
+            macos_tip_visible: false,
+            macos_tip_shown_at: None,
+            macos_tip_marker: None,
         })
+    }
+
+    /// Surface the first-launch macOS Option-as-Meta banner for this
+    /// session. Starts the 10-second auto-dismiss timer and remembers
+    /// the marker path so a later key-press or timeout can persist
+    /// "user saw it, never show again". Idempotent — repeated calls
+    /// restart the timer rather than compounding.
+    pub fn show_macos_tip(&mut self, marker: Option<PathBuf>) {
+        self.macos_tip_visible = true;
+        self.macos_tip_shown_at = Some(Instant::now());
+        self.macos_tip_marker = marker;
+        self.dirty = true;
+    }
+
+    /// Hide the banner and persist dismissal via the marker file if
+    /// one is configured. Silent no-op when the banner isn't up.
+    pub fn dismiss_macos_tip(&mut self) {
+        if !self.macos_tip_visible {
+            return;
+        }
+        self.macos_tip_visible = false;
+        self.macos_tip_shown_at = None;
+        if let Some(path) = self.macos_tip_marker.take() {
+            crate::macos_tip::mark_dismissed(&path);
+        }
+        self.dirty = true;
+    }
+
+    /// Auto-dismiss when the banner has been visible longer than
+    /// [`crate::macos_tip::AUTO_DISMISS`]. Called from the main loop
+    /// alongside `maybe_tick_overlay_catchup`; cheap no-op in the
+    /// common case (banner not visible).
+    pub fn check_macos_tip_timeout(&mut self) {
+        if !self.macos_tip_visible {
+            return;
+        }
+        let Some(shown_at) = self.macos_tip_shown_at else {
+            return;
+        };
+        if shown_at.elapsed() >= crate::macos_tip::AUTO_DISMISS {
+            self.dismiss_macos_tip();
+        }
     }
 
     /// Install a user-level config on top of the default App state.
@@ -929,6 +987,18 @@ impl App {
     // ─── Key handling ─────────────────────────────────────
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<bool> {
+        // First-launch macOS tip: dismiss on any key, but fall through
+        // so the key still performs its normal action. The banner is a
+        // transient hint, not a modal — the user shouldn't have to
+        // press a key twice (once to dismiss, once to do what they
+        // wanted). Persists the marker file here so the banner never
+        // reappears on the next launch, including when the next key
+        // is Ctrl+Q — otherwise a quit-while-banner-up would leave
+        // the marker unwritten and the tip would return next launch.
+        if self.macos_tip_visible {
+            self.dismiss_macos_tip();
+        }
+
         // Emergency escape hatch: Ctrl+Q must always quit ccmux, even
         // while the IME composition overlay is holding input. Checked
         // before overlay routing so the user can never get trapped in

@@ -7,6 +7,7 @@ mod i18n;
 mod input;
 mod ipc;
 mod layout_config;
+mod macos_tip;
 mod mcp_peer;
 mod pane;
 mod preview;
@@ -153,6 +154,15 @@ fn main() -> Result<()> {
     app.apply_config(&user_config);
     app.set_min_pane_size(cli.min_pane_width, cli.min_pane_height);
     app.image_picker = image_picker;
+
+    // First-launch macOS Option-as-Meta tip. Gated on host OS + a
+    // zero-byte marker file so returning users never see it twice.
+    // Non-macOS hosts and already-dismissed users short-circuit to
+    // false here.
+    let tip_marker = macos_tip::marker_path();
+    if macos_tip::should_show(cli.no_macos_tip, cli.show_macos_tip, tip_marker.as_deref()) {
+        app.show_macos_tip(tip_marker);
+    }
 
     // Keep the server handle alive for the process lifetime; its Drop
     // impl cleans up the Unix socket file on exit.
@@ -376,6 +386,12 @@ fn run_event_loop(
         // periodically force a single repaint so body content stays
         // visible through an open overlay. No-op otherwise.
         app.maybe_tick_overlay_catchup();
+
+        // First-launch macOS tip: hide the banner if it's been up for
+        // more than the auto-dismiss budget (~20 s). Persists the
+        // marker file via the same path as a key-press dismissal.
+        // Cheap no-op when the banner isn't showing.
+        app.check_macos_tip_timeout();
 
         // Only render when something changed (and no cooldown is active)
         if app.dirty && app.paste_cooldown == 0 && app.resize_cooldown == 0 {
