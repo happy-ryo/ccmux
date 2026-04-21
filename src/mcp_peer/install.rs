@@ -75,9 +75,10 @@ fn install(force: bool) -> Result<()> {
 
     println!(
         "Registered {SERVER_NAME} → {}\n\
-         Next: launch Claude with \
+         Next: launch Claude Code with \
          `claude --dangerously-load-development-channels server:{SERVER_NAME}` \
-         from inside a ccmux pane.",
+         from inside a ccmux pane (or press Alt+P in a pane to insert the \
+         same command).",
         exe.display()
     );
     Ok(())
@@ -92,7 +93,7 @@ fn uninstall() -> Result<()> {
         return Ok(());
     }
     remove_silent()?;
-    println!("Removed {SERVER_NAME} from Claude's MCP config.");
+    println!("Removed {SERVER_NAME} from Claude Code's MCP config.");
     Ok(())
 }
 

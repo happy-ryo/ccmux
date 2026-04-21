@@ -105,7 +105,9 @@ impl PeerCtx {
             Err(_) => {
                 return PeerCtx {
                     mode: Mode::Detached {
-                        reason: format!("{ENV_PANE_ID} not set — Claude was not launched by ccmux"),
+                        reason: format!(
+                            "{ENV_PANE_ID} not set — Claude Code was not launched by ccmux"
+                        ),
                     },
                 };
             }
@@ -222,7 +224,7 @@ fn tools_spec() -> Value {
         },
         {
             "name": "send_message",
-            "description": "Send a message to another pane in the same ccmux tab. The recipient Claude sees it as a <channel source=\"ccmux-peers\"> tag, distinct from user input.",
+            "description": "Send a message to another pane in the same ccmux tab. The recipient Claude Code instance sees it as a <channel source=\"ccmux-peers\"> tag, distinct from user input.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -279,7 +281,7 @@ fn handle_list_peers(id: &Value, ctx: &PeerCtx) -> Value {
             return ok_response(
                 id,
                 tool_text_result(&format!(
-                    "(no peers — ccmux not reachable from this Claude instance: {reason})"
+                    "(no peers — ccmux not reachable from this Claude Code instance: {reason})"
                 )),
             );
         }
