@@ -3026,8 +3026,9 @@ impl App {
         let new_pane_id = self
             .new_tab()
             .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?;
+        let effective_command = command.or_else(|| default_command_for_role(role.as_deref()));
         if let Some(pane) = self.ws_mut().panes.get_mut(&new_pane_id) {
-            if let Some(cmd) = command {
+            if let Some(cmd) = effective_command {
                 pane.queue_startup_command(&cmd);
             }
             if let Some(r) = role {
@@ -3128,8 +3129,9 @@ impl App {
         // subscribers see the final identity. Otherwise the event races
         // the metadata and lands with `name: None, role: None`, breaking
         // consumers that filter on `.name == "<stable>"`.
+        let effective_command = command.or_else(|| default_command_for_role(role.as_deref()));
         if let Some(pane) = self.ws_mut().panes.get_mut(&new_pane_id) {
-            if let Some(cmd) = command {
+            if let Some(cmd) = effective_command {
                 pane.queue_startup_command(&cmd);
             }
             if let Some(r) = role {
@@ -3143,6 +3145,29 @@ impl App {
         }
         self.emit_pane_started(new_pane_id);
         Ok(new_pane_id)
+    }
+}
+
+/// Flag-preloaded launch command for `ccmux split --role claude`.
+/// Kept as a string (not a shell-escaped arg vector) because the pane
+/// startup-command path feeds it through the shell, which handles the
+/// `--dangerously-load-development-channels` spelling uniformly across
+/// bash / zsh / pwsh.
+const CLAUDE_PEER_LAUNCH_CMD: &str =
+    "claude --dangerously-load-development-channels server:ccmux-peers";
+
+/// If `role == "claude"` and the caller did not specify an explicit
+/// `--command`, return the claude launch line with the peer-channel
+/// flag baked in. Explicit commands always win — users who want a
+/// different claude invocation just pass `--command` as usual.
+///
+/// This is Strategy C from issue #97. Strategy B (shell-init wrapper
+/// so a raw `claude` command is transparently upgraded) is deferred
+/// to a follow-up PR.
+fn default_command_for_role(role: Option<&str>) -> Option<String> {
+    match role {
+        Some("claude") => Some(CLAUDE_PEER_LAUNCH_CMD.to_string()),
+        _ => None,
     }
 }
 
@@ -4341,6 +4366,31 @@ mod tests {
         );
 
         app.shutdown();
+    }
+
+    #[test]
+    fn default_command_for_role_returns_claude_launch_for_claude_role() {
+        // Strategy C from #97: `ccmux split --role claude` must pre-fill
+        // the peer-channel flag so the user doesn't need to know the
+        // incantation. `default_command_for_role` is the single seam
+        // mapping role names to preloaded commands — regress this and
+        // new Claude panes silently skip the channel activation.
+        let cmd = default_command_for_role(Some("claude")).expect("claude role preloads cmd");
+        assert!(
+            cmd.contains("--dangerously-load-development-channels server:ccmux-peers"),
+            "launch cmd must carry the peer channel flag, got: {cmd}"
+        );
+        assert!(
+            cmd.starts_with("claude "),
+            "launch cmd must invoke claude: {cmd}"
+        );
+    }
+
+    #[test]
+    fn default_command_for_role_returns_none_for_other_roles() {
+        assert!(default_command_for_role(None).is_none());
+        assert!(default_command_for_role(Some("worker")).is_none());
+        assert!(default_command_for_role(Some("")).is_none());
     }
 
     #[test]
