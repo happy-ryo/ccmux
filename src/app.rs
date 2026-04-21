@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::layout::Rect;
 
 use crate::filetree::FileTree;
-use crate::ipc::{self, PaneInfo, PaneRef};
+use crate::ipc::{self, PaneInfo, PaneRef, PeerInfo};
 use crate::layout_config::{DirectionSpec, LayoutConfig, LayoutNodeSpec};
 use crate::pane::{Pane, PointerAction, PointerButton};
 use crate::preview::Preview;
@@ -70,6 +70,26 @@ pub enum AppCommand {
     Close {
         target: PaneRef,
         reply: oneshot::Sender<std::result::Result<usize, ipc::CodedError>>,
+    },
+    /// List peers visible to `from_pane` — every other pane in the
+    /// same workspace. Drives the MCP peer subprocess's `list_peers`
+    /// tool.
+    PeerList {
+        from_pane: usize,
+        reply: oneshot::Sender<std::result::Result<Vec<PeerInfo>, ipc::CodedError>>,
+    },
+    /// Route a peer message from `from_pane` to `target`, provided
+    /// both live in the same workspace. Emits `Event::PeerInbox` on
+    /// the event bus so a subscribed MCP subprocess can push it out
+    /// as a `notifications/claude/channel` frame. Cross-tab targets
+    /// are silently accepted and dropped (no-op success) — v1 does
+    /// not expose cross-tab routing; callers cannot distinguish
+    /// "dropped" from "unknown peer" on purpose.
+    PeerSend {
+        from_pane: usize,
+        target: PaneRef,
+        body: String,
+        reply: oneshot::Sender<std::result::Result<(), ipc::CodedError>>,
     },
 }
 
@@ -1065,6 +1085,36 @@ impl App {
         {
             self.status_bar_visible = !self.status_bar_visible;
             self.mark_layout_change();
+            return Ok(true);
+        }
+
+        // Alt+P — insert the peer-enabled claude launch command into
+        // the focused pane (trailing space, no Enter). The user reviews,
+        // optionally edits, then presses Enter to actually run — a
+        // conscious action, which is why we deliberately don't gate
+        // this on "is ccmux-peers installed": pressing Alt+P already
+        // means the user wants peer mode, and a missing MCP entry will
+        // surface itself when Claude starts.
+        //
+        // Refuse when the pane is in alternate-screen mode (a TUI —
+        // Claude Code itself, vim, less, lazygit — has captured the
+        // terminal). Writing the command bytes there would land as
+        // keystrokes inside that TUI instead of at a shell prompt,
+        // which could accidentally send a prompt to a running Claude.
+        if key.modifiers == KeyModifiers::ALT
+            && matches!(key.code, KeyCode::Char('p') | KeyCode::Char('P'))
+        {
+            let ws = self.ws_mut();
+            let focused_id = ws.focused_pane_id;
+            if let Some(pane) = ws.panes.get_mut(&focused_id) {
+                if pane.shell_accepts_command_injection() {
+                    let cmd = format!("{CLAUDE_PEER_LAUNCH_CMD} ");
+                    let _ = pane.write_input(cmd.as_bytes());
+                    self.dirty = true;
+                }
+                // else: silently no-op; the pane is in an alt-screen
+                // TUI. Users can switch to a shell pane and retry.
+            }
             return Ok(true);
         }
 
@@ -2777,7 +2827,105 @@ impl App {
                 let result = self.handle_close(&target);
                 let _ = reply.send(result);
             }
+            AppCommand::PeerList { from_pane, reply } => {
+                let result = self.handle_peer_list(from_pane);
+                let _ = reply.send(result);
+            }
+            AppCommand::PeerSend {
+                from_pane,
+                target,
+                body,
+                reply,
+            } => {
+                let result = self.handle_peer_send(from_pane, &target, body);
+                let _ = reply.send(result);
+            }
         }
+    }
+
+    /// Resolve `from_pane` to its workspace, then return every other
+    /// pane in that workspace as a [`PeerInfo`]. Peers are ordered by
+    /// the workspace's layout traversal so siblings stay in a stable
+    /// visual order across calls (important for UX when Claude lists
+    /// peers — the order should match what the user sees on screen).
+    fn handle_peer_list(
+        &self,
+        from_pane: usize,
+    ) -> std::result::Result<Vec<PeerInfo>, ipc::CodedError> {
+        let (ws_idx, _) = self
+            .resolve_pane_across_workspaces(&PaneRef::Id(from_pane))
+            .ok_or_else(|| {
+                ipc::CodedError::new(
+                    ipc::err_code::PANE_NOT_FOUND,
+                    format!("caller pane {from_pane} not found in any workspace"),
+                )
+            })?;
+        let ws = &self.workspaces[ws_idx];
+        let name_by_id: HashMap<usize, String> = ws
+            .pane_names
+            .iter()
+            .map(|(n, id)| (*id, n.clone()))
+            .collect();
+        let peers: Vec<PeerInfo> = ws
+            .layout
+            .collect_pane_ids()
+            .into_iter()
+            .filter(|id| *id != from_pane)
+            .map(|id| {
+                let pane = ws.panes.get(&id);
+                PeerInfo {
+                    id,
+                    name: name_by_id.get(&id).cloned(),
+                    role: pane.and_then(|p| p.role.clone()),
+                    cwd: pane.map(|p| p.cwd.to_string_lossy().to_string()),
+                }
+            })
+            .collect();
+        Ok(peers)
+    }
+
+    /// Route `body` from `from_pane` to `target` when both share a
+    /// workspace. Cross-tab targets are silently dropped so the MCP
+    /// server cannot enumerate panes in other tabs by probing ids.
+    /// Self-sends are also a no-op — the spike binary proved the
+    /// loopback rendering already; in production self-send is always
+    /// a mistake.
+    fn handle_peer_send(
+        &self,
+        from_pane: usize,
+        target: &PaneRef,
+        body: String,
+    ) -> std::result::Result<(), ipc::CodedError> {
+        let (sender_ws, _) = self
+            .resolve_pane_across_workspaces(&PaneRef::Id(from_pane))
+            .ok_or_else(|| {
+                ipc::CodedError::new(
+                    ipc::err_code::PANE_NOT_FOUND,
+                    format!("sender pane {from_pane} not found"),
+                )
+            })?;
+        let (target_ws, target_id) = match self.resolve_pane_across_workspaces(target) {
+            Some(pair) => pair,
+            // Unknown target: silent success, matching the cross-tab
+            // policy so clients can't distinguish one from the other.
+            None => return Ok(()),
+        };
+        if sender_ws != target_ws || target_id == from_pane {
+            return Ok(());
+        }
+        let from_name = self.workspaces[sender_ws]
+            .pane_names
+            .iter()
+            .find(|(_, id)| **id == from_pane)
+            .map(|(n, _)| n.clone());
+        self.event_bus.emit(ipc::Event::PeerInbox {
+            target_pane: target_id,
+            from_pane,
+            from_name,
+            body,
+            ts_ms: ipc::events::now_ms(),
+        });
+        Ok(())
     }
 
     fn handle_inspect(
@@ -2908,8 +3056,9 @@ impl App {
         let new_pane_id = self
             .new_tab()
             .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?;
+        let effective_command = command.or_else(|| default_command_for_role(role.as_deref()));
         if let Some(pane) = self.ws_mut().panes.get_mut(&new_pane_id) {
-            if let Some(cmd) = command {
+            if let Some(cmd) = effective_command {
                 pane.queue_startup_command(&cmd);
             }
             if let Some(r) = role {
@@ -3010,8 +3159,9 @@ impl App {
         // subscribers see the final identity. Otherwise the event races
         // the metadata and lands with `name: None, role: None`, breaking
         // consumers that filter on `.name == "<stable>"`.
+        let effective_command = command.or_else(|| default_command_for_role(role.as_deref()));
         if let Some(pane) = self.ws_mut().panes.get_mut(&new_pane_id) {
-            if let Some(cmd) = command {
+            if let Some(cmd) = effective_command {
                 pane.queue_startup_command(&cmd);
             }
             if let Some(r) = role {
@@ -3025,6 +3175,29 @@ impl App {
         }
         self.emit_pane_started(new_pane_id);
         Ok(new_pane_id)
+    }
+}
+
+/// Flag-preloaded launch command for `ccmux split --role claude`.
+/// Kept as a string (not a shell-escaped arg vector) because the pane
+/// startup-command path feeds it through the shell, which handles the
+/// `--dangerously-load-development-channels` spelling uniformly across
+/// bash / zsh / pwsh.
+const CLAUDE_PEER_LAUNCH_CMD: &str =
+    "claude --dangerously-load-development-channels server:ccmux-peers";
+
+/// If `role == "claude"` and the caller did not specify an explicit
+/// `--command`, return the claude launch line with the peer-channel
+/// flag baked in. Explicit commands always win — users who want a
+/// different claude invocation just pass `--command` as usual.
+///
+/// This is Strategy C from issue #97. Strategy B (shell-init wrapper
+/// so a raw `claude` command is transparently upgraded) is deferred
+/// to a follow-up PR.
+fn default_command_for_role(role: Option<&str>) -> Option<String> {
+    match role {
+        Some("claude") => Some(CLAUDE_PEER_LAUNCH_CMD.to_string()),
+        _ => None,
     }
 }
 
@@ -4222,6 +4395,178 @@ mod tests {
             "PaneExited for b must be suppressed when exit_event_emitted was already set"
         );
 
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_peer_send_emits_peer_inbox_to_sibling_in_same_tab() {
+        // Split pane A's workspace to create a sibling. Sending from
+        // A to the sibling should emit Event::PeerInbox carrying the
+        // sender id, the body, and a stable timestamp. This is the
+        // core happy-path of #97: without this event the MCP peer
+        // subprocess has nothing to push as a channel notification.
+        let mut app = App::new(40, 80).expect("App::new");
+        let (_sub_id, rx) = app.event_bus.subscribe();
+        let sender_id = app.ws().focused_pane_id;
+        let sibling_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                None,
+                None,
+            )
+            .expect("split succeeds");
+        // Drain PaneStarted events from the split so the assertion below
+        // only sees the PeerInbox we care about.
+        while let Ok(ev) = rx.try_recv() {
+            if !matches!(ev, ipc::Event::PaneStarted { .. }) {
+                panic!("unexpected event before peer send: {ev:?}");
+            }
+        }
+        app.handle_peer_send(
+            sender_id,
+            &ipc::PaneRef::Id(sibling_id),
+            "hello sibling".to_string(),
+        )
+        .expect("peer send");
+        let mut found = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let ipc::Event::PeerInbox {
+                target_pane,
+                from_pane,
+                body,
+                ..
+            } = ev
+            {
+                assert_eq!(target_pane, sibling_id);
+                assert_eq!(from_pane, sender_id);
+                assert_eq!(body, "hello sibling");
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "expected PeerInbox event after handle_peer_send");
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_peer_send_silently_drops_cross_tab_target() {
+        // Cross-tab delivery is a silent no-op by design — callers
+        // cannot enumerate panes in other tabs by probing ids. A
+        // PeerInbox event would leak "pane X exists somewhere", so
+        // the handler must emit nothing at all.
+        let mut app = App::new(40, 80).expect("App::new");
+        let (_sub_id, rx) = app.event_bus.subscribe();
+        let sender_id = app.ws().focused_pane_id;
+        // Open a fresh tab; its pane id is distinct from sender's.
+        let other_tab_pane = app
+            .handle_new_tab(None, None, None, None)
+            .expect("new tab succeeds");
+        assert_ne!(
+            other_tab_pane, sender_id,
+            "new_tab must allocate a fresh pane id"
+        );
+        // Drain PaneStarted / tab-switch events.
+        while rx.try_recv().is_ok() {}
+
+        app.handle_peer_send(
+            sender_id,
+            &ipc::PaneRef::Id(other_tab_pane),
+            "should be silently dropped".to_string(),
+        )
+        .expect("cross-tab send reports success");
+        let got_inbox = std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|ev| matches!(ev, ipc::Event::PeerInbox { .. }));
+        assert!(
+            !got_inbox,
+            "cross-tab PeerSend must NOT emit a PeerInbox event"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_peer_list_excludes_caller_and_lists_siblings() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let sender_id = app.ws().focused_pane_id;
+        let sibling_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                Some("sibling".into()),
+                Some("worker".into()),
+            )
+            .expect("split succeeds");
+        let peers = app.handle_peer_list(sender_id).expect("peer list");
+        assert_eq!(peers.len(), 1, "expected one sibling, got {peers:?}");
+        assert_eq!(peers[0].id, sibling_id);
+        assert_eq!(peers[0].name.as_deref(), Some("sibling"));
+        assert_eq!(peers[0].role.as_deref(), Some("worker"));
+        // Caller must be excluded.
+        assert!(
+            peers.iter().all(|p| p.id != sender_id),
+            "peer list must not include the caller"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn default_command_for_role_returns_claude_launch_for_claude_role() {
+        // Strategy C from #97: `ccmux split --role claude` must pre-fill
+        // the peer-channel flag so the user doesn't need to know the
+        // incantation. `default_command_for_role` is the single seam
+        // mapping role names to preloaded commands — regress this and
+        // new Claude panes silently skip the channel activation.
+        let cmd = default_command_for_role(Some("claude")).expect("claude role preloads cmd");
+        assert!(
+            cmd.contains("--dangerously-load-development-channels server:ccmux-peers"),
+            "launch cmd must carry the peer channel flag, got: {cmd}"
+        );
+        assert!(
+            cmd.starts_with("claude "),
+            "launch cmd must invoke claude: {cmd}"
+        );
+    }
+
+    #[test]
+    fn default_command_for_role_returns_none_for_other_roles() {
+        assert!(default_command_for_role(None).is_none());
+        assert!(default_command_for_role(Some("worker")).is_none());
+        assert!(default_command_for_role(Some("")).is_none());
+    }
+
+    #[test]
+    fn handle_split_explicit_command_wins_over_role_claude_default() {
+        // Regression guard for #97 Stage 5a: `--role claude` pre-fills
+        // the peer-flagged launch command only when no explicit
+        // `--command` was given. A caller who wants a custom claude
+        // invocation (say with `/some-workflow` args) must not have
+        // their command silently stomped by the default.
+        let mut app = App::new(40, 80).expect("App::new");
+        let new_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                Some("echo custom".into()),
+                None,
+                Some("claude".into()),
+            )
+            .expect("split succeeds");
+        let pane = app.ws().panes.get(&new_id).expect("pane exists");
+        let queued = pane
+            .pending_startup
+            .as_ref()
+            .expect("explicit --command queued");
+        let queued_str = std::str::from_utf8(queued).expect("utf8");
+        assert!(
+            queued_str.starts_with("echo custom"),
+            "explicit command should win; got: {queued_str:?}"
+        );
+        assert!(
+            !queued_str.contains("--dangerously-load-development-channels"),
+            "role default must not be appended when --command was explicit; got: {queued_str:?}"
+        );
         app.shutdown();
     }
 

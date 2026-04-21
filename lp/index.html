@@ -222,6 +222,17 @@ $ npm install -g ccmux-fork</code></pre>
         <tbody>
           <tr>
             <td>
+              Peer messaging between Claude Code panes in the same tab
+              <br /><span style="color: var(--muted); font-size: 0.85em;">
+                <code>ccmux mcp install</code> registers a stdio MCP server; same-tab Claude Code instances discover each other via <code>list_peers</code> and exchange messages via <code>send_message</code>. Peer messages arrive as <code>&lt;channel source="ccmux-peers"&gt;</code> tags, distinct from user input.
+                <code>Alt+P</code> inserts the peer-enabled launch command into the focused pane.
+              </span>
+            </td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
+            <td>
               Centered multi-line IME composition overlay (JP / CN / KR on Windows + third-party terminals)
               <br /><span style="color: var(--muted); font-size: 0.85em;">
                 <code>Alt+Enter</code> to send, <code>Enter</code> for newline,

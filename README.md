@@ -14,6 +14,7 @@ A lightweight terminal multiplexer built specifically for running multiple [Clau
 
 - **Multi-pane terminal** — Split vertically/horizontally, run independent PTY shells
 - **Tab workspaces** — Multiple project tabs with click-to-switch
+- **Peer messaging between Claude Code panes** — Same-tab Claude Code instances can talk to each other via an MCP channel; peer messages arrive as `<channel source="ccmux-peers">` tags distinct from user input ([see below](#peer-messaging-between-claude-code-panes))
 - **File tree sidebar** — Browse project files with icons, expand/collapse directories
 - **Syntax-highlighted preview** — View file contents with language-aware coloring
 - **Claude Code detection** — Pane border turns orange when Claude Code is running
@@ -167,6 +168,65 @@ lang = "auto"   # "auto" | "ja" | "en"
 
 The `--lang auto\|ja\|en` CLI flag overrides the config file for a single run. Values are case-insensitive in both CLI (`--lang JA`) and TOML (`lang = "Ja"`). Precedence is **CLI > config > OS locale detection > English fallback**.
 
+## Peer messaging between Claude Code panes
+
+Let two or more Claude Code instances running in the same ccmux tab exchange structured messages — so one Claude can ask its sibling to research something, hand off a test failure, or coordinate without the user relaying every message manually. Peer messages land in the receiver's context as `<channel source="ccmux-peers">` tags, cleanly distinguishable from user input.
+
+> **Why this is different from [`claude-peers-mcp`](https://github.com/happy-ryo/claude-peers-mcp)** — both offer the same tool surface, but `claude-peers-mcp` infers peer scope from `cwd` / `git_root` / `PID` (heuristic, can collide). ccmux-peers uses the **ccmux tab** as the authoritative scope — panes the user literally put in the same tab. The two can coexist in the same Claude install; channel names don't collide (`server:ccmux-peers` vs `server:claude-peers`).
+
+### Setup — one-time
+
+```bash
+ccmux mcp install
+```
+
+Registers the running `ccmux` binary as the `ccmux-peers` MCP server in Claude Code's user config. Re-running is idempotent; pass `--force` to overwrite after a ccmux upgrade. `ccmux mcp uninstall` and `ccmux mcp status` are the inverse and introspection commands.
+
+### Usage — launch Claude Code with the peer channel
+
+Peer messages ride the MCP experimental channel protocol, so Claude Code needs the `--dangerously-load-development-channels server:ccmux-peers` flag at startup. ccmux gives you two shortcuts so you don't have to type it by hand:
+
+- **`Alt+P`** — Inserts `claude --dangerously-load-development-channels server:ccmux-peers ` into the focused pane (trailing space, *no* Enter). Review, optionally tack on args, press Enter to run. Works in any pane, any shell.
+- **`ccmux split --role claude`** / **`ccmux new-tab --role claude`** — Creates a new pane and auto-launches Claude Code with the flag already applied. Explicit `--command` wins if you pass one, so the flag path stays an escape hatch you can override.
+
+### Two-pane workflow
+
+```
+tab A                          tab B (isolated)
+┌──────────┬──────────┐        ┌──────────┐
+│ claude-1 │ claude-2 │        │ claude-3 │
+│          │          │        │          │
+│  peers ──┼──▶ ✓     │        │  peers   │  ← cannot see claude-1/2
+│  send ◀──┼── msg    │        │          │
+└──────────┴──────────┘        └──────────┘
+```
+
+In Claude A's chat:
+
+```
+> call list_peers
+# returns: id=2 (the sibling)
+
+> call send_message with to_id=2 and message="can you read src/app.rs:handle_split and summarise?"
+```
+
+Claude B sees a `<channel source="ccmux-peers">can you read src/app.rs...</channel>` tag in its next turn, recognises it as a peer request (not user input, thanks to the tag source), does the work, and replies back the same way.
+
+**Tool surface:**
+
+| Tool | Effect |
+|---|---|
+| `list_peers` | Lists other panes in the caller's tab. Caller is excluded. |
+| `send_message(to_id, message)` | Delivers to a same-tab peer by numeric id or stable name. Silent no-op for targets outside the tab — callers cannot enumerate other tabs. |
+| `check_messages` | Manual inbox drain. Channel push is the primary delivery path; this is a fallback for when you want to re-check. |
+| `set_summary` | v1 stub. ccmux uses pane name / role as the summary substitute. |
+
+### Troubleshooting
+
+- **`list_peers` reports "ccmux not reachable from this Claude Code instance"** — Claude Code was launched outside a ccmux pane, or without inheriting the env. Re-launch via `Alt+P` or `ccmux split --role claude` from within ccmux.
+- **Peer messages don't render as `<channel>` tags** — You probably forgot the `--dangerously-load-development-channels server:ccmux-peers` flag. Prefer `Alt+P` over typing `claude` directly.
+- **Upgrading ccmux?** — Re-run `ccmux mcp install --force` so the registered command path points at your new binary.
+
 ## Keybindings
 
 ### Pane mode (default)
@@ -181,6 +241,7 @@ The `--lang auto\|ja\|en` CLI flag overrides the config file for a single run. V
 | `Alt+Left/Right` | Previous / next tab |
 | `Alt+R` | Rename tab (session only) |
 | `Alt+S` | Toggle status bar |
+| `Alt+P` | Insert the peer-enabled Claude Code launch command into the focused pane (see [Peer messaging](#peer-messaging-between-claude-code-panes)) |
 | `Ctrl+F` | Toggle file tree |
 | `Ctrl+P` | Swap preview/terminal layout |
 | `Ctrl+Right/Left` | Cycle focus (sidebar, preview, panes) |

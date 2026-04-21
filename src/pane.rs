@@ -82,6 +82,11 @@ impl Pane {
         cmd.cwd(&work_dir);
         cmd.env("TERM", "xterm-256color");
         cmd.env("CCMUX", "1"); // marker to detect nested ccmux
+                               // Per-pane identity for the MCP peer subprocess (see #97). The
+                               // subprocess is spawned by Claude Code, which inherits env
+                               // from this PTY, so reading `CCMUX_PANE_ID` at startup is how
+                               // the subprocess tells ccmux's IPC server which pane it is.
+        cmd.env("CCMUX_PANE_ID", id.to_string());
 
         let child = pair
             .slave
@@ -386,6 +391,23 @@ impl Pane {
         } else {
             false
         }
+    }
+
+    /// Whether it is safe to synthesize a shell command line into this
+    /// pane's PTY. Returns `false` when any other foreground process
+    /// has captured the terminal — `alternate_screen()` catches TUIs
+    /// like vim / less / lazygit; `is_claude_running()` catches Claude
+    /// Code's `/tui fullscreen` mode, which enables mouse reporting
+    /// without entering the alt screen (see the mouse-forwarding path
+    /// in `map_wheel_for_pane_buffer` for the same distinction).
+    /// Callers that want to inject a command (`Alt+P`, orchestrator
+    /// scripts) should gate on this.
+    pub fn shell_accepts_command_injection(&self) -> bool {
+        let alt_screen = {
+            let parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
+            parser.screen().alternate_screen()
+        };
+        !alt_screen && !self.is_claude_running()
     }
 
     /// Kill the PTY child process.

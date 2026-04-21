@@ -510,6 +510,40 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
                 }
             }
         }
+        Request::PeerList { from_pane } => {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            if command_tx
+                .send(AppCommand::PeerList {
+                    from_pane,
+                    reply: reply_tx,
+                })
+                .is_err()
+            {
+                return Response::err_coded(err_code::SHUTTING_DOWN, "app shutting down");
+            }
+            match reply_rx.recv_timeout(APP_REPLY_TIMEOUT) {
+                Ok(Ok(peers)) => match serde_json::to_value(&peers) {
+                    Ok(v) => Response::ok_value(v),
+                    Err(e) => {
+                        Response::err_coded(err_code::INTERNAL, format!("serialize peers: {e}"))
+                    }
+                },
+                Ok(Err(err)) => err.into_response(),
+                Err(e) => {
+                    Response::err_coded(err_code::APP_TIMEOUT, format!("app did not respond: {e}"))
+                }
+            }
+        }
+        Request::PeerSend {
+            from_pane,
+            target,
+            body,
+        } => forward_unit(command_tx, |reply| AppCommand::PeerSend {
+            from_pane,
+            target,
+            body,
+            reply,
+        }),
     }
 }
 
