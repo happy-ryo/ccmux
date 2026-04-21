@@ -891,16 +891,32 @@ impl App {
             return Ok(self.handle_rename_key(key));
         }
 
-        // Ctrl+; — open the IME composition overlay whenever a PTY
-        // pane is focused. Initially gated to "is_claude_running()"
-        // panes, but that proved flaky: Claude briefly retitles the
-        // pane while running tools (e.g. "Edit", "Bash"), so the
-        // detection would flicker and the hotkey would "mysteriously
-        // stop working" mid-session. Open the overlay unconditionally
-        // when focused on a pane and let the user choose when to
-        // invoke it — users who don't need IME just don't press
-        // Ctrl+; in that pane.
-        if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char(';')) {
+        // Open the IME composition overlay. Primary hotkey is
+        // `Ctrl+;`, with `Alt+;` and `Alt+I` as fallbacks for
+        // terminals that refuse to pass `Ctrl+;` through to
+        // stdin. ASCII has no encoding for Ctrl+punctuation and
+        // many terminals (Windows Terminal with WSL, VS Code
+        // terminal on Linux, plain TTYs, some tmux configs) drop
+        // the Ctrl modifier and deliver a bare `;` to the
+        // application. The Alt-based fallbacks arrive as an
+        // ESC-prefixed sequence that every tier-1 terminal
+        // forwards reliably, so the overlay is always reachable.
+        //
+        // Originally gated to `is_claude_running()` panes, but
+        // that proved flaky — Claude briefly retitles the pane
+        // while running tools, so the detection would flicker
+        // and the hotkey would "mysteriously stop working" mid-
+        // session. The overlay opens unconditionally on any
+        // focused pane; users who don't need IME just don't
+        // press the hotkey.
+        let is_semi = matches!(key.code, KeyCode::Char(';'));
+        let is_alt_i = key.modifiers == KeyModifiers::ALT
+            && matches!(key.code, KeyCode::Char('i') | KeyCode::Char('I'));
+        let is_open_hotkey = ((key.modifiers == KeyModifiers::CONTROL
+            || key.modifiers == KeyModifiers::ALT)
+            && is_semi)
+            || is_alt_i;
+        if is_open_hotkey {
             match self.ime_mode {
                 crate::config::ImeMode::Off => {
                     // User opted out of the overlay. Don't leak a bare
