@@ -310,6 +310,26 @@ $ npm install -g ccmux-fork</code></pre>
             <td class="mark has">✓</td>
           </tr>
           <tr>
+            <td>
+              macOS 初回起動時の Option=Meta 設定バナー
+              <br /><span style="color: var(--muted); font-size: 0.85em;">
+                macOS では既定で <code>Option+&lt;キー&gt;</code> が Unicode
+                入力に割り当てられているため <code>Alt+T</code> /
+                <code>Alt+P</code> / <code>Alt+1..9</code> が発火しない。
+                初回起動時に 2 行のバナーを出して、各端末 (WezTerm /
+                iTerm2 / Alacritty / Ghostty / Kitty / Terminal.app) での
+                1 行設定方法に誘導する。任意キー押下または 20
+                秒経過で消え、
+                <code>~/.config/ccmux/.macos_tip_dismissed</code> に 0
+                バイトのマーカーを残すので 2 回目以降は非表示。
+                <code>--no-macos-tip</code> / <code>--show-macos-tip</code>
+                や <code>CCMUX_NO_MACOS_TIP</code> で上書き可能。
+              </span>
+            </td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
             <td>Windows / macOS / Linux の CI と rustfmt / clippy チェック</td>
             <td class="mark">—</td>
             <td class="mark has">✓</td>

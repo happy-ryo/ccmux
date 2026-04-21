@@ -319,6 +319,26 @@ $ npm install -g ccmux-fork</code></pre>
             <td class="mark has">✓</td>
           </tr>
           <tr>
+            <td>
+              First-launch macOS Option-as-Meta banner
+              <br /><span style="color: var(--muted); font-size: 0.85em;">
+                macOS terminals bind <code>Option+&lt;key&gt;</code> to Unicode
+                input by default, so <code>Alt+T</code> / <code>Alt+P</code> /
+                <code>Alt+1..9</code> never reach ccmux. A 2-line banner on
+                first launch points users at the per-terminal (WezTerm /
+                iTerm2 / Alacritty / Ghostty / Kitty / Terminal.app) fix.
+                Dismisses on any key or after 20&nbsp;s, writes a zero-byte
+                marker at
+                <code>~/.config/ccmux/.macos_tip_dismissed</code> so
+                returning users never see it twice. Override with
+                <code>--no-macos-tip</code> / <code>--show-macos-tip</code>
+                or <code>CCMUX_NO_MACOS_TIP</code>.
+              </span>
+            </td>
+            <td class="mark">—</td>
+            <td class="mark has">✓</td>
+          </tr>
+          <tr>
             <td>CI matrix (Windows / macOS / Linux) with rustfmt + clippy gate</td>
             <td class="mark">—</td>
             <td class="mark has">✓</td>
