@@ -281,7 +281,9 @@ Event monitoring:\n\
 - poll_events: Long-poll for pane lifecycle events (pane_started, pane_exited, \
 events_dropped). First call (no `since`) starts at \"right now\" — no historical replay. \
 Each response includes a `next_since` cursor to pass back on the next call. Optional \
-`types` filter narrows the results without losing the cursor advance.\n\n\
+`types` filter narrows returned events without losing the cursor advance, but it does \
+not extend the long-poll: a non-matching event still returns early with events=[] \
+and an advanced cursor, so the caller should re-poll for the next window.\n\n\
 Launching Claude Code: when spawn_pane or new_tab is asked to start Claude Code, pass \
 command=\"claude\" (plus any normal claude arguments you want). The MCP automatically \
 upgrades a bare `claude` invocation to the Alt+P peer-enabled form \
@@ -442,7 +444,7 @@ fn tools_spec() -> Value {
                     "types": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Optional filter — only return events whose `type` field is in this list. The cursor still advances past filtered-out events so they won't reappear."
+                        "description": "Optional filter — only return events whose `type` field is in this list. The cursor still advances past filtered-out events so they won't reappear. Note: the filter narrows returned results but does not extend the long-poll; if a non-matching event arrives during the wait, `poll_events` returns early with `events: []` and an advanced cursor, and the caller should re-poll for the next window."
                     }
                 }
             }
