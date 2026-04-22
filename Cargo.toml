@@ -41,7 +41,26 @@ name = "ccmux"
 # instead of starting at a single row and growing as the user typed
 # (#112). Overlay-open dimensions are visible behavior so this is a
 # minor bump, not a patch.
-version = "0.13.0"
+# 0.13.0 brings the peer MCP pane-control tool suite and the Alt+P
+# claude auto-upgrade (#114): the `ccmux-peers` MCP server gains
+# `spawn_pane` / `close_pane` / `focus_pane` / `list_panes` / `new_tab`
+# so orchestrators can manage the layout without shelling out, and any
+# bare `claude` command the MCP is asked to run is rewritten to the
+# peer-enabled form so the spawned instance joins the channel. The new
+# tools and the implicit rewrite are visible behavior for anyone using
+# the MCP, hence the minor bump.
+# 0.14.0 closes Epic #119: the `ccmux-peers` MCP grows three more
+# tools so downstream orchestrators can drop every remaining
+# `Bash(ccmux *)` permission. `inspect_pane` (#116 / #121) exposes
+# `ccmux inspect` screen snapshots with a text or grid rendering;
+# `poll_events` (#117 / #120) surfaces pane lifecycle events
+# (pane_started / pane_exited / events_dropped) via a cursor-based
+# long-poll with an optional `types` filter; `send_keys` (#118 /
+# #122) delivers raw key input (Enter, Shift+Tab, Esc, Ctrl+<letter>,
+# arbitrary `text`) so callers can answer interactive prompts or
+# toggle Claude Code's Plan→AcceptEdits mode without touching the
+# CLI. Three new MCP tools on the wire, hence the minor bump.
+version = "0.14.0"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
