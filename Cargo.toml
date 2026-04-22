@@ -60,7 +60,7 @@ name = "ccmux"
 # arbitrary `text`) so callers can answer interactive prompts or
 # toggle Claude Code's Plan→AcceptEdits mode without touching the
 # CLI. Three new MCP tools on the wire, hence the minor bump.
-version = "0.14.0"
+version = "0.14.1"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
