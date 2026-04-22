@@ -33,6 +33,15 @@ A lightweight terminal multiplexer built specifically for running multiple [Clau
 npm install -g ccmux-fork
 ```
 
+**Updating to the latest release:**
+
+```bash
+npm update -g ccmux-fork
+npm install -g ccmux-fork@latest
+```
+
+`npm update -g` works when your npm is recent and its cache hasn't pinned a previous resolution; if it appears to no-op, use the `@latest` form to force-pull the newest version. Verify with `ccmux --version` against the [latest release](https://github.com/happy-ryo/ccmux/releases/latest).
+
 > Previously installed the upstream `ccmux-cli`? Migrate with: `npm uninstall -g ccmux-cli && npm install -g ccmux-fork`
 
 ### Download binary

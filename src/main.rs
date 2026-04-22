@@ -400,26 +400,21 @@ fn run_event_loop(
             // originally reported in #25 / fixed in #36: while any pane
             // diff paints, ratatui-crossterm emits MoveTo+Print without
             // hiding the hardware cursor, and conpty leaks each MoveTo
-            // to Windows Terminal's caret — producing a ghost-caret
-            // flicker around the screen mid-composition.
+            // to Windows Terminal's caret. Windows Terminal anchors IME
+            // pre-edit to that host caret, so an intermediate MoveTo on
+            // Claude's spinner row can pull native IME composition away
+            // from Claude's input row.
             //
             // Force-hide the cursor for the whole draw transaction;
-            // ratatui re-shows it and places it inside the centered
-            // overlay box via `frame.set_cursor_position` at flush.
-            //
-            // When `--ime-freeze-panes` is enabled there is no pane
-            // diff to paint so the Hide is redundant, but it is also
-            // free, and users who don't opt in still rely on it for
-            // the flicker reduction baseline that landed in #36.
+            // ratatui re-shows it only after the frame's final
+            // `set_cursor_position` has been applied.
             //
             // Scoped to Windows because conpty is the observed
             // culprit; macOS / Linux terminals don't exhibit the
             // leak, and the gate avoids any unintended side effect.
             #[cfg(windows)]
             {
-                if app.overlay.is_some() {
-                    let _ = execute!(io::stdout(), crossterm::cursor::Hide);
-                }
+                let _ = execute!(terminal.backend_mut(), crossterm::cursor::Hide);
             }
             terminal.draw(|frame| {
                 ui::render(app, frame);
