@@ -1805,7 +1805,7 @@ mod tests {
         assert!(body
             .get("events")
             .and_then(|v| v.as_array())
-            .map_or(false, |a| a.is_empty()));
+            .is_some_and(|a| a.is_empty()));
     }
 
     #[test]
@@ -1826,7 +1826,7 @@ mod tests {
         assert!(body
             .get("events")
             .and_then(|v| v.as_array())
-            .map_or(false, |a| a.is_empty()));
+            .is_some_and(|a| a.is_empty()));
         // next_since must point at the last-known seq (2), so the
         // caller's next call with since="2" picks up from seq 3.
         assert_eq!(body.get("next_since").and_then(|v| v.as_str()), Some("2"));
@@ -1953,10 +1953,9 @@ mod tests {
             effective_poll_timeout(Some(u64::MAX)),
             Duration::from_millis(POLL_MAX_TIMEOUT_MS)
         );
-        assert!(
-            POLL_MAX_TIMEOUT_MS <= 60_000,
-            "POLL_MAX_TIMEOUT_MS raised past a reasonable ceiling ({POLL_MAX_TIMEOUT_MS})"
-        );
+        // Compile-time guard: a future change that silently bumps
+        // POLL_MAX_TIMEOUT_MS past 60 s should not compile at all.
+        const _: () = assert!(POLL_MAX_TIMEOUT_MS <= 60_000);
     }
 
     #[test]
