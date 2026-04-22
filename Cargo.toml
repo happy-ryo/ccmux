@@ -65,7 +65,14 @@ name = "ccmux"
 # inverse-video pseudo-caret across blink, redraw, and remote-row
 # update phases instead of vanishing or jumping. User-visible
 # editing behavior change, hence the minor bump.
-version = "0.15.0"
+# 0.15.1 follow-up to #131: stop the native IME composition pre-edit
+# from warping onto Claude's spinner / status row while Claude is
+# streaming output. Two pieces — Windows conpty caret leak now hidden
+# every frame instead of only behind the IME overlay, and the host
+# caret is pinned to the input row found by its `❯` prompt glyph
+# rather than chasing vt100's cursor. Patch bump because the change
+# is a bug fix on top of 0.15.0's editing baseline.
+version = "0.15.1"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
