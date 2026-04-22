@@ -238,6 +238,8 @@ _ペイン操作 (`new_tab` を除き同一タブ内):_
 | `focus_pane(target)` | 同じタブ内でフォーカス移動。ユーザーの手元からフォーカスを奪うことになるので使いどころに注意。 |
 | `new_tab(…)` | 新しいタブを 1 枚開いてそこへフォーカスを移す。`spawn_pane` と同じ `claude` 自動アップグレードが効く。 |
 
+> この `claude` 自動アップグレードは layout TOML (`ccmux --layout <name>`) 経由で起動するペインにも適用される。layout toml に `command = "claude"` と書けばペイン起動時に peer 対応コマンドへ書き換えられるので、各エントリで毎回 `--dangerously-load-development-channels server:ccmux-peers` を書く必要はない。
+
 ### うまく動かないとき
 
 - **`list_peers` が "ccmux not reachable from this Claude Code instance" を返す** — Claude Code が ccmux の外で起動されたか、ccmux ペインの環境変数を引き継げていません。ccmux のペイン内で `Alt+P` か `ccmux split --role claude` から起動し直してください。

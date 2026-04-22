@@ -1708,7 +1708,14 @@ impl App {
                         pane.role = Some(r.clone());
                     }
                     if let Some(cmd) = command {
-                        pane.queue_startup_command(cmd);
+                        // Mirror MCP `spawn_pane` / `new_tab` behavior:
+                        // a bare `claude` invocation is upgraded to the
+                        // peer-enabled launch line so panes declared in
+                        // layout toml join the ccmux-peers network
+                        // without the author having to repeat
+                        // `--dangerously-load-development-channels`.
+                        let upgraded = crate::mcp_peer::upgrade_claude_command(cmd);
+                        pane.queue_startup_command(&upgraded);
                     }
                 }
                 Ok(())
@@ -4672,6 +4679,61 @@ mod tests {
         assert!(default_command_for_role(None).is_none());
         assert!(default_command_for_role(Some("worker")).is_none());
         assert!(default_command_for_role(Some("")).is_none());
+    }
+
+    #[test]
+    fn apply_layout_auto_upgrades_bare_claude_command() {
+        // Issue #126: layout toml's `command = "claude"` should receive
+        // the same peer-enabled launch-line upgrade as MCP spawn_pane /
+        // Alt+P, so layout-declared panes join the ccmux-peers network.
+        let cfg = crate::layout_config::LayoutConfig {
+            version: 1,
+            name: "upgrade-test".into(),
+            root: crate::layout_config::LayoutNodeSpec::Pane {
+                id: "secretary".into(),
+                command: Some("claude".into()),
+                role: None,
+            },
+        };
+        let mut app = App::new(40, 80).expect("App::new");
+        app.apply_layout(&cfg).expect("apply_layout");
+
+        let pane_id = *app.ws().pane_names.get("secretary").expect("registered");
+        let pane = app.ws().panes.get(&pane_id).expect("pane");
+        let queued = pane
+            .pending_startup
+            .as_ref()
+            .expect("startup command queued");
+        let queued_str = std::str::from_utf8(queued).expect("utf8");
+        assert!(
+            queued_str.contains("--dangerously-load-development-channels server:ccmux-peers"),
+            "layout `claude` should be upgraded to peer-enabled form; got: {queued_str:?}"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn apply_layout_preserves_non_claude_command() {
+        // Non-`claude` commands must pass through untouched.
+        let cfg = crate::layout_config::LayoutConfig {
+            version: 1,
+            name: "passthrough-test".into(),
+            root: crate::layout_config::LayoutNodeSpec::Pane {
+                id: "worker".into(),
+                command: Some("echo hello".into()),
+                role: None,
+            },
+        };
+        let mut app = App::new(40, 80).expect("App::new");
+        app.apply_layout(&cfg).expect("apply_layout");
+
+        let pane_id = *app.ws().pane_names.get("worker").expect("registered");
+        let pane = app.ws().panes.get(&pane_id).expect("pane");
+        let queued_str =
+            std::str::from_utf8(pane.pending_startup.as_ref().expect("queued")).expect("utf8");
+        assert!(queued_str.starts_with("echo hello"));
+        assert!(!queued_str.contains("--dangerously-load-development-channels"));
+        app.shutdown();
     }
 
     #[test]

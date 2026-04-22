@@ -233,6 +233,8 @@ _Pane control (same tab, except `new_tab`):_
 | `focus_pane(target)` | Moves keyboard focus inside the same tab. Use sparingly — yanking focus out from under the user is disruptive. |
 | `new_tab(…)` | Opens a brand-new tab with a fresh pane and switches focus to it. Same `claude` auto-upgrade as `spawn_pane`. |
 
+> The same `claude` auto-upgrade also applies to panes declared in a layout TOML (`ccmux --layout <name>`): a bare `command = "claude"` in the toml is rewritten to the peer-enabled launch line when the pane starts, so layouts join the ccmux-peers network without each entry having to repeat `--dangerously-load-development-channels server:ccmux-peers`.
+
 ### Troubleshooting
 
 - **`list_peers` reports "ccmux not reachable from this Claude Code instance"** — Claude Code was launched outside a ccmux pane, or without inheriting the env. Re-launch via `Alt+P` or `ccmux split --role claude` from within ccmux.
