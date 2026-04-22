@@ -22,14 +22,6 @@ const ACTIVE_BG: Color = Color::Rgb(0x1c, 0x23, 0x33);
 const LINE_NUM_COLOR: Color = Color::Rgb(0x3d, 0x44, 0x4d);
 const SCROLL_BG: Color = Color::Rgb(0x2a, 0x1f, 0x14);
 
-/// How many cells left of the vt100 cursor to scan for Claude's
-/// inverse-video caret marker. End-of-input typically lands at
-/// offset 1, mid-line edits at offset 0, post-backspace states at
-/// offset 2; pad another cell of slack and stop. Increasing this
-/// risks picking up an unrelated inverse cell (e.g. selection
-/// highlight) further left.
-const CLAUDE_CARET_SCAN_RANGE: u16 = 3;
-
 const MIN_TERMINAL_WIDTH: u16 = 40;
 const MIN_TERMINAL_HEIGHT: u16 = 10;
 const MIN_PANE_AREA_WIDTH: u16 = 20;
@@ -838,45 +830,131 @@ fn render_terminal_content(
         // both blink and streaming bursts instead of chasing vt100
         // around the screen.
         let detected: Option<(u16, u16)> = if claude_pane {
-            // Primary scan: small window left of the live vt100
-            // cursor. Fast and avoids latching onto unrelated
-            // inverse cells (selection highlights, status bars).
-            let mut found = None;
-            for offset in 0..=CLAUDE_CARET_SCAN_RANGE {
-                let col = match cursor.1.checked_sub(offset) {
-                    Some(c) => c,
-                    None => break,
-                };
-                if screen.cell(cursor.0, col).is_some_and(|c| c.inverse()) {
-                    found = Some((cursor.0, col));
+            // An "isolated" inverse cell — neither neighbor on the
+            // same row is inverse — is the signature of Claude's
+            // single-cell input caret. Spinner / progress lines
+            // such as `* Osmosing...` or `● Committed 8` paint the
+            // marker glyph plus the trailing label all in inverse
+            // video, so each of their cells has at least one
+            // inverse neighbor and is rejected here. Selection
+            // highlights and other multi-cell inverse spans are
+            // rejected the same way.
+            //
+            // Caveat: a CJK double-width caret cell may end up
+            // adjacent to an inverse continuation half — verify on
+            // real CJK editing flows before relying on this for
+            // multi-byte caret tracking.
+            // Locate Claude's input row by scanning bottom-up for
+            // the `>` prompt glyph in one of the first few columns.
+            // Claude Code always renders `> ` (or just `>`) at the
+            // left edge of its input box, so finding it gives us
+            // the input row directly — no need to guess from vt100
+            // cursor or pane geometry. Spinner / status / streaming
+            // rows never start with `>` so they are excluded by
+            // construction.
+            let screen_rows = screen.size().0;
+            let cols = screen.size().1;
+            let mut input_row: Option<u16> = None;
+            for row in (0..screen_rows).rev() {
+                for col in 0..cols.min(8) {
+                    if screen.cell(row, col).is_some_and(|c| {
+                        matches!(
+                            c.contents(),
+                            ">" | "\u{276F}"
+                                | "\u{203A}"
+                                | "\u{27E9}"
+                                | "\u{3009}"
+                                | "\u{276D}"
+                                | "\u{2771}"
+                        )
+                    }) {
+                        input_row = Some(row);
+                        break;
+                    }
+                }
+                if input_row.is_some() {
                     break;
                 }
             }
-            // Fallback: vt100 has jumped to a remote row to paint
-            // streaming output and is not coming back, but the
-            // user is still navigating in the input box and Claude
-            // is repainting the inverse caret there. Re-scan the
-            // *cached* row entirely and pick the inverse cell
-            // closest to the cached column. Without this, the
-            // small primary window misses Claude's redraw and the
-            // host caret freezes at the pre-jump position no
-            // matter how the user moves the cursor.
-            if found.is_none() {
-                let cached = pane.claude_caret_cache.lock().ok().and_then(|g| *g);
-                if let Some((cached_row, cached_col)) = cached {
-                    let cols = screen.size().1;
-                    let mut best: Option<(u16, u16)> = None;
-                    let mut best_dist = u16::MAX;
-                    for col in 0..cols {
-                        if screen.cell(cached_row, col).is_some_and(|c| c.inverse()) {
-                            let dist = col.abs_diff(cached_col);
-                            if dist < best_dist {
-                                best_dist = dist;
-                                best = Some((cached_row, col));
+            if let Some(path) = std::env::var_os("CCMUX_DEBUG_CURSOR_LOG") {
+                if is_focused {
+                    let mut bottom_chars = String::new();
+                    let start_row = screen_rows.saturating_sub(8);
+                    for row in start_row..screen_rows {
+                        bottom_chars.push_str(&format!("r{row}:"));
+                        for col in 0..cols.min(12) {
+                            let s = screen
+                                .cell(row, col)
+                                .map(|c| c.contents().to_string())
+                                .unwrap_or_default();
+                            bottom_chars.push_str(&format!("[{s}]"));
+                        }
+                        bottom_chars.push(' ');
+                    }
+                    let line = format!(
+                        "[ccmux dbg] input_row={:?} bottom: {}\n",
+                        input_row, bottom_chars
+                    );
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(std::path::PathBuf::from(&path))
+                    {
+                        use std::io::Write;
+                        let _ = f.write_all(line.as_bytes());
+                    }
+                }
+            }
+            // On the resolved input row, find the right-most
+            // inverse cell. The isolation check used elsewhere
+            // (rejecting multi-cell inverse spans) doesn't apply
+            // here — IME composition under CJK input renders the
+            // entire span as contiguous inverse, and we still
+            // want to land the caret at its trailing edge so the
+            // IME candidate window anchors below the right place.
+            // Spinner / status / streaming rows are already
+            // excluded by the input_row search above (they don't
+            // start with `❯`/`>`), so we cannot accidentally pick
+            // up a spinner glyph here.
+            // Pin the host caret to the input row even when no
+            // inverse cell exists there. IME composition pre-edit
+            // is rendered by the host terminal at the host caret
+            // position **before** any keystrokes reach Claude, so
+            // an empty input box still needs the caret pinned to
+            // the right cell — otherwise pre-edit text shows up
+            // wherever vt100's cursor was last parked (typically
+            // the spinner row Claude is currently writing to).
+            //
+            // Position priority on the resolved input row:
+            //   1. Right-most inverse cell — Claude's painted
+            //      caret marker (end-of-input blink, mid-line
+            //      edit, IME composition trailing edge).
+            //   2. Right-most non-blank cell + 1 — end of typed
+            //      content, where the next char would land.
+            //   3. Just after the prompt glyph — empty input box.
+            let mut found: Option<(u16, u16)> = None;
+            if let Some(row) = input_row {
+                for col in (0..cols).rev() {
+                    if screen.cell(row, col).is_some_and(|c| c.inverse()) {
+                        found = Some((row, col));
+                        break;
+                    }
+                }
+                if found.is_none() {
+                    let mut last_nonblank: Option<u16> = None;
+                    for col in (0..cols).rev() {
+                        if let Some(c) = screen.cell(row, col) {
+                            let s = c.contents();
+                            if !s.is_empty() && s != " " {
+                                last_nonblank = Some(col);
+                                break;
                             }
                         }
                     }
-                    found = best;
+                    let col = last_nonblank
+                        .map(|c| c.saturating_add(1).min(cols.saturating_sub(1)))
+                        .unwrap_or(2);
+                    found = Some((row, col));
                 }
             }
             if let Some(pos) = found {
