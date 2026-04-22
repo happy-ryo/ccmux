@@ -276,7 +276,11 @@ assigns a stable name, or attaches a role label.\n\
 - close_pane: Close a pane by id or name. Refuses when it's the last pane of the last tab.\n\
 - focus_pane: Move keyboard focus to another pane in the same tab.\n\
 - new_tab: Open a brand-new tab with a fresh pane and switch focus to it. Unlike the other \
-pane-control tools, this reaches outside the current tab.\n\n\
+pane-control tools, this reaches outside the current tab.\n\
+- inspect_pane: Snapshot the visible screen of a pane so you can detect interactive \
+prompts, banners, or mode indicators in another pane without asking it. Returns plain \
+text by default; pass format=\"grid\" for row-addressable JSON or lines=N to trim to \
+the last N rows.\n\n\
 Event monitoring:\n\
 - poll_events: Long-poll for pane lifecycle events (pane_started, pane_exited, \
 events_dropped). First call (no `since`) starts at \"right now\" — no historical replay. \
@@ -424,6 +428,34 @@ fn tools_spec() -> Value {
                         "description": "Optional free-form role label attached to the new pane."
                     }
                 }
+            }
+        },
+        {
+            "name": "inspect_pane",
+            "description": "Snapshot the visible screen of a pane in the current ccmux tab. Returns the rendered contents so you can detect interactive prompts (e.g. y/n confirmations), error banners, or mode indicators in another pane without asking its Claude. The `lines` option trims the response to the bottom N rows (blank rows preserved, useful for anchoring on a status bar). `format=\"grid\"` switches the text block to JSON with one row object per line; the full structured payload is always available in `structuredContent`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Pane to inspect. Numeric id (from list_panes), stable name, or the literal 'focused'. All-digit strings are always interpreted as ids — a pane literally named '7' cannot be addressed by name, use its id instead."
+                    },
+                    "lines": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional — trim the response to the bottom N rows of the screen grid. Blank rows are preserved. Omit for the full visible screen."
+                    },
+                    "include_cursor": {
+                        "type": "boolean",
+                        "description": "When true, the payload includes a `cursor` object ({visible, row, col}). Defaults to false."
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["text", "grid"],
+                        "description": "'text' (default) returns the plain rendered screen as the content text. 'grid' returns a JSON blob with one object per row. `structuredContent` is always populated with the full payload regardless of this choice."
+                    }
+                },
+                "required": ["target"]
             }
         },
         {
@@ -596,6 +628,7 @@ fn handle_tools_call(id: &Value, params: &Value, ctx: &PeerCtx) -> Result<Value>
         "close_pane" => handle_close_pane(id, &args, ctx),
         "focus_pane" => handle_focus_pane(id, &args, ctx),
         "new_tab" => handle_new_tab(id, &args, ctx),
+        "inspect_pane" => handle_inspect_pane(id, &args, ctx),
         "poll_events" => handle_poll_events(id, &args, ctx),
         other => err_response(id, -32601, &format!("unknown tool: {other}")),
     })
@@ -909,6 +942,114 @@ fn handle_new_tab(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
     }
 }
 
+// ── inspect_pane (pane screen snapshot over MCP) ──────────────
+
+/// Cap on the `lines` argument. The underlying screen is bounded by
+/// the pane's terminal height (< 1000 under any sane desktop), but
+/// accept a generous ceiling so callers can request "everything I can
+/// possibly see" without hand-tuning. Values above this are clamped
+/// silently to match how `ccmux inspect --lines` treats oversized
+/// requests.
+const INSPECT_MAX_LINES: u64 = 10_000;
+
+fn parse_inspect_format(raw: Option<&str>) -> std::result::Result<InspectFormat, String> {
+    match raw.map(str::trim) {
+        None | Some("") | Some("text") => Ok(InspectFormat::Text),
+        Some("grid") => Ok(InspectFormat::Grid),
+        Some(other) => Err(format!(
+            "invalid format {other:?}; expected 'text' or 'grid'"
+        )),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InspectFormat {
+    Text,
+    Grid,
+}
+
+/// Render the Inspect IPC payload's `text` field as the content
+/// block, defaulting to an empty string when absent so Claude
+/// never sees a missing field crash.
+fn inspect_text_block(payload: &Value) -> String {
+    payload
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Render the Inspect IPC payload's `lines` array as a
+/// human-inspectable JSON grid. Falls back to the raw payload text
+/// when the array is absent so a malformed payload doesn't silently
+/// produce an empty response.
+fn inspect_grid_block(payload: &Value) -> String {
+    match payload.get("lines") {
+        Some(lines) => serde_json::to_string_pretty(lines).unwrap_or_else(|_| lines.to_string()),
+        None => inspect_text_block(payload),
+    }
+}
+
+fn handle_inspect_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
+    let raw_target = args.get("target").and_then(|v| v.as_str()).unwrap_or("");
+    if raw_target.trim().is_empty() {
+        return err_response(
+            id,
+            -32602,
+            "inspect_pane requires a non-empty target (pane id or name)",
+        );
+    }
+    let target = parse_target(Some(raw_target));
+    let lines = args.get("lines").and_then(|v| v.as_u64()).map(|n| {
+        let clamped = n.min(INSPECT_MAX_LINES);
+        clamped as usize
+    });
+    let include_cursor = args
+        .get("include_cursor")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let format = match parse_inspect_format(args.get("format").and_then(|v| v.as_str())) {
+        Ok(f) => f,
+        Err(msg) => return err_response(id, -32602, &msg),
+    };
+
+    let (_caller_pane, endpoint) = match require_connected(ctx, id, "inspect pane") {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+
+    match client::send_request(
+        endpoint,
+        &Request::Inspect {
+            target,
+            lines,
+            include_cursor,
+        },
+    ) {
+        Ok(Response::Ok { data }) => {
+            let text = match format {
+                InspectFormat::Text => inspect_text_block(&data),
+                InspectFormat::Grid => inspect_grid_block(&data),
+            };
+            ok_response(
+                id,
+                json!({
+                    "content": [ { "type": "text", "text": text } ],
+                    "isError": false,
+                    "structuredContent": data,
+                }),
+            )
+        }
+        Ok(Response::Err { message, code }) => err_response(
+            id,
+            -32603,
+            &format!("ccmux refused inspect_pane: {}", fmt_code(&message, &code)),
+        ),
+        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+    }
+}
+
 // ── poll_events (long-poll over buffered lifecycle events) ────
 
 /// Outcome of a single buffer scan. Separated from the tool response
@@ -1161,7 +1302,9 @@ fn spawn_inbox_subscriber(ctx: PeerCtx) {
                             buf.push(value);
                             cvar.notify_all();
                         }
-                        Err(e) => log_stderr(&format!("failed to serialize event for poll buffer: {e}")),
+                        Err(e) => log_stderr(&format!(
+                            "failed to serialize event for poll buffer: {e}"
+                        )),
                     }
                 }
                 match event {
@@ -1427,6 +1570,7 @@ mod tests {
             "close_pane",
             "focus_pane",
             "new_tab",
+            "inspect_pane",
             "poll_events",
         ] {
             assert!(
@@ -1621,6 +1765,155 @@ mod tests {
         }
     }
 
+    // ── inspect_pane unit tests ───────────────────────────────
+
+    #[test]
+    fn parse_inspect_format_defaults_to_text() {
+        assert_eq!(parse_inspect_format(None), Ok(InspectFormat::Text));
+        assert_eq!(parse_inspect_format(Some("")), Ok(InspectFormat::Text));
+        assert_eq!(parse_inspect_format(Some("  ")), Ok(InspectFormat::Text));
+        assert_eq!(parse_inspect_format(Some("text")), Ok(InspectFormat::Text));
+    }
+
+    #[test]
+    fn parse_inspect_format_accepts_grid() {
+        assert_eq!(parse_inspect_format(Some("grid")), Ok(InspectFormat::Grid));
+    }
+
+    #[test]
+    fn parse_inspect_format_rejects_unknown() {
+        assert!(parse_inspect_format(Some("json")).is_err());
+        assert!(parse_inspect_format(Some("GRID")).is_err());
+    }
+
+    #[test]
+    fn inspect_text_block_returns_text_field() {
+        let payload = json!({
+            "text": "line1\nline2",
+            "lines": [{ "row": 0, "text": "line1" }],
+        });
+        assert_eq!(inspect_text_block(&payload), "line1\nline2");
+    }
+
+    #[test]
+    fn inspect_text_block_returns_empty_on_missing_field() {
+        // A malformed payload without `text` must not panic — callers
+        // rely on the tool never crashing the MCP dispatcher even when
+        // the inspect response shape regresses.
+        let payload = json!({ "lines": [] });
+        assert_eq!(inspect_text_block(&payload), "");
+    }
+
+    #[test]
+    fn inspect_grid_block_renders_lines_as_pretty_json() {
+        let payload = json!({
+            "lines": [
+                { "row": 0, "text": "hello" },
+                { "row": 1, "text": "world" },
+            ],
+            "text": "hello\nworld",
+        });
+        let out = inspect_grid_block(&payload);
+        // Pretty-printed JSON starts with `[` on its own line and
+        // contains each row's text.
+        assert!(out.starts_with('['), "expected JSON array, got {out:?}");
+        assert!(out.contains("\"hello\""), "missing line text: {out}");
+        assert!(out.contains("\"world\""), "missing line text: {out}");
+    }
+
+    #[test]
+    fn inspect_grid_block_falls_back_to_text_when_lines_missing() {
+        // Forward-compat: if a future ccmux server returns only `text`
+        // without `lines`, we still surface something useful instead of
+        // an empty string that looks like "nothing to see".
+        let payload = json!({ "text": "only-text" });
+        assert_eq!(inspect_grid_block(&payload), "only-text");
+    }
+
+    #[test]
+    fn handle_inspect_pane_rejects_empty_target() {
+        let ctx = PeerCtx {
+            mode: Mode::Detached {
+                reason: "not relevant".into(),
+            },
+            events: new_event_sink(),
+        };
+        let id = json!(1);
+        let resp = handle_inspect_pane(&id, &json!({ "target": "   " }), &ctx);
+        assert_eq!(
+            resp.get("error")
+                .and_then(|e| e.get("code"))
+                .and_then(|v| v.as_i64()),
+            Some(-32602),
+            "expected invalid-params error, got {resp}"
+        );
+    }
+
+    #[test]
+    fn handle_inspect_pane_rejects_unknown_format() {
+        // Format validation runs before any IPC round-trip, so a bad
+        // `format` must come back as -32602 even in detached mode.
+        let ctx = PeerCtx {
+            mode: Mode::Detached {
+                reason: "not relevant".into(),
+            },
+            events: new_event_sink(),
+        };
+        let id = json!(1);
+        let resp = handle_inspect_pane(&id, &json!({ "target": "1", "format": "csv" }), &ctx);
+        assert_eq!(
+            resp.get("error")
+                .and_then(|e| e.get("code"))
+                .and_then(|v| v.as_i64()),
+            Some(-32602),
+            "expected invalid-params error for bad format, got {resp}"
+        );
+    }
+
+    #[test]
+    fn handle_inspect_pane_detached_surfaces_friendly_text() {
+        // Detached mode must not error; instead return the standard
+        // "ccmux not reachable" text so Claude can relay it to the user.
+        let ctx = PeerCtx {
+            mode: Mode::Detached {
+                reason: "CCMUX_PANE_ID not set".into(),
+            },
+            events: new_event_sink(),
+        };
+        let id = json!(1);
+        let resp = handle_inspect_pane(&id, &json!({ "target": "1" }), &ctx);
+        let text = resp
+            .pointer("/result/content/0/text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("ccmux not reachable"),
+            "missing explanation in {text:?}"
+        );
+    }
+
+    #[test]
+    fn inspect_pane_schema_requires_target() {
+        // Pin the Issue #116 contract: the tool schema must enforce
+        // `target` as required so Claude can't call without it.
+        let spec = tools_spec();
+        let inspect = spec
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("inspect_pane"))
+            .expect("inspect_pane entry");
+        let required: Vec<&str> = inspect
+            .get("inputSchema")
+            .and_then(|s| s.get("required"))
+            .and_then(|r| r.as_array())
+            .expect("required array")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(required, vec!["target"], "{required:?}");
+    }
+
     // ── poll_events unit tests ────────────────────────────────
 
     fn dummy_endpoint() -> crate::ipc::endpoint::EndpointName {
@@ -1651,9 +1944,6 @@ mod tests {
     }
 
     fn pane_exited_value(id: usize, seq_ts: u64) -> Value {
-        // Use ts_ms as a proxy to verify the value round-trips intact
-        // through the buffer — the test doesn't depend on wall-clock
-        // ordering.
         json!({
             "type": "pane_exited",
             "id": id,
@@ -1688,15 +1978,12 @@ mod tests {
     #[test]
     fn event_buffer_evicts_oldest_beyond_cap() {
         let mut buf = EventBuffer::default();
-        // Push one past the cap and assert the window slid forward.
         for i in 0..(EVENT_BUFFER_CAP + 5) {
             buf.push(pane_started_value(i, i as u64));
         }
         assert_eq!(buf.events.len(), EVENT_BUFFER_CAP);
         let first = buf.events.front().unwrap().seq;
         let last = buf.events.back().unwrap().seq;
-        // Seqs never reset — the oldest surviving seq is 6 (1..=5
-        // evicted) and the newest is EVENT_BUFFER_CAP+5.
         assert_eq!(first, 6);
         assert_eq!(last, (EVENT_BUFFER_CAP + 5) as u64);
     }
@@ -1716,9 +2003,6 @@ mod tests {
 
     #[test]
     fn scan_buffer_reports_window_max_even_when_filter_excludes_all() {
-        // Two events in the window, neither matches the filter. The
-        // cursor must still advance past them so the caller doesn't
-        // re-fetch the same range next call.
         let mut buf = EventBuffer::default();
         buf.push(pane_started_value(1, 10));
         buf.push(pane_started_value(2, 20));
@@ -1733,7 +2017,6 @@ mod tests {
         let mut buf = EventBuffer::default();
         buf.push(pane_started_value(1, 10));
         buf.push(pane_exited_value(2, 20));
-        // start_cursor = 2 → only the second event is in-window.
         let scan = scan_buffer(&buf, 2, None);
         assert_eq!(scan.window_max_seq, Some(2));
         assert_eq!(scan.matched.len(), 1);
@@ -1786,6 +2069,32 @@ mod tests {
     }
 
     #[test]
+    fn effective_poll_timeout_applies_default_and_clamp() {
+        // Pure-function test so we can exercise the clamp without
+        // actually blocking a test thread for POLL_MAX_TIMEOUT_MS.
+        assert_eq!(
+            effective_poll_timeout(None),
+            Duration::from_millis(POLL_DEFAULT_TIMEOUT_MS)
+        );
+        assert_eq!(effective_poll_timeout(Some(0)), Duration::from_millis(0));
+        assert_eq!(
+            effective_poll_timeout(Some(500)),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            effective_poll_timeout(Some(10_000_000)),
+            Duration::from_millis(POLL_MAX_TIMEOUT_MS)
+        );
+        assert_eq!(
+            effective_poll_timeout(Some(u64::MAX)),
+            Duration::from_millis(POLL_MAX_TIMEOUT_MS)
+        );
+        // Compile-time guard: a future change that silently bumps
+        // POLL_MAX_TIMEOUT_MS past 60 s should not compile at all.
+        const _: () = assert!(POLL_MAX_TIMEOUT_MS <= 60_000);
+    }
+
+    #[test]
     fn handle_poll_events_detached_returns_empty_without_blocking() {
         let ctx = PeerCtx {
             mode: Mode::Detached {
@@ -1810,9 +2119,6 @@ mod tests {
 
     #[test]
     fn handle_poll_events_since_absent_starts_from_now_and_times_out_empty() {
-        // Seed some events *before* the call. Without a `since`, they
-        // must not leak into the response — the first call's semantics
-        // are "from now forward", matching `ccmux events --timeout`.
         let events = new_event_sink();
         {
             let (lock, _) = &*events;
@@ -1827,8 +2133,6 @@ mod tests {
             .get("events")
             .and_then(|v| v.as_array())
             .is_some_and(|a| a.is_empty()));
-        // next_since must point at the last-known seq (2), so the
-        // caller's next call with since="2" picks up from seq 3.
         assert_eq!(body.get("next_since").and_then(|v| v.as_str()), Some("2"));
     }
 
@@ -1838,12 +2142,11 @@ mod tests {
         {
             let (lock, _) = &*events;
             let mut buf = lock.lock().unwrap();
-            buf.push(pane_started_value(1, 10)); // seq 1
-            buf.push(pane_exited_value(1, 20)); // seq 2
-            buf.push(pane_started_value(2, 30)); // seq 3
+            buf.push(pane_started_value(1, 10));
+            buf.push(pane_exited_value(1, 20));
+            buf.push(pane_started_value(2, 30));
         }
         let ctx = connected_ctx_with(events);
-        // since=1 → want events with seq > 1.
         let resp = handle_poll_events(&json!(1), &json!({ "since": "1", "timeout_ms": 0 }), &ctx);
         let body = structured(&resp);
         let arr = body.get("events").and_then(|v| v.as_array()).unwrap();
@@ -1857,9 +2160,9 @@ mod tests {
         {
             let (lock, _) = &*events;
             let mut buf = lock.lock().unwrap();
-            buf.push(pane_started_value(1, 10)); // seq 1
-            buf.push(pane_exited_value(1, 20)); // seq 2
-            buf.push(pane_started_value(2, 30)); // seq 3
+            buf.push(pane_started_value(1, 10));
+            buf.push(pane_exited_value(1, 20));
+            buf.push(pane_started_value(2, 30));
         }
         let ctx = connected_ctx_with(events);
         let resp = handle_poll_events(
@@ -1869,9 +2172,6 @@ mod tests {
         );
         let body = structured(&resp);
         let arr = body.get("events").and_then(|v| v.as_array()).unwrap();
-        // Only the pane_exited event (seq 2) matches the filter, but
-        // the cursor advances past seq 3 so the next call won't
-        // re-scan the same range.
         assert_eq!(arr.len(), 1);
         assert_eq!(
             arr[0].get("type").and_then(|v| v.as_str()),
@@ -1882,7 +2182,6 @@ mod tests {
 
     #[test]
     fn handle_poll_events_timeout_zero_returns_immediately() {
-        // No events, no since, timeout 0 — must not block.
         let ctx = connected_ctx_with(new_event_sink());
         let start = Instant::now();
         let resp = handle_poll_events(&json!(1), &json!({ "timeout_ms": 0 }), &ctx);
@@ -1897,17 +2196,11 @@ mod tests {
 
     #[test]
     fn handle_poll_events_wakes_on_notify_before_deadline() {
-        // Start a poll in a worker with a long timeout, push an event
-        // from the main thread, and verify the poll returns well under
-        // the timeout with the new event.
         let events = new_event_sink();
         let ctx = connected_ctx_with(events.clone());
         let handle = thread::spawn(move || {
             handle_poll_events(&json!(1), &json!({ "timeout_ms": 10_000 }), &ctx)
         });
-        // Give the worker a moment to enter wait_timeout. 50ms is
-        // generous on a healthy machine; the test only cares that the
-        // notify path wakes it, not the exact latency.
         thread::sleep(Duration::from_millis(50));
         {
             let (lock, cvar) = &*events;
@@ -1927,35 +2220,6 @@ mod tests {
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0].get("id").and_then(|v| v.as_u64()), Some(7));
         assert_eq!(body.get("next_since").and_then(|v| v.as_str()), Some("1"));
-    }
-
-    #[test]
-    fn effective_poll_timeout_applies_default_and_clamp() {
-        // Pure-function test so we can exercise the clamp without
-        // actually blocking a test thread for POLL_MAX_TIMEOUT_MS.
-        assert_eq!(
-            effective_poll_timeout(None),
-            Duration::from_millis(POLL_DEFAULT_TIMEOUT_MS)
-        );
-        assert_eq!(effective_poll_timeout(Some(0)), Duration::from_millis(0));
-        assert_eq!(
-            effective_poll_timeout(Some(500)),
-            Duration::from_millis(500)
-        );
-        // Oversize requests get clamped to the hard cap, not honored.
-        // Belt-and-braces: also pin the cap itself at a reasonable
-        // ceiling so a silent raise would trip the test.
-        assert_eq!(
-            effective_poll_timeout(Some(10_000_000)),
-            Duration::from_millis(POLL_MAX_TIMEOUT_MS)
-        );
-        assert_eq!(
-            effective_poll_timeout(Some(u64::MAX)),
-            Duration::from_millis(POLL_MAX_TIMEOUT_MS)
-        );
-        // Compile-time guard: a future change that silently bumps
-        // POLL_MAX_TIMEOUT_MS past 60 s should not compile at all.
-        const _: () = assert!(POLL_MAX_TIMEOUT_MS <= 60_000);
     }
 
     #[test]
@@ -1980,6 +2244,7 @@ mod tests {
             ("close_pane", json!({ "target": "1" })),
             ("focus_pane", json!({ "target": "1" })),
             ("new_tab", json!({})),
+            ("inspect_pane", json!({ "target": "1" })),
             ("poll_events", json!({ "timeout_ms": 0 })),
         ] {
             let params = json!({ "name": name, "arguments": args });
