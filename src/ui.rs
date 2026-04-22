@@ -22,6 +22,14 @@ const ACTIVE_BG: Color = Color::Rgb(0x1c, 0x23, 0x33);
 const LINE_NUM_COLOR: Color = Color::Rgb(0x3d, 0x44, 0x4d);
 const SCROLL_BG: Color = Color::Rgb(0x2a, 0x1f, 0x14);
 
+/// How many cells left of the vt100 cursor to scan for Claude's
+/// inverse-video caret marker. End-of-input typically lands at
+/// offset 1, mid-line edits at offset 0, post-backspace states at
+/// offset 2; pad another cell of slack and stop. Increasing this
+/// risks picking up an unrelated inverse cell (e.g. selection
+/// highlight) further left.
+const CLAUDE_CARET_SCAN_RANGE: u16 = 3;
+
 const MIN_TERMINAL_WIDTH: u16 = 40;
 const MIN_TERMINAL_HEIGHT: u16 = 10;
 const MIN_PANE_AREA_WIDTH: u16 = 20;
@@ -797,18 +805,98 @@ fn render_terminal_content(
     // and calls `frame.set_cursor_position` itself, so last-write-wins
     // already puts the caret inside the composition box when the
     // overlay is open. No extra gate needed.
-    let show_cursor = is_focused && (!screen.hide_cursor() || pane.is_claude_running());
+    // Use the sticky `claude_ever_seen()` here (not
+    // `is_claude_running()`) because Claude rewrites its OSC title to
+    // the in-flight task name (e.g. `✶ Write a 5000-character novel`)
+    // and the live "claude" literal frequently drops out — at which
+    // point a non-latched check would flip to false and the hardware
+    // caret would vanish (Claude hides the PTY cursor via DECTCEM).
+    // `claude_ever_seen()` is sticky: once Claude has been observed
+    // running in this pane (by OSC title), keep treating the pane
+    // as a Claude pane even when Claude rewrites the title to a
+    // task-specific string that no longer literally contains
+    // "claude". A non-latched check would flip to false and the
+    // hardware caret would vanish — Claude hides the PTY cursor
+    // via DECTCEM and relies on the host cursor being shown over
+    // its own visible caret marker.
+    let claude_pane = pane.claude_ever_seen();
+    let show_cursor = is_focused && (!screen.hide_cursor() || claude_pane);
     if show_cursor {
         let cursor = screen.cursor_position();
-        // For Claude Code, shift cursor 1 column left because Claude draws its own
-        // block character at the cursor position, and the PTY cursor would otherwise
-        // appear one column after with a visible gap.
-        let cursor_x = if pane.is_claude_running() {
-            area.x + cursor.1.saturating_sub(1)
+        // Claude paints its visible caret as an inverse-video cell
+        // somewhere at-or-left-of the vt100 cursor. Scan a small
+        // window left of vt100 each frame for the closest inverse
+        // cell — that is Claude's actual visible caret. The exact
+        // offset varies by edit context (end-of-input ~1, mid-line
+        // 0, post-backspace 2), so detect rather than hard-code.
+        //
+        // When the scan finds nothing — either Claude is in the
+        // OFF phase of caret blink, or vt100 has briefly jumped to
+        // a remote row to paint streaming output — fall back to the
+        // most recently detected position cached on the Pane. This
+        // keeps the host caret pinned to Claude's input cell across
+        // both blink and streaming bursts instead of chasing vt100
+        // around the screen.
+        let detected: Option<(u16, u16)> = if claude_pane {
+            // Primary scan: small window left of the live vt100
+            // cursor. Fast and avoids latching onto unrelated
+            // inverse cells (selection highlights, status bars).
+            let mut found = None;
+            for offset in 0..=CLAUDE_CARET_SCAN_RANGE {
+                let col = match cursor.1.checked_sub(offset) {
+                    Some(c) => c,
+                    None => break,
+                };
+                if screen.cell(cursor.0, col).is_some_and(|c| c.inverse()) {
+                    found = Some((cursor.0, col));
+                    break;
+                }
+            }
+            // Fallback: vt100 has jumped to a remote row to paint
+            // streaming output and is not coming back, but the
+            // user is still navigating in the input box and Claude
+            // is repainting the inverse caret there. Re-scan the
+            // *cached* row entirely and pick the inverse cell
+            // closest to the cached column. Without this, the
+            // small primary window misses Claude's redraw and the
+            // host caret freezes at the pre-jump position no
+            // matter how the user moves the cursor.
+            if found.is_none() {
+                let cached = pane.claude_caret_cache.lock().ok().and_then(|g| *g);
+                if let Some((cached_row, cached_col)) = cached {
+                    let cols = screen.size().1;
+                    let mut best: Option<(u16, u16)> = None;
+                    let mut best_dist = u16::MAX;
+                    for col in 0..cols {
+                        if screen.cell(cached_row, col).is_some_and(|c| c.inverse()) {
+                            let dist = col.abs_diff(cached_col);
+                            if dist < best_dist {
+                                best_dist = dist;
+                                best = Some((cached_row, col));
+                            }
+                        }
+                    }
+                    found = best;
+                }
+            }
+            if let Some(pos) = found {
+                if let Ok(mut g) = pane.claude_caret_cache.lock() {
+                    *g = Some(pos);
+                }
+            }
+            found
         } else {
-            area.x + cursor.1
+            None
         };
-        let cursor_y = area.y + cursor.0;
+        let target: (u16, u16) = if claude_pane {
+            detected
+                .or_else(|| pane.claude_caret_cache.lock().ok().and_then(|g| *g))
+                .unwrap_or(cursor)
+        } else {
+            cursor
+        };
+        let cursor_x = area.x + target.1;
+        let cursor_y = area.y + target.0;
         if cursor_x < area.x + area.width && cursor_y < area.y + area.height {
             frame.set_cursor_position((cursor_x, cursor_y));
         }

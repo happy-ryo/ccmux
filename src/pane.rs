@@ -31,6 +31,22 @@ pub struct Pane {
     /// observed. Used to gate `pending_startup` flushing so the command
     /// is not eaten by an initializing shell.
     pub prompt_seen: Arc<AtomicBool>,
+    /// Latches to `true` the first time the OSC window title contains
+    /// "claude". Never reset. Consumed only by `claude_ever_seen()` —
+    /// **not** by `is_claude_running()` — because the latch must not
+    /// leak into call sites that genuinely care whether Claude is the
+    /// current foreground app (e.g. `shell_accepts_command_injection`
+    /// gating `Alt+P`).
+    pub claude_seen: Arc<AtomicBool>,
+    /// Cache of the most recently *detected* Claude caret cell on
+    /// this pane: `(host_row, host_col)` in vt100 screen coords —
+    /// already shifted to land on Claude's inverse-video marker.
+    /// Used as the host-caret position whenever the renderer cannot
+    /// detect an inverse cell near the live vt100 cursor (Claude is
+    /// painting elsewhere on the screen, blink is in its OFF phase,
+    /// etc.). Sticky: only refreshed by detection, never expired
+    /// or auto-cleared. Default `None` until the first detection.
+    pub claude_caret_cache: Mutex<Option<(u16, u16)>>,
     /// Free-form label for tools/humans. Unlike the name (registered in
     /// `Workspace.pane_names` as the unique IPC key), `role` may repeat
     /// and may be absent. Surfaced via `ccmux list`.
@@ -116,6 +132,8 @@ impl Pane {
         let scrollback_clone = Arc::clone(&scrollback_counter);
         let prompt_seen = Arc::new(AtomicBool::new(false));
         let prompt_seen_clone = Arc::clone(&prompt_seen);
+        let claude_seen = Arc::new(AtomicBool::new(false));
+        let claude_seen_clone = Arc::clone(&claude_seen);
         let reader_handle = thread::spawn(move || {
             pty_reader_thread(
                 reader,
@@ -123,6 +141,7 @@ impl Pane {
                 title_clone,
                 scrollback_clone,
                 prompt_seen_clone,
+                claude_seen_clone,
                 id,
                 event_tx,
             );
@@ -143,6 +162,8 @@ impl Pane {
             total_scrollback: scrollback_counter,
             pending_startup: None,
             prompt_seen,
+            claude_seen,
+            claude_caret_cache: Mutex::new(None),
             role: None,
             exit_event_emitted: false,
         };
@@ -211,7 +232,6 @@ impl Pane {
         // The TUI app (e.g. Claude Code) receives SIGWINCH and will redraw.
         // A brief blank frame is preferable to overlapping garbled output.
         parser.process(b"\x1b[2J\x1b[H");
-
         Ok(true)
     }
 
@@ -383,14 +403,37 @@ impl Pane {
         ))
     }
 
-    /// Check if Claude Code is running in this pane (by window title).
+    /// Check if Claude Code is running in this pane (by current window
+    /// title). This is the live signal — it flips back to `false` the
+    /// moment Claude exits or rewrites the title to something that
+    /// doesn't contain "claude". Use this for foreground-app gating
+    /// (e.g. `shell_accepts_command_injection`); use
+    /// `claude_ever_seen` for cursor-rendering purposes that must
+    /// survive Claude's transient task-name title rewrites.
     pub fn is_claude_running(&self) -> bool {
         if let Ok(t) = self.title.lock() {
-            let lower = t.to_lowercase();
-            lower.contains("claude")
+            t.to_lowercase().contains("claude")
         } else {
             false
         }
+    }
+
+    /// Sticky check: has Claude ever been observed running in this
+    /// pane (by OSC title)? Latches on first match and never resets.
+    ///
+    /// Needed because Claude rewrites its window title to reflect the
+    /// in-flight task (e.g. `✶ Write a 5000-character novel`), and
+    /// those rewrites frequently drop the literal "claude" string. A
+    /// non-latched check would flip to `false` mid-task and the
+    /// renderer would stop showing the hardware caret — Claude keeps
+    /// the PTY cursor hidden via DECTCEM and relies on the host
+    /// terminal cursor being placed over its own block glyph.
+    ///
+    /// Scoped narrowly to the cursor-rendering path so call sites
+    /// that need an honest "is Claude the current foreground app?"
+    /// signal still get one via `is_claude_running()`.
+    pub fn claude_ever_seen(&self) -> bool {
+        self.claude_seen.load(Ordering::Relaxed)
     }
 
     /// Whether it is safe to synthesize a shell command line into this
@@ -625,12 +668,14 @@ fn encode_utf8_coord(out: &mut Vec<u8>, coord: u16) {
 }
 
 /// Background thread that reads PTY output and feeds it to vt100 parser.
+#[allow(clippy::too_many_arguments)]
 fn pty_reader_thread(
     mut reader: Box<dyn Read + Send>,
     parser: Arc<Mutex<vt100::Parser>>,
     title: Arc<Mutex<String>>,
     scrollback_count: Arc<std::sync::atomic::AtomicUsize>,
     prompt_seen: Arc<AtomicBool>,
+    claude_seen: Arc<AtomicBool>,
     pane_id: usize,
     event_tx: Sender<AppEvent>,
 ) {
@@ -672,6 +717,15 @@ fn pty_reader_thread(
 
                 // Detect OSC 0/2 (window title) — used to detect Claude Code
                 if let Some(new_title) = extract_osc_title(data) {
+                    // Latch: once Claude has been seen in this pane,
+                    // remember it forever so transient title rewrites
+                    // (Claude reflects the in-flight task in the title
+                    // and the literal "claude" frequently drops out)
+                    // do not flip `is_claude_running()` to false and
+                    // hide the hardware caret. See `Pane::claude_seen`.
+                    if new_title.to_lowercase().contains("claude") {
+                        claude_seen.store(true, Ordering::Relaxed);
+                    }
                     if let Ok(mut t) = title.lock() {
                         *t = new_title;
                     }
