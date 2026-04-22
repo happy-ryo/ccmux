@@ -32,8 +32,11 @@
 
 pub mod install;
 
+use std::collections::VecDeque;
 use std::io::{self, BufRead, Write};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
@@ -71,10 +74,66 @@ pub fn run() -> Result<()> {
 
 /// Runtime context shared between the main stdio loop and the inbox
 /// subscriber thread. Cloneable because both halves read the same
-/// `(pane_id, endpoint)` pair to contact the ccmux server.
+/// `(pane_id, endpoint)` pair to contact the ccmux server and the
+/// same [`EventSink`] for `poll_events` buffering.
 #[derive(Clone)]
 struct PeerCtx {
     mode: Mode,
+    events: EventSink,
+}
+
+/// Soft cap on the per-process lifecycle event buffer used by
+/// `poll_events`. Older entries are evicted on overflow; a caller that
+/// falls behind by more than this many events will miss the oldest
+/// ones. The upstream `EventsDropped` meta-event (emitted when the
+/// subscribe channel itself drops) still flows through as a regular
+/// buffered event so the caller can notice.
+const EVENT_BUFFER_CAP: usize = 4096;
+
+/// Default `timeout_ms` for `poll_events` when the caller doesn't
+/// specify one. Long enough to absorb a quiet period without spinning,
+/// short enough to keep the stdio dispatcher responsive if Claude Code
+/// wants to interleave tool calls.
+const POLL_DEFAULT_TIMEOUT_MS: u64 = 2000;
+
+/// Hard cap on `timeout_ms` regardless of what the caller requests.
+/// A single `poll_events` call blocks the mcp-peer stdio dispatcher
+/// for its duration — this bound keeps an unresponsive client from
+/// wedging the whole MCP.
+const POLL_MAX_TIMEOUT_MS: u64 = 30_000;
+
+#[derive(Clone, Debug)]
+struct SeqEvent {
+    seq: u64,
+    value: Value,
+}
+
+/// Ring buffer of lifecycle events assigned monotonic 1-based
+/// sequence numbers. `seq = 0` is the "nothing yet" sentinel returned
+/// as `next_since` when the caller polls an empty stream.
+#[derive(Default)]
+struct EventBuffer {
+    events: VecDeque<SeqEvent>,
+    /// Seq of the most recently pushed event. `0` before any event.
+    last_seq: u64,
+}
+
+impl EventBuffer {
+    fn push(&mut self, value: Value) -> u64 {
+        self.last_seq = self.last_seq.saturating_add(1);
+        let seq = self.last_seq;
+        self.events.push_back(SeqEvent { seq, value });
+        while self.events.len() > EVENT_BUFFER_CAP {
+            self.events.pop_front();
+        }
+        seq
+    }
+}
+
+type EventSink = Arc<(Mutex<EventBuffer>, Condvar)>;
+
+fn new_event_sink() -> EventSink {
+    Arc::new((Mutex::new(EventBuffer::default()), Condvar::new()))
 }
 
 #[derive(Clone)]
@@ -92,6 +151,7 @@ enum Mode {
 
 impl PeerCtx {
     fn load() -> Self {
+        let events = new_event_sink();
         let pane_id = match std::env::var(ENV_PANE_ID) {
             Ok(s) => match s.parse::<usize>() {
                 Ok(v) => v,
@@ -100,6 +160,7 @@ impl PeerCtx {
                         mode: Mode::Detached {
                             reason: format!("{ENV_PANE_ID} is set but not a valid usize: {s:?}"),
                         },
+                        events,
                     };
                 }
             },
@@ -110,17 +171,20 @@ impl PeerCtx {
                             "{ENV_PANE_ID} not set — Claude Code was not launched by ccmux"
                         ),
                     },
+                    events,
                 };
             }
         };
         match endpoint_from_env() {
             Ok(endpoint) => PeerCtx {
                 mode: Mode::Connected { pane_id, endpoint },
+                events,
             },
             Err(e) => PeerCtx {
                 mode: Mode::Detached {
                     reason: format!("{ENV_SOCKET} missing or invalid: {e}"),
                 },
+                events,
             },
         }
     }
@@ -217,6 +281,13 @@ pane-control tools, this reaches outside the current tab.\n\
 prompts, banners, or mode indicators in another pane without asking it. Returns plain \
 text by default; pass format=\"grid\" for row-addressable JSON or lines=N to trim to \
 the last N rows.\n\n\
+Event monitoring:\n\
+- poll_events: Long-poll for pane lifecycle events (pane_started, pane_exited, \
+events_dropped). First call (no `since`) starts at \"right now\" — no historical replay. \
+Each response includes a `next_since` cursor to pass back on the next call. Optional \
+`types` filter narrows returned events without losing the cursor advance, but it does \
+not extend the long-poll: a non-matching event still returns early with events=[] \
+and an advanced cursor, so the caller should re-poll for the next window.\n\n\
 Launching Claude Code: when spawn_pane or new_tab is asked to start Claude Code, pass \
 command=\"claude\" (plus any normal claude arguments you want). The MCP automatically \
 upgrades a bare `claude` invocation to the Alt+P peer-enabled form \
@@ -386,6 +457,29 @@ fn tools_spec() -> Value {
                 },
                 "required": ["target"]
             }
+        },
+        {
+            "name": "poll_events",
+            "description": "Long-poll for pane lifecycle events (pane_started, pane_exited, events_dropped, and any forward-compatible variants). Returns events accumulated since the given cursor; if none are buffered, blocks up to `timeout_ms` for the next one. The first call (omit `since`) starts at \"right now\" — no historical replay, matching `ccmux events --timeout` semantics. Each response body is a JSON object with `next_since` (an opaque cursor string to pass back) and `events` (an array of event objects in ccmux's wire format).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "since": {
+                        "type": "string",
+                        "description": "Cursor from a prior response's `next_since`. Omit on the first call to start at the present."
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "description": "Maximum milliseconds to block when no event is immediately available. Default 2000; clamped to a 30000 ms maximum. Pass 0 for a non-blocking drain.",
+                        "minimum": 0
+                    },
+                    "types": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional filter — only return events whose `type` field is in this list. The cursor still advances past filtered-out events so they won't reappear. Note: the filter narrows returned results but does not extend the long-poll; if a non-matching event arrives during the wait, `poll_events` returns early with `events: []` and an advanced cursor, and the caller should re-poll for the next window."
+                    }
+                }
+            }
         }
     ])
 }
@@ -535,6 +629,7 @@ fn handle_tools_call(id: &Value, params: &Value, ctx: &PeerCtx) -> Result<Value>
         "focus_pane" => handle_focus_pane(id, &args, ctx),
         "new_tab" => handle_new_tab(id, &args, ctx),
         "inspect_pane" => handle_inspect_pane(id, &args, ctx),
+        "poll_events" => handle_poll_events(id, &args, ctx),
         other => err_response(id, -32601, &format!("unknown tool: {other}")),
     })
 }
@@ -955,6 +1050,133 @@ fn handle_inspect_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
     }
 }
 
+// ── poll_events (long-poll over buffered lifecycle events) ────
+
+/// Outcome of a single buffer scan. Separated from the tool response
+/// so the scan can be written as a pure function against a locked
+/// `EventBuffer`, independent of the long-poll / timeout / JSON shape.
+#[derive(Debug, PartialEq)]
+struct PollScan {
+    /// Events in the window (seq >= start_cursor) that matched the
+    /// optional `types` filter.
+    matched: Vec<Value>,
+    /// Highest seq in the window regardless of filter. `None` when no
+    /// events fall in the window at all. When `Some`, this becomes the
+    /// response's `next_since` so filtered-out events don't make the
+    /// caller re-scan the same range.
+    window_max_seq: Option<u64>,
+}
+
+fn scan_buffer(buf: &EventBuffer, start_cursor: u64, types_filter: Option<&[String]>) -> PollScan {
+    let mut matched = Vec::new();
+    let mut window_max_seq: Option<u64> = None;
+    for e in &buf.events {
+        if e.seq < start_cursor {
+            continue;
+        }
+        window_max_seq = Some(window_max_seq.map_or(e.seq, |prev| prev.max(e.seq)));
+        if event_matches_filter(&e.value, types_filter) {
+            matched.push(e.value.clone());
+        }
+    }
+    PollScan {
+        matched,
+        window_max_seq,
+    }
+}
+
+fn event_matches_filter(event: &Value, filter: Option<&[String]>) -> bool {
+    let Some(filter) = filter else {
+        return true;
+    };
+    if filter.is_empty() {
+        return true;
+    }
+    let Some(ty) = event.get("type").and_then(|v| v.as_str()) else {
+        return false;
+    };
+    filter.iter().any(|f| f == ty)
+}
+
+fn poll_events_payload(events: Vec<Value>, next_since: u64) -> Value {
+    let body = json!({
+        "next_since": next_since.to_string(),
+        "events": events,
+    });
+    let text = serde_json::to_string(&body).unwrap_or_else(|_| body.to_string());
+    json!({
+        "content": [ { "type": "text", "text": text } ],
+        "isError": false,
+        "structuredContent": body,
+    })
+}
+
+/// Compute the effective long-poll duration from a caller-supplied
+/// `timeout_ms`. Missing → default; oversize → clamped to the hard
+/// cap. Factored out so the clamping can be unit-tested without
+/// actually blocking a test thread for the full cap.
+fn effective_poll_timeout(requested: Option<u64>) -> Duration {
+    let ms = requested
+        .unwrap_or(POLL_DEFAULT_TIMEOUT_MS)
+        .min(POLL_MAX_TIMEOUT_MS);
+    Duration::from_millis(ms)
+}
+
+fn handle_poll_events(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
+    let since = args
+        .get("since")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| s.trim().parse::<u64>().ok());
+    let timeout = effective_poll_timeout(args.get("timeout_ms").and_then(|v| v.as_u64()));
+    let types_filter: Option<Vec<String>> =
+        args.get("types").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        });
+
+    // Detached mode: no subscriber thread is running, so the buffer
+    // will stay empty forever. Return immediately with a cursor of 0
+    // rather than blocking the stdio dispatcher for `timeout_ms`.
+    if matches!(ctx.mode, Mode::Detached { .. }) {
+        return ok_response(id, poll_events_payload(Vec::new(), since.unwrap_or(0)));
+    }
+
+    let (lock, cvar) = &*ctx.events;
+    let mut buf = lock.lock().unwrap_or_else(|p| p.into_inner());
+
+    // Start inclusive lower bound. `since` is "the highest seq the
+    // caller already knows about", so the next delivery window is
+    // `since + 1`. `since = None` means "no history — give me events
+    // that arrive after this call".
+    let start_cursor = match since {
+        Some(s) => s.saturating_add(1),
+        None => buf.last_seq.saturating_add(1),
+    };
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        let scan = scan_buffer(&buf, start_cursor, types_filter.as_deref());
+        if let Some(max_seq) = scan.window_max_seq {
+            return ok_response(id, poll_events_payload(scan.matched, max_seq));
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            // Timeout with no events in window. Hold the cursor where
+            // it was so the next call resumes from the same point.
+            let next = start_cursor.saturating_sub(1);
+            return ok_response(id, poll_events_payload(Vec::new(), next));
+        }
+        let remaining = deadline - now;
+        buf = match cvar.wait_timeout(buf, remaining) {
+            Ok((g, _)) => g,
+            Err(p) => p.into_inner().0,
+        };
+    }
+}
+
 // ── stdin dispatch loop ───────────────────────────────────────
 
 fn dispatch(req: &Value, ctx: &PeerCtx) -> Result<Vec<Value>> {
@@ -1055,14 +1277,36 @@ fn stdio_loop(ctx: &PeerCtx) -> Result<()> {
 /// detached — it dies naturally when the IPC stream closes (ccmux
 /// exited) or when the subprocess is killed.
 fn spawn_inbox_subscriber(ctx: PeerCtx) {
-    let Mode::Connected { pane_id, endpoint } = ctx.mode else {
+    let Mode::Connected { pane_id, endpoint } = ctx.mode.clone() else {
         return;
     };
     let endpoint_clone = endpoint.clone();
+    let sink = ctx.events.clone();
     thread::Builder::new()
         .name("ccmux-mcp-peer-inbox".into())
         .spawn(move || {
             let result = client::subscribe_events(&endpoint_clone, |event| {
+                // Buffer lifecycle events for `poll_events` before we
+                // consume `event` in the match below. Heartbeat is a
+                // wire-keepalive (not a lifecycle signal) and PeerInbox
+                // is delivered out-of-band via channel notifications,
+                // so neither belongs in the poll buffer. Everything
+                // else — PaneStarted / PaneExited / EventsDropped plus
+                // any forward-compatible variants added later — gets
+                // stashed.
+                if should_buffer_for_poll(&event) {
+                    match serde_json::to_value(&event) {
+                        Ok(value) => {
+                            let (lock, cvar) = &*sink;
+                            let mut buf = lock.lock().unwrap_or_else(|p| p.into_inner());
+                            buf.push(value);
+                            cvar.notify_all();
+                        }
+                        Err(e) => log_stderr(&format!(
+                            "failed to serialize event for poll buffer: {e}"
+                        )),
+                    }
+                }
                 match event {
                     ipc::Event::PeerInbox {
                         target_pane,
@@ -1104,8 +1348,9 @@ fn spawn_inbox_subscriber(ctx: PeerCtx) {
                     }
                     // PaneStarted / PaneExited / Heartbeat / other
                     // PeerInbox not addressed to us: intentionally
-                    // ignored — the MCP subprocess only surfaces its
-                    // own inbox and the drop notice above.
+                    // ignored for channel-push purposes. Lifecycle
+                    // variants were already buffered above for
+                    // poll_events to surface.
                     _ => {}
                 }
                 true
@@ -1116,6 +1361,16 @@ fn spawn_inbox_subscriber(ctx: PeerCtx) {
             }
         })
         .expect("spawn inbox subscriber thread");
+}
+
+/// True for events that belong in the `poll_events` ring buffer. A
+/// free function so tests can pin the classification without spinning
+/// up a subscriber thread.
+fn should_buffer_for_poll(event: &ipc::Event) -> bool {
+    !matches!(
+        event,
+        ipc::Event::Heartbeat { .. } | ipc::Event::PeerInbox { .. }
+    )
 }
 
 #[cfg(test)]
@@ -1316,6 +1571,7 @@ mod tests {
             "focus_pane",
             "new_tab",
             "inspect_pane",
+            "poll_events",
         ] {
             assert!(
                 names.contains(&expected),
@@ -1372,6 +1628,7 @@ mod tests {
             mode: Mode::Detached {
                 reason: "CCMUX_PANE_ID not set".to_string(),
             },
+            events: new_event_sink(),
         };
         let id = json!(1);
         let resp = handle_list_panes(&id, &ctx);
@@ -1402,6 +1659,7 @@ mod tests {
             mode: Mode::Detached {
                 reason: "not relevant".into(),
             },
+            events: new_event_sink(),
         };
         let id = json!(1);
         let resp = handle_close_pane(&id, &json!({ "target": "   " }), &ctx);
@@ -1424,6 +1682,7 @@ mod tests {
             mode: Mode::Detached {
                 reason: "not relevant".into(),
             },
+            events: new_event_sink(),
         };
         let id = json!(1);
         let resp = handle_focus_pane(&id, &json!({ "target": "" }), &ctx);
@@ -1445,6 +1704,7 @@ mod tests {
             mode: Mode::Detached {
                 reason: "not relevant".into(),
             },
+            events: new_event_sink(),
         };
         let id = json!(1);
         let resp = handle_spawn_pane(&id, &json!({}), &ctx);
@@ -1576,6 +1836,7 @@ mod tests {
             mode: Mode::Detached {
                 reason: "not relevant".into(),
             },
+            events: new_event_sink(),
         };
         let id = json!(1);
         let resp = handle_inspect_pane(&id, &json!({ "target": "   " }), &ctx);
@@ -1596,6 +1857,7 @@ mod tests {
             mode: Mode::Detached {
                 reason: "not relevant".into(),
             },
+            events: new_event_sink(),
         };
         let id = json!(1);
         let resp = handle_inspect_pane(&id, &json!({ "target": "1", "format": "csv" }), &ctx);
@@ -1616,6 +1878,7 @@ mod tests {
             mode: Mode::Detached {
                 reason: "CCMUX_PANE_ID not set".into(),
             },
+            events: new_event_sink(),
         };
         let id = json!(1);
         let resp = handle_inspect_pane(&id, &json!({ "target": "1" }), &ctx);
@@ -1651,6 +1914,314 @@ mod tests {
         assert_eq!(required, vec!["target"], "{required:?}");
     }
 
+    // ── poll_events unit tests ────────────────────────────────
+
+    fn dummy_endpoint() -> crate::ipc::endpoint::EndpointName {
+        // Cross-platform dummy endpoint constructor for tests that
+        // only need a Connected mode — the poll_events handler never
+        // opens the endpoint because it reads from the in-process
+        // EventSink, so the actual value doesn't matter.
+        #[cfg(windows)]
+        {
+            crate::ipc::endpoint::EndpointName::pipe("ccmux-test-endpoint")
+        }
+        #[cfg(unix)]
+        {
+            crate::ipc::endpoint::EndpointName::socket(std::path::PathBuf::from(
+                "ccmux-test-endpoint",
+            ))
+        }
+    }
+
+    fn connected_ctx_with(events: EventSink) -> PeerCtx {
+        PeerCtx {
+            mode: Mode::Connected {
+                pane_id: 1,
+                endpoint: dummy_endpoint(),
+            },
+            events,
+        }
+    }
+
+    fn pane_exited_value(id: usize, seq_ts: u64) -> Value {
+        json!({
+            "type": "pane_exited",
+            "id": id,
+            "ts_ms": seq_ts,
+        })
+    }
+
+    fn pane_started_value(id: usize, seq_ts: u64) -> Value {
+        json!({
+            "type": "pane_started",
+            "id": id,
+            "ts_ms": seq_ts,
+        })
+    }
+
+    fn structured(resp: &Value) -> &Value {
+        resp.pointer("/result/structuredContent")
+            .expect("structuredContent")
+    }
+
+    #[test]
+    fn event_buffer_assigns_monotonic_one_based_seqs() {
+        let mut buf = EventBuffer::default();
+        let a = buf.push(pane_started_value(1, 10));
+        let b = buf.push(pane_exited_value(1, 20));
+        assert_eq!(a, 1);
+        assert_eq!(b, 2);
+        assert_eq!(buf.last_seq, 2);
+        assert_eq!(buf.events.len(), 2);
+    }
+
+    #[test]
+    fn event_buffer_evicts_oldest_beyond_cap() {
+        let mut buf = EventBuffer::default();
+        for i in 0..(EVENT_BUFFER_CAP + 5) {
+            buf.push(pane_started_value(i, i as u64));
+        }
+        assert_eq!(buf.events.len(), EVENT_BUFFER_CAP);
+        let first = buf.events.front().unwrap().seq;
+        let last = buf.events.back().unwrap().seq;
+        assert_eq!(first, 6);
+        assert_eq!(last, (EVENT_BUFFER_CAP + 5) as u64);
+    }
+
+    #[test]
+    fn scan_buffer_empty_window_returns_none() {
+        let buf = EventBuffer::default();
+        let scan = scan_buffer(&buf, 1, None);
+        assert_eq!(
+            scan,
+            PollScan {
+                matched: Vec::new(),
+                window_max_seq: None
+            }
+        );
+    }
+
+    #[test]
+    fn scan_buffer_reports_window_max_even_when_filter_excludes_all() {
+        let mut buf = EventBuffer::default();
+        buf.push(pane_started_value(1, 10));
+        buf.push(pane_started_value(2, 20));
+        let filter = vec!["pane_exited".to_string()];
+        let scan = scan_buffer(&buf, 1, Some(&filter));
+        assert!(scan.matched.is_empty());
+        assert_eq!(scan.window_max_seq, Some(2));
+    }
+
+    #[test]
+    fn scan_buffer_skips_events_before_cursor() {
+        let mut buf = EventBuffer::default();
+        buf.push(pane_started_value(1, 10));
+        buf.push(pane_exited_value(2, 20));
+        let scan = scan_buffer(&buf, 2, None);
+        assert_eq!(scan.window_max_seq, Some(2));
+        assert_eq!(scan.matched.len(), 1);
+        assert_eq!(scan.matched[0].get("id").and_then(|v| v.as_u64()), Some(2));
+    }
+
+    #[test]
+    fn event_matches_filter_accepts_when_filter_absent_or_empty() {
+        let ev = pane_exited_value(1, 0);
+        assert!(event_matches_filter(&ev, None));
+        let empty: Vec<String> = Vec::new();
+        assert!(event_matches_filter(&ev, Some(&empty)));
+    }
+
+    #[test]
+    fn event_matches_filter_checks_type_field() {
+        let ev = pane_exited_value(1, 0);
+        let yes = vec!["pane_exited".to_string(), "pane_started".to_string()];
+        let no = vec!["pane_started".to_string()];
+        assert!(event_matches_filter(&ev, Some(&yes)));
+        assert!(!event_matches_filter(&ev, Some(&no)));
+    }
+
+    #[test]
+    fn should_buffer_for_poll_excludes_heartbeat_and_peer_inbox() {
+        assert!(!should_buffer_for_poll(&ipc::Event::Heartbeat { ts_ms: 1 }));
+        assert!(!should_buffer_for_poll(&ipc::Event::PeerInbox {
+            target_pane: 1,
+            from_pane: 2,
+            from_name: None,
+            body: "x".into(),
+            ts_ms: 1,
+        }));
+        assert!(should_buffer_for_poll(&ipc::Event::PaneStarted {
+            id: 1,
+            name: None,
+            role: None,
+            ts_ms: 1,
+        }));
+        assert!(should_buffer_for_poll(&ipc::Event::PaneExited {
+            id: 1,
+            name: None,
+            role: None,
+            ts_ms: 1,
+        }));
+        assert!(should_buffer_for_poll(&ipc::Event::EventsDropped {
+            count: 3,
+            ts_ms: 1,
+        }));
+    }
+
+    #[test]
+    fn effective_poll_timeout_applies_default_and_clamp() {
+        // Pure-function test so we can exercise the clamp without
+        // actually blocking a test thread for POLL_MAX_TIMEOUT_MS.
+        assert_eq!(
+            effective_poll_timeout(None),
+            Duration::from_millis(POLL_DEFAULT_TIMEOUT_MS)
+        );
+        assert_eq!(effective_poll_timeout(Some(0)), Duration::from_millis(0));
+        assert_eq!(
+            effective_poll_timeout(Some(500)),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            effective_poll_timeout(Some(10_000_000)),
+            Duration::from_millis(POLL_MAX_TIMEOUT_MS)
+        );
+        assert_eq!(
+            effective_poll_timeout(Some(u64::MAX)),
+            Duration::from_millis(POLL_MAX_TIMEOUT_MS)
+        );
+        // Compile-time guard: a future change that silently bumps
+        // POLL_MAX_TIMEOUT_MS past 60 s should not compile at all.
+        const _: () = assert!(POLL_MAX_TIMEOUT_MS <= 60_000);
+    }
+
+    #[test]
+    fn handle_poll_events_detached_returns_empty_without_blocking() {
+        let ctx = PeerCtx {
+            mode: Mode::Detached {
+                reason: "no socket".into(),
+            },
+            events: new_event_sink(),
+        };
+        let start = Instant::now();
+        let resp = handle_poll_events(&json!(1), &json!({ "timeout_ms": 5_000 }), &ctx);
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "detached mode must not block; elapsed = {:?}",
+            start.elapsed()
+        );
+        let body = structured(&resp);
+        assert_eq!(body.get("next_since").and_then(|v| v.as_str()), Some("0"));
+        assert!(body
+            .get("events")
+            .and_then(|v| v.as_array())
+            .is_some_and(|a| a.is_empty()));
+    }
+
+    #[test]
+    fn handle_poll_events_since_absent_starts_from_now_and_times_out_empty() {
+        let events = new_event_sink();
+        {
+            let (lock, _) = &*events;
+            let mut buf = lock.lock().unwrap();
+            buf.push(pane_started_value(1, 10));
+            buf.push(pane_exited_value(1, 20));
+        }
+        let ctx = connected_ctx_with(events);
+        let resp = handle_poll_events(&json!(1), &json!({ "timeout_ms": 0 }), &ctx);
+        let body = structured(&resp);
+        assert!(body
+            .get("events")
+            .and_then(|v| v.as_array())
+            .is_some_and(|a| a.is_empty()));
+        assert_eq!(body.get("next_since").and_then(|v| v.as_str()), Some("2"));
+    }
+
+    #[test]
+    fn handle_poll_events_with_since_returns_strictly_after_cursor() {
+        let events = new_event_sink();
+        {
+            let (lock, _) = &*events;
+            let mut buf = lock.lock().unwrap();
+            buf.push(pane_started_value(1, 10));
+            buf.push(pane_exited_value(1, 20));
+            buf.push(pane_started_value(2, 30));
+        }
+        let ctx = connected_ctx_with(events);
+        let resp = handle_poll_events(&json!(1), &json!({ "since": "1", "timeout_ms": 0 }), &ctx);
+        let body = structured(&resp);
+        let arr = body.get("events").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(arr.len(), 2, "expected seqs 2 and 3, got {arr:?}");
+        assert_eq!(body.get("next_since").and_then(|v| v.as_str()), Some("3"));
+    }
+
+    #[test]
+    fn handle_poll_events_types_filter_narrows_matched_but_advances_cursor() {
+        let events = new_event_sink();
+        {
+            let (lock, _) = &*events;
+            let mut buf = lock.lock().unwrap();
+            buf.push(pane_started_value(1, 10));
+            buf.push(pane_exited_value(1, 20));
+            buf.push(pane_started_value(2, 30));
+        }
+        let ctx = connected_ctx_with(events);
+        let resp = handle_poll_events(
+            &json!(1),
+            &json!({ "since": "0", "timeout_ms": 0, "types": ["pane_exited"] }),
+            &ctx,
+        );
+        let body = structured(&resp);
+        let arr = body.get("events").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(
+            arr[0].get("type").and_then(|v| v.as_str()),
+            Some("pane_exited")
+        );
+        assert_eq!(body.get("next_since").and_then(|v| v.as_str()), Some("3"));
+    }
+
+    #[test]
+    fn handle_poll_events_timeout_zero_returns_immediately() {
+        let ctx = connected_ctx_with(new_event_sink());
+        let start = Instant::now();
+        let resp = handle_poll_events(&json!(1), &json!({ "timeout_ms": 0 }), &ctx);
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "zero timeout must be non-blocking; elapsed = {:?}",
+            start.elapsed()
+        );
+        let body = structured(&resp);
+        assert_eq!(body.get("next_since").and_then(|v| v.as_str()), Some("0"));
+    }
+
+    #[test]
+    fn handle_poll_events_wakes_on_notify_before_deadline() {
+        let events = new_event_sink();
+        let ctx = connected_ctx_with(events.clone());
+        let handle = thread::spawn(move || {
+            handle_poll_events(&json!(1), &json!({ "timeout_ms": 10_000 }), &ctx)
+        });
+        thread::sleep(Duration::from_millis(50));
+        {
+            let (lock, cvar) = &*events;
+            let mut buf = lock.lock().unwrap();
+            buf.push(pane_exited_value(7, 42));
+            cvar.notify_all();
+        }
+        let start = Instant::now();
+        let resp = handle.join().expect("poll worker panicked");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "notify failed to wake the poll; elapsed = {:?}",
+            start.elapsed()
+        );
+        let body = structured(&resp);
+        let arr = body.get("events").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0].get("id").and_then(|v| v.as_u64()), Some(7));
+        assert_eq!(body.get("next_since").and_then(|v| v.as_str()), Some("1"));
+    }
+
     #[test]
     fn tools_call_routes_to_pane_control_handlers() {
         // Smoke test on the dispatch: each new tool name must route
@@ -1664,6 +2235,7 @@ mod tests {
             mode: Mode::Detached {
                 reason: "not relevant".into(),
             },
+            events: new_event_sink(),
         };
         let id = json!(1);
         for (name, args) in [
@@ -1673,6 +2245,7 @@ mod tests {
             ("focus_pane", json!({ "target": "1" })),
             ("new_tab", json!({})),
             ("inspect_pane", json!({ "target": "1" })),
+            ("poll_events", json!({ "timeout_ms": 0 })),
         ] {
             let params = json!({ "name": name, "arguments": args });
             let resp = handle_tools_call(&id, &params, &ctx).expect("dispatch");
