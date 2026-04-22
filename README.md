@@ -23,7 +23,7 @@ A lightweight terminal multiplexer built specifically for running multiple [Clau
 - **Scrollback** — 10,000 lines of terminal history per pane
 - **Dark theme** — Claude-inspired color scheme
 - **Cross-platform** — Windows, macOS, Linux
-- **Single binary** — ~1MB, no runtime dependencies
+- **Single binary** — ~8–10 MB depending on platform, no runtime dependencies
 
 ## Install
 
