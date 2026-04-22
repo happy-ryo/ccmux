@@ -741,7 +741,7 @@ fn opt_string(args: &Value, key: &str) -> Option<String> {
 /// - Preserve the caller's trailing arguments: `"claude --resume"`
 ///   becomes `"claude --dangerously-load-development-channels
 ///   server:ccmux-peers --resume"`.
-fn upgrade_claude_command(cmd: &str) -> String {
+pub(crate) fn upgrade_claude_command(cmd: &str) -> String {
     if cmd.contains("--dangerously-load-development-channels") {
         return cmd.to_string();
     }
