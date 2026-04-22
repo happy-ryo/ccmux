@@ -280,7 +280,11 @@ pane-control tools, this reaches outside the current tab.\n\
 - inspect_pane: Snapshot the visible screen of a pane so you can detect interactive \
 prompts, banners, or mode indicators in another pane without asking it. Returns plain \
 text by default; pass format=\"grid\" for row-addressable JSON or lines=N to trim to \
-the last N rows.\n\n\
+the last N rows.\n\
+- send_keys: Send raw key input (y/n, Shift+Tab, Esc, arrow keys, Ctrl+letters, etc.) to a \
+pane's PTY. Use this to answer interactive prompts or drive a TUI when the target isn't a \
+Claude instance that can read send_message. DISTINCT from send_message, which delivers \
+logical messages between Claudes via channel notifications.\n\n\
 Event monitoring:\n\
 - poll_events: Long-poll for pane lifecycle events (pane_started, pane_exited, \
 events_dropped). First call (no `since`) starts at \"right now\" — no historical replay. \
@@ -459,6 +463,33 @@ fn tools_spec() -> Value {
             }
         },
         {
+            "name": "send_keys",
+            "description": "Send raw keystrokes to a pane's PTY — useful for answering interactive prompts (y/n), toggling Claude Code's permission mode (Shift+Tab), or driving any TUI that expects real key events instead of logical messages. Named special keys are translated to terminal escape sequences server-side; `text` passes through verbatim; the two can be combined. NOTE: this is NOT send_message. send_message delivers a logical peer message to another Claude via a channel notification; send_keys writes bytes into a PTY and is visible to whatever application is running in that pane.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Pane to send to. Numeric id, stable name, or 'focused'. All-digit strings are always ids."
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Literal text sent before any named keys. Use this for anything that doesn't need special-key translation (e.g. 'y', 'npm install')."
+                    },
+                    "keys": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Ordered list of named special keys appended after `text`. Supported vocabulary: Enter / Return, Tab, Shift+Tab (a.k.a. BackTab), Esc / Escape, Backspace, Delete / Del, Up / Down / Left / Right, Home, End, PageUp, PageDown, Space, Ctrl+<letter> where <letter> is A-Z. Unknown names return an -32602 invalid-params error."
+                    },
+                    "enter": {
+                        "type": "boolean",
+                        "description": "Convenience — append an Enter after `text` and `keys`. Equivalent to adding 'Enter' to the end of `keys`."
+                    }
+                },
+                "required": ["target"]
+            }
+        },
+        {
             "name": "poll_events",
             "description": "Long-poll for pane lifecycle events (pane_started, pane_exited, events_dropped, and any forward-compatible variants). Returns events accumulated since the given cursor; if none are buffered, blocks up to `timeout_ms` for the next one. The first call (omit `since`) starts at \"right now\" — no historical replay, matching `ccmux events --timeout` semantics. Each response body is a JSON object with `next_since` (an opaque cursor string to pass back) and `events` (an array of event objects in ccmux's wire format).",
             "inputSchema": {
@@ -629,6 +660,7 @@ fn handle_tools_call(id: &Value, params: &Value, ctx: &PeerCtx) -> Result<Value>
         "focus_pane" => handle_focus_pane(id, &args, ctx),
         "new_tab" => handle_new_tab(id, &args, ctx),
         "inspect_pane" => handle_inspect_pane(id, &args, ctx),
+        "send_keys" => handle_send_keys(id, &args, ctx),
         "poll_events" => handle_poll_events(id, &args, ctx),
         other => err_response(id, -32601, &format!("unknown tool: {other}")),
     })
@@ -1044,6 +1076,148 @@ fn handle_inspect_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
             id,
             -32603,
             &format!("ccmux refused inspect_pane: {}", fmt_code(&message, &code)),
+        ),
+        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+    }
+}
+
+// ── send_keys (raw PTY key input over MCP) ────────────────────
+
+/// Translate a named special-key token into the byte sequence that a
+/// VT-style terminal expects. Returns `None` for unknown names so the
+/// caller surfaces a -32602 invalid-params error with the verbatim
+/// input.
+///
+/// The vocabulary is intentionally conservative — the named set
+/// covers the keys aainc-ops-style orchestrators actually need today
+/// (y/n answers, Shift+Tab for Claude Code's Plan → AcceptEdits
+/// toggle, Esc, arrow keys for menus, Ctrl+<letter> for signalling).
+/// Escape sequences match xterm's default mode (no application-cursor
+/// quirks) since that is what ccmux's vt100 parser speaks.
+fn translate_key(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    match trimmed {
+        // Raw-mode TUIs read bytes directly from the PTY — including
+        // Claude Code, which is the prime target here — so Enter must
+        // be carriage return (CR, 0x0D), not line feed. This matches
+        // what ccmux's own `Request::Send { append_enter: true }`
+        // writes on the send path.
+        "Enter" | "Return" => return Some("\r".into()),
+        "Tab" => return Some("\t".into()),
+        "Shift+Tab" | "BackTab" => return Some("\x1b[Z".into()),
+        "Esc" | "Escape" => return Some("\x1b".into()),
+        "Backspace" => return Some("\x7f".into()),
+        "Delete" | "Del" => return Some("\x1b[3~".into()),
+        "Up" => return Some("\x1b[A".into()),
+        "Down" => return Some("\x1b[B".into()),
+        "Right" => return Some("\x1b[C".into()),
+        "Left" => return Some("\x1b[D".into()),
+        "Home" => return Some("\x1b[H".into()),
+        "End" => return Some("\x1b[F".into()),
+        "PageUp" => return Some("\x1b[5~".into()),
+        "PageDown" => return Some("\x1b[6~".into()),
+        "Space" => return Some(" ".into()),
+        _ => {}
+    }
+    if let Some(suffix) = trimmed.strip_prefix("Ctrl+") {
+        let mut chars = suffix.chars();
+        if let (Some(c), None) = (chars.next(), chars.next()) {
+            let upper = c.to_ascii_uppercase();
+            if upper.is_ascii_alphabetic() {
+                let byte = (upper as u8) - b'A' + 1;
+                return Some(String::from(byte as char));
+            }
+        }
+    }
+    None
+}
+
+/// Assemble the final byte stream to push at the target pane from the
+/// tool arguments. Returns an error string on an unknown key or an
+/// empty request (no text, no keys, no enter) so the caller produces a
+/// -32602 JSON-RPC error without an IPC round-trip.
+fn build_send_keys_payload(
+    text: &str,
+    keys: Option<&[Value]>,
+    append_enter: bool,
+) -> std::result::Result<String, String> {
+    let mut buffer = String::from(text);
+    if let Some(keys) = keys {
+        for key in keys {
+            let name = key
+                .as_str()
+                .ok_or_else(|| format!("send_keys.keys elements must be strings; got {key:?}"))?;
+            let bytes = translate_key(name).ok_or_else(|| {
+                format!(
+                    "send_keys: unknown key {name:?}. See the tool description for the supported vocabulary."
+                )
+            })?;
+            buffer.push_str(&bytes);
+        }
+    }
+    if append_enter {
+        // Mirror the Enter key mapping above: raw-mode TUIs want CR,
+        // not LF. Using \r here also keeps this path byte-identical
+        // to `Request::Send { append_enter: true }` in ccmux itself,
+        // so callers don't have to reason about two Enter dialects.
+        buffer.push('\r');
+    }
+    if buffer.is_empty() {
+        return Err(
+            "send_keys requires at least one of `text`, a non-empty `keys` array, or `enter=true`"
+                .into(),
+        );
+    }
+    Ok(buffer)
+}
+
+fn handle_send_keys(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
+    let raw_target = args.get("target").and_then(|v| v.as_str()).unwrap_or("");
+    if raw_target.trim().is_empty() {
+        return err_response(
+            id,
+            -32602,
+            "send_keys requires a non-empty target (pane id or name)",
+        );
+    }
+    let target = parse_target(Some(raw_target));
+
+    let text = args
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let keys = args.get("keys").and_then(|v| v.as_array());
+    let enter = args.get("enter").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    let payload = match build_send_keys_payload(text, keys.map(|v| v.as_slice()), enter) {
+        Ok(p) => p,
+        Err(msg) => return err_response(id, -32602, &msg),
+    };
+
+    let (_caller_pane, endpoint) = match require_connected(ctx, id, "send keys") {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    match client::send_request(
+        endpoint,
+        &Request::Send {
+            target,
+            data: payload,
+            // We assemble the Enter bit into `payload` above so every
+            // call path (text-only / keys-only / combined) takes the
+            // same branch server-side. `append_enter` stays false.
+            append_enter: false,
+        },
+    ) {
+        Ok(Response::Ok { .. }) => ok_response(
+            id,
+            tool_text_result(&format!("Sent keys to {}.", raw_target.trim())),
+        ),
+        Ok(Response::Err { message, code }) => err_response(
+            id,
+            -32603,
+            &format!("ccmux refused send_keys: {}", fmt_code(&message, &code)),
         ),
         Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
         Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
@@ -1571,6 +1745,7 @@ mod tests {
             "focus_pane",
             "new_tab",
             "inspect_pane",
+            "send_keys",
             "poll_events",
         ] {
             assert!(
@@ -1914,6 +2089,107 @@ mod tests {
         assert_eq!(required, vec!["target"], "{required:?}");
     }
 
+    // ── send_keys unit tests ──────────────────────────────────
+
+    #[test]
+    fn translate_key_maps_common_named_keys() {
+        assert_eq!(translate_key("Enter").as_deref(), Some("\r"));
+        assert_eq!(translate_key("Return").as_deref(), Some("\r"));
+        assert_eq!(translate_key("Tab").as_deref(), Some("\t"));
+        assert_eq!(translate_key("Shift+Tab").as_deref(), Some("\x1b[Z"));
+        assert_eq!(translate_key("BackTab").as_deref(), Some("\x1b[Z"));
+        assert_eq!(translate_key("Esc").as_deref(), Some("\x1b"));
+        assert_eq!(translate_key("Escape").as_deref(), Some("\x1b"));
+        assert_eq!(translate_key("Backspace").as_deref(), Some("\x7f"));
+        assert_eq!(translate_key("Delete").as_deref(), Some("\x1b[3~"));
+        assert_eq!(translate_key("Up").as_deref(), Some("\x1b[A"));
+        assert_eq!(translate_key("Down").as_deref(), Some("\x1b[B"));
+        assert_eq!(translate_key("Right").as_deref(), Some("\x1b[C"));
+        assert_eq!(translate_key("Left").as_deref(), Some("\x1b[D"));
+        assert_eq!(translate_key("Space").as_deref(), Some(" "));
+    }
+
+    #[test]
+    fn translate_key_trims_whitespace() {
+        assert_eq!(translate_key("  Enter  ").as_deref(), Some("\r"));
+    }
+
+    #[test]
+    fn translate_key_handles_ctrl_letter_case_insensitively() {
+        assert_eq!(translate_key("Ctrl+C").as_deref(), Some("\x03"));
+        assert_eq!(translate_key("Ctrl+c").as_deref(), Some("\x03"));
+        assert_eq!(translate_key("Ctrl+A").as_deref(), Some("\x01"));
+        assert_eq!(translate_key("Ctrl+Z").as_deref(), Some("\x1a"));
+    }
+
+    #[test]
+    fn translate_key_rejects_unknown_and_malformed_ctrl() {
+        assert_eq!(translate_key("Foo"), None);
+        assert_eq!(translate_key("Ctrl+"), None);
+        assert_eq!(translate_key("Ctrl+AB"), None);
+        assert_eq!(translate_key("Ctrl+1"), None);
+        assert_eq!(translate_key(""), None);
+    }
+
+    #[test]
+    fn build_send_keys_payload_combines_text_keys_and_enter() {
+        // Enter is CR (0x0D), not LF, because raw-mode TUIs read bytes
+        // directly from the PTY.
+        let keys = vec![Value::String("Enter".to_string())];
+        let out = build_send_keys_payload("y", Some(&keys), false).unwrap();
+        assert_eq!(out, "y\r");
+
+        let out = build_send_keys_payload("y", None, true).unwrap();
+        assert_eq!(out, "y\r");
+
+        let keys = vec![Value::String("Shift+Tab".to_string())];
+        let out = build_send_keys_payload("", Some(&keys), false).unwrap();
+        assert_eq!(out, "\x1b[Z");
+    }
+
+    #[test]
+    fn build_send_keys_payload_rejects_empty_input() {
+        let err = build_send_keys_payload("", None, false).unwrap_err();
+        assert!(err.contains("at least one"), "{err}");
+
+        let err = build_send_keys_payload("", Some(&[]), false).unwrap_err();
+        assert!(err.contains("at least one"), "{err}");
+    }
+
+    #[test]
+    fn build_send_keys_payload_rejects_unknown_key() {
+        let keys = vec![Value::String("Hyper+Meta".to_string())];
+        let err = build_send_keys_payload("", Some(&keys), false).unwrap_err();
+        assert!(err.contains("unknown key"), "{err}");
+        assert!(err.contains("Hyper+Meta"), "{err}");
+    }
+
+    #[test]
+    fn build_send_keys_payload_rejects_non_string_key() {
+        let keys = vec![Value::Number(42.into())];
+        let err = build_send_keys_payload("", Some(&keys), false).unwrap_err();
+        assert!(err.contains("must be strings"), "{err}");
+    }
+
+    #[test]
+    fn handle_send_keys_rejects_empty_target() {
+        let ctx = PeerCtx {
+            mode: Mode::Detached {
+                reason: "not relevant".into(),
+            },
+            events: new_event_sink(),
+        };
+        let id = json!(1);
+        let resp = handle_send_keys(&id, &json!({ "target": "   ", "text": "y" }), &ctx);
+        assert_eq!(
+            resp.get("error")
+                .and_then(|e| e.get("code"))
+                .and_then(|v| v.as_i64()),
+            Some(-32602),
+            "expected invalid-params, got {resp}"
+        );
+    }
+
     // ── poll_events unit tests ────────────────────────────────
 
     fn dummy_endpoint() -> crate::ipc::endpoint::EndpointName {
@@ -1999,6 +2275,77 @@ mod tests {
                 window_max_seq: None
             }
         );
+    }
+
+    #[test]
+    fn handle_send_keys_rejects_unknown_key_name_before_ipc() {
+        let ctx = PeerCtx {
+            mode: Mode::Detached {
+                reason: "not relevant".into(),
+            },
+            events: new_event_sink(),
+        };
+        let id = json!(1);
+        let resp = handle_send_keys(&id, &json!({ "target": "1", "keys": ["Nonsense"] }), &ctx);
+        assert_eq!(
+            resp.get("error")
+                .and_then(|e| e.get("code"))
+                .and_then(|v| v.as_i64()),
+            Some(-32602),
+            "expected invalid-params, got {resp}"
+        );
+        let message = resp
+            .pointer("/error/message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(
+            message.contains("Nonsense"),
+            "missing key in message: {message}"
+        );
+    }
+
+    #[test]
+    fn handle_send_keys_detached_surfaces_friendly_text() {
+        let ctx = PeerCtx {
+            mode: Mode::Detached {
+                reason: "CCMUX_PANE_ID not set".into(),
+            },
+            events: new_event_sink(),
+        };
+        let id = json!(1);
+        let resp = handle_send_keys(
+            &id,
+            &json!({ "target": "1", "text": "y", "enter": true }),
+            &ctx,
+        );
+        let text = resp
+            .pointer("/result/content/0/text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("ccmux not reachable"),
+            "expected friendly detached text, got {text:?}"
+        );
+    }
+
+    #[test]
+    fn send_keys_schema_requires_target() {
+        let spec = tools_spec();
+        let entry = spec
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("send_keys"))
+            .expect("send_keys entry");
+        let required: Vec<&str> = entry
+            .get("inputSchema")
+            .and_then(|s| s.get("required"))
+            .and_then(|r| r.as_array())
+            .expect("required array")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(required, vec!["target"]);
     }
 
     #[test]
@@ -2245,6 +2592,7 @@ mod tests {
             ("focus_pane", json!({ "target": "1" })),
             ("new_tab", json!({})),
             ("inspect_pane", json!({ "target": "1" })),
+            ("send_keys", json!({ "target": "1", "text": "y" })),
             ("poll_events", json!({ "timeout_ms": 0 })),
         ] {
             let params = json!({ "name": name, "arguments": args });
