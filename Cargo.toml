@@ -72,7 +72,13 @@ name = "ccmux"
 # caret is pinned to the input row found by its `❯` prompt glyph
 # rather than chasing vt100's cursor. Patch bump because the change
 # is a bug fix on top of 0.15.0's editing baseline.
-version = "0.15.1"
+# 0.15.2 follow-up to #138: tighten the sticky Claude-caret
+# tracking so panes that previously hosted Claude Code don't stay
+# latched into caret-tracking mode after returning to a normal
+# shell prompt. Sticky-caret path now engages only while the PTY
+# cursor is actually hidden; new regression test covers the gating
+# helper. Patch bump — pure bug fix on top of 0.15.1.
+version = "0.15.2"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
