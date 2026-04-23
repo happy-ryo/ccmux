@@ -224,6 +224,37 @@ pub enum IpcCommand {
         #[arg(long)]
         count: Option<usize>,
     },
+    /// Rename or (re)assign the stable `name` / `role` of an existing
+    /// pane. Useful when a session was launched without the intended
+    /// layout, so a pane needs to be adopted into a role-based
+    /// addressing scheme retroactively. Pass `--clear-name` /
+    /// `--clear-role` to remove the current value; `--to-name` /
+    /// `--to-role` to set. Exactly one of target selectors is required.
+    Rename {
+        /// Target pane by stable name.
+        #[arg(long, conflicts_with_all = ["id", "focused"])]
+        name: Option<String>,
+        /// Target pane by numeric id.
+        #[arg(long, conflicts_with_all = ["name", "focused"])]
+        id: Option<usize>,
+        /// Target the focused pane (default if no other selector is
+        /// given).
+        #[arg(long, conflicts_with_all = ["name", "id"])]
+        focused: bool,
+        /// New stable name to assign. Refused with `name_in_use` if
+        /// another pane in the same tab already owns it.
+        #[arg(long, conflicts_with = "clear_name")]
+        to_name: Option<String>,
+        /// Remove the pane's stable name.
+        #[arg(long, conflicts_with = "to_name")]
+        clear_name: bool,
+        /// New role label to assign.
+        #[arg(long, conflicts_with = "clear_role")]
+        to_role: Option<String>,
+        /// Remove the pane's role label.
+        #[arg(long, conflicts_with = "to_role")]
+        clear_role: bool,
+    },
     /// Run as a stdio MCP server for Claude Code (see issue #97). Not
     /// a true IPC subcommand — it doesn't dispatch a request and
     /// expect a reply. `main` intercepts this variant and hands off to
@@ -358,6 +389,36 @@ impl IpcCommand {
                     id: id.clone(),
                     role: role.clone(),
                     cwd: resolve_cli_cwd(cwd.as_deref())?,
+                })
+            }
+            IpcCommand::Rename {
+                name,
+                id,
+                focused,
+                to_name,
+                clear_name,
+                to_role,
+                clear_role,
+            } => {
+                if to_name.is_none() && !clear_name && to_role.is_none() && !clear_role {
+                    anyhow::bail!(
+                        "rename requires at least one of --to-name / --clear-name / --to-role / --clear-role"
+                    );
+                }
+                let name_change: Option<Option<String>> = if *clear_name {
+                    Some(None)
+                } else {
+                    to_name.as_ref().map(|s| Some(s.clone()))
+                };
+                let role_change: Option<Option<String>> = if *clear_role {
+                    Some(None)
+                } else {
+                    to_role.as_ref().map(|s| Some(s.clone()))
+                };
+                Ok(Request::SetPaneIdentity {
+                    target: pick_ref(name, id, *focused)?,
+                    name: name_change,
+                    role: role_change,
                 })
             }
             IpcCommand::Events { .. } => Ok(Request::Subscribe),

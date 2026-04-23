@@ -78,7 +78,15 @@ name = "ccmux"
 # shell prompt. Sticky-caret path now engages only while the PTY
 # cursor is actually hidden; new regression test covers the gating
 # helper. Patch bump — pure bug fix on top of 0.15.1.
-version = "0.16.0"
+# 0.16.0 adds structured cwd support to pane creation APIs (#135 / #140):
+# spawn_pane / new_tab / ccmux split / ccmux new-tab / layout TOML all accept
+# an optional `cwd` field, PaneInfo.cwd is surfaced by list_panes, and invalid
+# cwd fails with err_code::CWD_INVALID before any layout mutation. Minor bump
+# because it's a new API surface, not a bug fix.
+# 0.17.0 adds set_pane_identity MCP tool and ccmux rename CLI (#136 / #142)
+# for renaming / (re)assigning name / role on existing panes. Minor bump
+# because it's a new API surface, not a bug fix.
+version = "0.17.0"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 

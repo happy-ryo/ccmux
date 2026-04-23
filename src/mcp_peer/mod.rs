@@ -551,6 +551,27 @@ fn tools_spec() -> Value {
             }
         },
         {
+            "name": "set_pane_identity",
+            "description": "Rename or (re)assign the stable `name` and/or `role` of an existing pane in the current tab. Use this to recover from sessions launched without the intended layout (e.g. when the secretary pane was spawned without an `id`, so peers can't address it as `to_id=\"secretary\"`). Both fields use three-state semantics: omit the key to keep the current value, pass `null` to clear it, or pass a string to set it. Validation: name cannot be empty, all-digits, or collide with another pane in this tab; allowed characters are [A-Za-z0-9_-]. Role has no uniqueness constraint. Returns the updated pane record so callers can confirm without a separate list round-trip.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Pane to update. Numeric id (from list_panes), stable name, or the literal 'focused' (default). All-digit strings are always ids."
+                    },
+                    "name": {
+                        "type": ["string", "null"],
+                        "description": "New name, or null to clear. Omit to leave unchanged."
+                    },
+                    "role": {
+                        "type": ["string", "null"],
+                        "description": "New role label, or null to clear. Omit to leave unchanged."
+                    }
+                }
+            }
+        },
+        {
             "name": "poll_events",
             "description": "Long-poll for pane lifecycle events (pane_started, pane_exited, events_dropped, and any forward-compatible variants). Returns events accumulated since the given cursor; if none are buffered, blocks up to `timeout_ms` for the next one. The first call (omit `since`) starts at \"right now\" — no historical replay, matching `ccmux events --timeout` semantics. Each response body is a JSON object with `next_since` (an opaque cursor string to pass back) and `events` (an array of event objects in ccmux's wire format).",
             "inputSchema": {
@@ -724,6 +745,7 @@ fn handle_tools_call(id: &Value, params: &Value, ctx: &PeerCtx) -> Result<Value>
         "inspect_pane" => handle_inspect_pane(id, &args, ctx),
         "send_keys" => handle_send_keys(id, &args, ctx),
         "poll_events" => handle_poll_events(id, &args, ctx),
+        "set_pane_identity" => handle_set_pane_identity(id, &args, ctx),
         other => err_response(id, -32601, &format!("unknown tool: {other}")),
     })
 }
@@ -1317,6 +1339,92 @@ fn handle_new_tab(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
             id,
             -32603,
             &format!("ccmux refused new_tab: {}", fmt_code(&message, &code)),
+        ),
+        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+    }
+}
+
+// ── set_pane_identity (rename / re-assign role) ──────────────
+
+/// Three-state arg extractor for `set_pane_identity`. Maps:
+///
+/// - key absent → `None`                       (leave unchanged)
+/// - key present & JSON null → `Some(None)`    (clear)
+/// - key present & JSON string → `Some(Some))` (set)
+///
+/// Any other JSON type (number, bool, object, array) is rejected —
+/// the schema forbids it but Claude might still try, and silently
+/// accepting a coerced value would confuse the three-state contract.
+fn parse_identity_field(
+    args: &Value,
+    key: &str,
+) -> std::result::Result<Option<Option<String>>, String> {
+    match args.get(key) {
+        None => Ok(None),
+        Some(v) if v.is_null() => Ok(Some(None)),
+        Some(Value::String(s)) => Ok(Some(Some(s.clone()))),
+        Some(other) => Err(format!("`{key}` must be a string or null; got {}", other)),
+    }
+}
+
+fn handle_set_pane_identity(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
+    let target = parse_target(args.get("target").and_then(|v| v.as_str()));
+    let name = match parse_identity_field(args, "name") {
+        Ok(v) => v,
+        Err(msg) => return err_response(id, -32602, &msg),
+    };
+    let role = match parse_identity_field(args, "role") {
+        Ok(v) => v,
+        Err(msg) => return err_response(id, -32602, &msg),
+    };
+    if name.is_none() && role.is_none() {
+        // Nothing to do — return an explicit error so Claude doesn't
+        // silently succeed on a typo'd payload (`nmae` instead of
+        // `name`, etc.). The server would otherwise treat it as a
+        // valid "no-op" call.
+        return err_response(
+            id,
+            -32602,
+            "set_pane_identity requires at least one of `name` / `role`",
+        );
+    }
+
+    let (_caller_pane, endpoint) = match require_connected(ctx, id, "set pane identity") {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    match client::send_request(endpoint, &Request::SetPaneIdentity { target, name, role }) {
+        Ok(Response::Ok { data }) => {
+            // Surface the updated pane record as a human-readable
+            // line so Claude can confirm the new identity without
+            // parsing structuredContent.
+            let pane = data.get("pane").cloned().unwrap_or(Value::Null);
+            let pane_id = pane.get("id").and_then(|v| v.as_u64());
+            let pane_name = pane
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let pane_role = pane
+                .get("role")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let mut parts = Vec::new();
+            if let Some(n) = pane_id {
+                parts.push(format!("id={n}"));
+            }
+            parts.push(format!("name={}", pane_name.as_deref().unwrap_or("(none)")));
+            parts.push(format!("role={}", pane_role.as_deref().unwrap_or("(none)")));
+            let msg = format!("Updated pane: {}.", parts.join(" "));
+            ok_response(id, tool_text_result(&msg))
+        }
+        Ok(Response::Err { message, code }) => err_response(
+            id,
+            -32603,
+            &format!(
+                "ccmux refused set_pane_identity: {}",
+                fmt_code(&message, &code)
+            ),
         ),
         Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
         Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
@@ -2125,6 +2233,23 @@ mod tests {
     }
 
     #[test]
+    fn tools_spec_advertises_set_pane_identity() {
+        // Guard for issue #136: the rename API must appear in the MCP
+        // tool list so Claude knows it exists without reading docs.
+        let spec = tools_spec();
+        let names: Vec<&str> = spec
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t.get("name").and_then(|v| v.as_str()))
+            .collect();
+        assert!(
+            names.contains(&"set_pane_identity"),
+            "set_pane_identity missing from tools list: {names:?}"
+        );
+    }
+
+    #[test]
     fn tools_spec_advertises_spawn_claude_pane() {
         // Guard for #137 — the higher-level Claude launcher must be
         // discoverable from tools/list so orchestrators find it
@@ -2382,6 +2507,24 @@ mod tests {
             .and_then(|e| e.get("code"))
             .and_then(|c| c.as_i64());
         assert_eq!(err_code, Some(-32602), "resp={resp}");
+    }
+
+    #[test]
+    fn set_pane_identity_rejects_empty_payload() {
+        // MCP-side guard: calling set_pane_identity with neither
+        // `name` nor `role` must return an invalid-params error so
+        // typo'd payloads (`nmae`) don't silently succeed.
+        let ctx = connected_ctx_with(Arc::new((
+            Mutex::new(EventBuffer::default()),
+            Condvar::new(),
+        )));
+        let id = json!(1);
+        let resp = handle_set_pane_identity(&id, &json!({ "target": "focused" }), &ctx);
+        let error_code = resp
+            .get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_i64());
+        assert_eq!(error_code, Some(-32602), "resp={resp}");
     }
 
     #[test]

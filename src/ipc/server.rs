@@ -548,6 +548,32 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
             body,
             reply,
         }),
+        Request::SetPaneIdentity { target, name, role } => {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            if command_tx
+                .send(AppCommand::SetPaneIdentity {
+                    target,
+                    name,
+                    role,
+                    reply: reply_tx,
+                })
+                .is_err()
+            {
+                return Response::err_coded(err_code::SHUTTING_DOWN, "app shutting down");
+            }
+            match reply_rx.recv_timeout(APP_REPLY_TIMEOUT) {
+                Ok(Ok(pane)) => match serde_json::to_value(&pane) {
+                    Ok(v) => Response::ok_value(serde_json::json!({ "pane": v })),
+                    Err(e) => {
+                        Response::err_coded(err_code::INTERNAL, format!("serialize pane: {e}"))
+                    }
+                },
+                Ok(Err(err)) => err.into_response(),
+                Err(e) => {
+                    Response::err_coded(err_code::APP_TIMEOUT, format!("app did not respond: {e}"))
+                }
+            }
+        }
     }
 }
 
