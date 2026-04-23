@@ -241,6 +241,7 @@ _Pane control (same tab, except `new_tab`):_
 | `close_pane(target)` | Closes a pane. Refuses with `last_pane` when it's the only pane of the only tab. |
 | `focus_pane(target)` | Moves keyboard focus inside the same tab. Use sparingly — yanking focus out from under the user is disruptive. |
 | `new_tab(…)` | Opens a brand-new tab with a fresh pane and switches focus to it. Accepts the same `cwd` option as `spawn_pane`. Same `claude` auto-upgrade. |
+| `set_pane_identity(target, name?, role?)` | Rename or (re)assign the stable `name` / `role` of an existing pane. Three-state fields: omit a key to keep, `null` to clear, a string to set. Use this to recover when a session was launched without the intended layout (e.g. secretary pane booted without `id = "secretary"` so peers can't address it by name). Rejects all-digit names (would collide with numeric ids) and same-tab name collisions. Also exposed as `ccmux rename [--id \| --name \| --focused] [--to-name \| --clear-name] [--to-role \| --clear-role]`. |
 
 > The same `claude` auto-upgrade also applies to panes declared in a layout TOML (`ccmux --layout <name>`): a bare `command = "claude"` in the toml is rewritten to the peer-enabled launch line when the pane starts, so layouts join the ccmux-peers network without each entry having to repeat `--dangerously-load-development-channels server:ccmux-peers`.
 
