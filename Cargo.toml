@@ -86,7 +86,11 @@ name = "ccmux"
 # 0.17.0 adds set_pane_identity MCP tool and ccmux rename CLI (#136 / #142)
 # for renaming / (re)assigning name / role on existing panes. Minor bump
 # because it's a new API surface, not a bug fix.
-version = "0.17.0"
+# 0.18.0 adds spawn_claude_pane MCP tool (#137 / #144) for structured
+# Claude launches: structured permission_mode / model / args[] fields
+# replace free-form command string synthesis, with the peer channel
+# enabled by construction. Minor bump because it's a new MCP tool.
+version = "0.18.0"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
