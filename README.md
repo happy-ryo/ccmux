@@ -237,12 +237,14 @@ _Pane control (same tab, except `new_tab`):_
 | Tool | Effect |
 |---|---|
 | `list_panes` | Lists every pane in the caller's tab with id, optional name/role, focus flag, and terminal geometry. |
-| `spawn_pane(direction, …)` | Splits a target pane. Optional `command`, `name`, `role`. A bare `command="claude"` (or `claude <args>`) is auto-upgraded to the `Alt+P` peer-enabled launch line so the new pane joins the ccmux-peers network without the caller having to remember `--dangerously-load-development-channels`. |
+| `spawn_pane(direction, …)` | Splits a target pane. Optional `command`, `name`, `role`, `cwd`. A bare `command="claude"` (or `claude <args>`) is auto-upgraded to the `Alt+P` peer-enabled launch line so the new pane joins the ccmux-peers network without the caller having to remember `--dangerously-load-development-channels`. |
 | `close_pane(target)` | Closes a pane. Refuses with `last_pane` when it's the only pane of the only tab. |
 | `focus_pane(target)` | Moves keyboard focus inside the same tab. Use sparingly — yanking focus out from under the user is disruptive. |
-| `new_tab(…)` | Opens a brand-new tab with a fresh pane and switches focus to it. Same `claude` auto-upgrade as `spawn_pane`. |
+| `new_tab(…)` | Opens a brand-new tab with a fresh pane and switches focus to it. Accepts the same `cwd` option as `spawn_pane`. Same `claude` auto-upgrade. |
 
 > The same `claude` auto-upgrade also applies to panes declared in a layout TOML (`ccmux --layout <name>`): a bare `command = "claude"` in the toml is rewritten to the peer-enabled launch line when the pane starts, so layouts join the ccmux-peers network without each entry having to repeat `--dangerously-load-development-channels server:ccmux-peers`.
+
+> **Pane `cwd`** — `spawn_pane` / `new_tab` / `ccmux split --cwd` / `ccmux new-tab --cwd` / layout TOML `cwd = "..."` all accept a working directory for the new pane. Absolute paths are used as-is; relative paths resolve against the caller pane's cwd (MCP), the shell cwd (CLI), or the ccmux process cwd (layout TOML). Invalid paths fail with error code `cwd_invalid` **before** any layout mutation. Prefer this over embedding `cd <dir> && ...` inside `command` — the `claude` auto-upgrade only fires when `command` starts with `claude`.
 
 ### Troubleshooting
 

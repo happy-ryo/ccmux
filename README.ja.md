@@ -242,12 +242,14 @@ _ペイン操作 (`new_tab` を除き同一タブ内):_
 | ツール | 役割 |
 |---|---|
 | `list_panes` | 同じタブの全ペインを id / 名前 / role / フォーカス状態 / レイアウト位置込みで一覧する。 |
-| `spawn_pane(direction, …)` | 指定ペインを分割して新ペインを生やす。`command`・`name`・`role` はどれもオプション。`command="claude"` (または `claude <args>`) を渡したときは `Alt+P` と同じ peer 対応コマンドに自動書き換えするので、毎回 `--dangerously-load-development-channels` を覚えていなくてもメッセージング付きの Claude が立ち上がる。 |
+| `spawn_pane(direction, …)` | 指定ペインを分割して新ペインを生やす。`command`・`name`・`role`・`cwd` はどれもオプション。`command="claude"` (または `claude <args>`) を渡したときは `Alt+P` と同じ peer 対応コマンドに自動書き換えするので、毎回 `--dangerously-load-development-channels` を覚えていなくてもメッセージング付きの Claude が立ち上がる。 |
 | `close_pane(target)` | ペインを閉じる。最後のタブの最後のペインを閉じようとしたときは `last_pane` で拒否。 |
 | `focus_pane(target)` | 同じタブ内でフォーカス移動。ユーザーの手元からフォーカスを奪うことになるので使いどころに注意。 |
-| `new_tab(…)` | 新しいタブを 1 枚開いてそこへフォーカスを移す。`spawn_pane` と同じ `claude` 自動アップグレードが効く。 |
+| `new_tab(…)` | 新しいタブを 1 枚開いてそこへフォーカスを移す。`spawn_pane` と同じ `cwd` オプションと `claude` 自動アップグレードが効く。 |
 
 > この `claude` 自動アップグレードは layout TOML (`ccmux --layout <name>`) 経由で起動するペインにも適用される。layout toml に `command = "claude"` と書けばペイン起動時に peer 対応コマンドへ書き換えられるので、各エントリで毎回 `--dangerously-load-development-channels server:ccmux-peers` を書く必要はない。
+
+> **ペインの `cwd`** — `spawn_pane` / `new_tab` / `ccmux split --cwd` / `ccmux new-tab --cwd` / layout TOML `cwd = "..."` で新ペインの作業ディレクトリを指定できる。絶対パスはそのまま、相対パスは呼び出し元ペインの cwd（MCP）・シェルの cwd（CLI）・ccmux プロセスの cwd（layout TOML）を基準に解決される。存在しないパスはレイアウトを変更する前に `cwd_invalid` で失敗するので half-mutated なレイアウトにならない。`command` に `cd <dir> && ...` を書くと `claude` 自動アップグレードが効かなくなるので、`cwd` フィールド側で指定するのが推奨。
 
 ### うまく動かないとき
 
