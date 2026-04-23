@@ -28,6 +28,13 @@ pub enum LayoutNodeSpec {
         /// repeat across panes (e.g. multiple `role = "worker"` panes).
         #[serde(default)]
         role: Option<String>,
+        /// Optional working directory for the pane. Absolute paths
+        /// are used as-is; relative paths are resolved against the
+        /// directory from which `ccmux --layout` was invoked. When
+        /// omitted, the pane inherits the parent pane's cwd (root
+        /// leaf falls back to the ccmux process cwd).
+        #[serde(default)]
+        cwd: Option<String>,
     },
     Split {
         direction: DirectionSpec,
@@ -88,6 +95,20 @@ impl LayoutConfig {
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read layout file {}", path.display()))?;
         Self::from_toml_str(&content)
+    }
+
+    /// Return the root leaf's `cwd` if the layout's root node is a
+    /// single pane with an explicit cwd. For nested split layouts the
+    /// root is a `Split`, which has no cwd of its own — each leaf's
+    /// cwd is applied when its pane is created. Used by `main` to
+    /// bootstrap the initial pane with the correct cwd before the
+    /// rest of the layout is expanded (since `apply_layout` runs
+    /// after `App::new` has already spawned the first shell).
+    pub fn root_pane_cwd(&self) -> Option<&str> {
+        match &self.root {
+            LayoutNodeSpec::Pane { cwd, .. } => cwd.as_deref(),
+            LayoutNodeSpec::Split { .. } => None,
+        }
     }
 
     /// Validate the parsed layout: schema version, ratios, id uniqueness,
@@ -234,10 +255,16 @@ mod tests {
         assert_eq!(cfg.version, 1);
         assert_eq!(cfg.name, "single");
         match &cfg.root {
-            LayoutNodeSpec::Pane { id, command, role } => {
+            LayoutNodeSpec::Pane {
+                id,
+                command,
+                role,
+                cwd,
+            } => {
                 assert_eq!(id, "secretary");
                 assert_eq!(command.as_deref(), Some("claude /company"));
                 assert!(role.is_none());
+                assert!(cwd.is_none());
             }
             _ => panic!("expected Pane at root"),
         }
@@ -247,6 +274,33 @@ mod tests {
     fn parses_nested_split_layout() {
         let cfg = LayoutConfig::from_toml_str(nested_layout_toml()).unwrap();
         assert_eq!(cfg.name, "cc-campany");
+    }
+
+    #[test]
+    fn parses_pane_with_cwd() {
+        let toml = r#"
+            version = 1
+            name = "cwd-test"
+            [root]
+            type = "pane"
+            id = "foreman"
+            cwd = ".foreman"
+        "#;
+        let cfg = LayoutConfig::from_toml_str(toml).unwrap();
+        match &cfg.root {
+            LayoutNodeSpec::Pane { id, cwd, .. } => {
+                assert_eq!(id, "foreman");
+                assert_eq!(cwd.as_deref(), Some(".foreman"));
+            }
+            _ => panic!("expected Pane"),
+        }
+        assert_eq!(cfg.root_pane_cwd(), Some(".foreman"));
+    }
+
+    #[test]
+    fn root_pane_cwd_is_none_for_split_root() {
+        let cfg = LayoutConfig::from_toml_str(nested_layout_toml()).unwrap();
+        assert!(cfg.root_pane_cwd().is_none());
     }
 
     #[test]

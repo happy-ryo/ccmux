@@ -82,6 +82,14 @@ pub enum Request {
         /// Free-form role label (see [`PaneInfo::role`]).
         #[serde(default)]
         role: Option<String>,
+        /// Working directory for the new pane. Absolute paths are used
+        /// as-is; relative paths are resolved against the target pane's
+        /// cwd at server-side. When omitted, inherits the target pane's
+        /// cwd (prior behavior). Fails with `cwd_invalid` before any
+        /// layout mutation when the resolved path is missing or not a
+        /// directory.
+        #[serde(default)]
+        cwd: Option<String>,
     },
     /// Move keyboard focus to the target pane.
     Focus { target: PaneRef },
@@ -107,6 +115,14 @@ pub enum Request {
         /// Free-form role label (see [`PaneInfo::role`]).
         #[serde(default)]
         role: Option<String>,
+        /// Working directory for the new tab's initial pane. Absolute
+        /// paths are used as-is; relative paths are resolved against
+        /// the ccmux server's process cwd. When omitted, the server's
+        /// current cwd is used (prior behavior). Fails with
+        /// `cwd_invalid` before any layout mutation when the resolved
+        /// path is missing or not a directory.
+        #[serde(default)]
+        cwd: Option<String>,
     },
     /// Switch the connection to live event stream mode. After the
     /// server acknowledges with [`Response::Subscribed`], it emits
@@ -218,6 +234,11 @@ pub struct PaneInfo {
     /// Pane height in rows. `0` before the first layout pass.
     #[serde(default)]
     pub height: u16,
+    /// Resolved working directory the pane was spawned with. Mirrors
+    /// [`PeerInfo::cwd`] so `list_panes` / `list_peers` agree on the
+    /// pane's launch cwd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 /// Server reply to one [`Request`].
@@ -305,6 +326,10 @@ pub mod err_code {
     /// remaining tab. Refused so the TUI doesn't end up with an empty
     /// layout; the caller should shut down ccmux instead.
     pub const LAST_PANE: &str = "last_pane";
+    /// Caller supplied a `cwd` that does not exist or is not a
+    /// directory. Emitted by `Split` / `NewTab` before any pane is
+    /// created so failed calls never leave a half-mutated layout.
+    pub const CWD_INVALID: &str = "cwd_invalid";
 }
 
 /// App-side error carrying a free-form message plus an optional
@@ -489,6 +514,7 @@ mod tests {
             command: Some("cce".into()),
             id: Some("engineering".into()),
             role: None,
+            cwd: None,
         };
         assert_eq!(roundtrip(&r), r);
     }
@@ -542,6 +568,7 @@ mod tests {
             id: Some("engineering".into()),
             label: Some("eng".into()),
             role: None,
+            cwd: None,
         };
         assert_eq!(roundtrip(&r), r);
     }
@@ -556,9 +583,35 @@ mod tests {
                 id: None,
                 label: None,
                 role: None,
+                cwd: None,
             } => {}
             other => panic!("expected empty NewTab, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn split_request_with_cwd_roundtrips() {
+        let r = Request::Split {
+            target: PaneRef::Focused,
+            direction: Direction::Horizontal,
+            command: Some("claude".into()),
+            id: None,
+            role: None,
+            cwd: Some("/tmp/work".into()),
+        };
+        assert_eq!(roundtrip(&r), r);
+    }
+
+    #[test]
+    fn new_tab_request_with_cwd_roundtrips() {
+        let r = Request::NewTab {
+            command: None,
+            id: None,
+            label: None,
+            role: None,
+            cwd: Some("/tmp/work".into()),
+        };
+        assert_eq!(roundtrip(&r), r);
     }
 
     #[test]
@@ -582,6 +635,7 @@ mod tests {
             y: 0,
             width: 0,
             height: 0,
+            cwd: None,
         };
         let s = serde_json::to_string(&info).unwrap();
         assert!(!s.contains("role"), "unexpected role field: {s}");
@@ -598,6 +652,7 @@ mod tests {
             y: 0,
             width: 80,
             height: 24,
+            cwd: Some("/home/user/project".into()),
         };
         let parsed: PaneInfo =
             serde_json::from_str(&serde_json::to_string(&info).unwrap()).unwrap();
@@ -615,6 +670,7 @@ mod tests {
             y: 1,
             width: 120,
             height: 40,
+            cwd: None,
         };
         let s = serde_json::to_string(&info).unwrap();
         assert!(s.contains("\"x\":3"), "missing x: {s}");
@@ -648,6 +704,7 @@ mod tests {
             command: None,
             id: None,
             role: Some("worker".into()),
+            cwd: None,
         };
         assert_eq!(roundtrip(&r), r);
     }
@@ -659,6 +716,7 @@ mod tests {
             id: None,
             label: None,
             role: Some("leader".into()),
+            cwd: None,
         };
         assert_eq!(roundtrip(&r), r);
     }

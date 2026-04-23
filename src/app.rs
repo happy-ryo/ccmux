@@ -45,6 +45,7 @@ pub enum AppCommand {
         command: Option<String>,
         name: Option<String>,
         role: Option<String>,
+        cwd: Option<String>,
         reply: oneshot::Sender<std::result::Result<usize, ipc::CodedError>>,
     },
     /// Open a new tab with a fresh single pane. Focus switches to the
@@ -55,6 +56,7 @@ pub enum AppCommand {
         name: Option<String>,
         label: Option<String>,
         role: Option<String>,
+        cwd: Option<String>,
         reply: oneshot::Sender<std::result::Result<usize, ipc::CodedError>>,
     },
     /// Snapshot the visible screen of the target pane. See
@@ -454,7 +456,11 @@ impl Workspace {
         cols: u16,
         event_tx: Sender<AppEvent>,
     ) -> Result<Self> {
-        let pane = Pane::new(pane_id, rows, cols, event_tx)?;
+        // Spawn the initial pane's PTY in the workspace's cwd so
+        // `new_tab_with_cwd(...)` actually takes effect. Without this
+        // the shell would inherit the ccmux process cwd regardless of
+        // what the workspace was constructed with.
+        let pane = Pane::new_with_cwd(pane_id, rows, cols, event_tx, Some(cwd.clone()))?;
         let mut panes = HashMap::new();
         panes.insert(pane_id, pane);
 
@@ -627,14 +633,24 @@ pub struct App {
 }
 
 impl App {
+    #[allow(dead_code)] // retained as a test-ergonomic alias for new_with_cwd(None)
     pub fn new(rows: u16, cols: u16) -> Result<Self> {
+        Self::new_with_cwd(rows, cols, None)
+    }
+
+    /// Like [`Self::new`] but lets the initial pane spawn in an
+    /// explicit cwd. `None` preserves the historical process-cwd
+    /// behavior. Used by `main` to honor a layout's root-leaf `cwd`
+    /// before the TUI is handed the app state.
+    pub fn new_with_cwd(rows: u16, cols: u16, initial_cwd: Option<PathBuf>) -> Result<Self> {
         let (event_tx, event_rx) = mpsc::channel();
         let (command_tx, command_rx) = mpsc::channel();
 
         let pane_rows = rows.saturating_sub(5); // title + tab bar + status + borders
         let pane_cols = cols.saturating_sub(2);
 
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let cwd = initial_cwd
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let name = dir_name(&cwd);
 
         let ws = Workspace::new(name, cwd, 1, pane_rows, pane_cols, event_tx.clone())?;
@@ -1471,7 +1487,15 @@ impl App {
     /// subscribers see the final identity — mirrors the contract on
     /// `split_focused_pane`.
     fn new_tab(&mut self) -> Result<usize> {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        self.new_tab_with_cwd(None)
+    }
+
+    /// Like [`Self::new_tab`], but lets the caller specify the initial
+    /// cwd for the freshly-created pane. Passing `None` preserves the
+    /// process-cwd default used by the Alt+T keybinding.
+    fn new_tab_with_cwd(&mut self, cwd_override: Option<PathBuf>) -> Result<usize> {
+        let cwd = cwd_override
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let name = dir_name(&cwd);
         let pane_id = self.next_pane_id;
         self.next_pane_id = self.next_pane_id.wrapping_add(1);
@@ -1659,9 +1683,12 @@ impl App {
         // or a file whose parent vanished), fall back to the tree root
         // — turning a UI keypress into a shell-spawn error is worse
         // than silently widening the cwd scope.
-        let cwd = raw_cwd.canonicalize().unwrap_or(raw_cwd);
-        let cwd = if cwd.is_dir() {
-            cwd
+        let canon = raw_cwd.canonicalize().unwrap_or_else(|_| raw_cwd.clone());
+        // `is_dir` against the canonical (verbatim on Windows) path
+        // avoids long-path false negatives; strip runs afterwards so
+        // the PTY cwd matches what a shell would render.
+        let cwd = if canon.is_dir() {
+            strip_verbatim_prefix(canon)
         } else {
             self.ws().file_tree.root_path.clone()
         };
@@ -1689,6 +1716,14 @@ impl App {
     /// Note: Phase 2 ignores the per-split `ratio`; splits use the
     /// existing equal-split semantics. A follow-up may extend this.
     pub fn apply_layout(&mut self, config: &LayoutConfig) -> Result<()> {
+        // Validate every cwd up-front so a bad path in any leaf aborts
+        // before we mutate the layout — matches the IPC cwd_invalid
+        // contract for Split / NewTab. Note: this only buys atomicity
+        // for cwd errors. Split-feasibility failures (MAX_PANES, pane
+        // too small, I/O) can still leave a partially-expanded layout
+        // — guard those at layout-authoring time, not here.
+        let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        validate_layout_cwds(&config.root, &base)?;
         let initial_pane_id = self.ws().focused_pane_id;
         self.apply_layout_node(&config.root, initial_pane_id)?;
         Ok(())
@@ -1696,7 +1731,12 @@ impl App {
 
     fn apply_layout_node(&mut self, node: &LayoutNodeSpec, target_pane_id: usize) -> Result<()> {
         match node {
-            LayoutNodeSpec::Pane { id, command, role } => {
+            LayoutNodeSpec::Pane {
+                id,
+                command,
+                role,
+                cwd: _,
+            } => {
                 // Register the leaf's id as a human-friendly name so IPC
                 // clients (and external tools like `ccmux-send`) can
                 // target this pane later without tracking numeric ids.
@@ -1734,11 +1774,19 @@ impl App {
                     DirectionSpec::Vertical => SplitDirection::Vertical,
                     DirectionSpec::Horizontal => SplitDirection::Horizontal,
                 };
-                let new_pane_id = self.split_focused_pane(split_dir, None)?.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "layout split refused (too small or MAX_PANES) while applying layout"
-                    )
-                })?;
+                // The freshly-split pane hosts the `second` subtree.
+                // Resolve that subtree's root leaf cwd (if any) so the
+                // new pane spawns in the requested directory instead
+                // of inheriting the parent pane's cwd.
+                let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let new_pane_cwd = subtree_root_cwd(second, &base);
+                let new_pane_id = self
+                    .split_focused_pane(split_dir, new_pane_cwd)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "layout split refused (too small or MAX_PANES) while applying layout"
+                        )
+                    })?;
                 // Recurse into both subtrees first — the leaves attach
                 // name/role to their pane ids — then emit PaneStarted
                 // so subscribers see the new pane with its final
@@ -2808,8 +2856,13 @@ impl App {
                     // Security: resolve symlinks and relative components.
                     // Reject paths that don't resolve to a real directory
                     // (prevents OSC 7 escape sequence path injection).
+                    // `is_dir` runs on the canonical (verbatim on
+                    // Windows) path; `strip_verbatim_prefix` then
+                    // normalizes for storage so `pane.cwd` never
+                    // carries `\\?\` — PaneInfo / MCP output rely on
+                    // the stripped form.
                     let new_cwd = match new_cwd.canonicalize() {
-                        Ok(p) if p.is_dir() => p,
+                        Ok(p) if p.is_dir() => strip_verbatim_prefix(p),
                         _ => continue,
                     };
                     for ws in &mut self.workspaces {
@@ -2906,7 +2959,9 @@ impl App {
                 let rect_by_id: HashMap<usize, Rect> = ws.last_pane_rects.iter().copied().collect();
                 let mut infos: Vec<PaneInfo> = Vec::new();
                 for id in ws.layout.collect_pane_ids() {
-                    let role = ws.panes.get(&id).and_then(|p| p.role.clone());
+                    let pane = ws.panes.get(&id);
+                    let role = pane.and_then(|p| p.role.clone());
+                    let cwd = pane.map(|p| p.cwd.to_string_lossy().to_string());
                     let rect = rect_by_id.get(&id).copied().unwrap_or_default();
                     infos.push(PaneInfo {
                         id,
@@ -2917,6 +2972,7 @@ impl App {
                         y: rect.y,
                         width: rect.width,
                         height: rect.height,
+                        cwd,
                     });
                 }
                 let _ = reply.send(infos);
@@ -2940,9 +2996,10 @@ impl App {
                 command,
                 name,
                 role,
+                cwd,
                 reply,
             } => {
-                let result = self.handle_split(&target, direction, command, name, role);
+                let result = self.handle_split(&target, direction, command, name, role, cwd);
                 let _ = reply.send(result);
             }
             AppCommand::NewTab {
@@ -2950,9 +3007,10 @@ impl App {
                 name,
                 label,
                 role,
+                cwd,
                 reply,
             } => {
-                let result = self.handle_new_tab(command, name, label, role);
+                let result = self.handle_new_tab(command, name, label, role, cwd);
                 let _ = reply.send(result);
             }
             AppCommand::Inspect {
@@ -3186,7 +3244,12 @@ impl App {
         name: Option<String>,
         label: Option<String>,
         role: Option<String>,
+        cwd: Option<String>,
     ) -> std::result::Result<usize, ipc::CodedError> {
+        // Resolve cwd before any layout mutation so an invalid cwd
+        // refuses the call without registering a new tab / pane.
+        let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let cwd_override = resolve_optional_cwd(cwd.as_deref(), &base)?;
         // Delegate to the existing keybinding-driven new_tab so we
         // don't drift from the interactive behavior (pane id bookkeeping,
         // active_tab update, cwd inheritance). The freshly-created tab
@@ -3195,7 +3258,7 @@ impl App {
         // attaching name / role / label so subscribers see the final
         // identity.
         let new_pane_id = self
-            .new_tab()
+            .new_tab_with_cwd(cwd_override)
             .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?;
         let effective_command = command.or_else(|| default_command_for_role(role.as_deref()));
         if let Some(pane) = self.ws_mut().panes.get_mut(&new_pane_id) {
@@ -3268,6 +3331,7 @@ impl App {
         command: Option<String>,
         name: Option<String>,
         role: Option<String>,
+        cwd: Option<String>,
     ) -> std::result::Result<usize, ipc::CodedError> {
         let target_pane_id = self.ws().resolve_pane_ref(target).ok_or_else(|| {
             ipc::CodedError::new(
@@ -3275,6 +3339,16 @@ impl App {
                 format!("pane not found: {target:?}"),
             )
         })?;
+        // Resolve cwd relative to the target pane's cwd; validate it
+        // before mutating the layout so a bad path refuses the call
+        // without splitting the pane.
+        let base = self
+            .ws()
+            .panes
+            .get(&target_pane_id)
+            .map(|p| p.cwd.clone())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let cwd_override = resolve_optional_cwd(cwd.as_deref(), &base)?;
         let prev_focus = self.ws().focused_pane_id;
         self.ws_mut().focused_pane_id = target_pane_id;
         let split_dir = match direction {
@@ -3282,7 +3356,7 @@ impl App {
             ipc::Direction::Horizontal => SplitDirection::Horizontal,
         };
         let new_pane_id = match self
-            .split_focused_pane(split_dir, None)
+            .split_focused_pane(split_dir, cwd_override)
             .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?
         {
             Some(id) => id,
@@ -3339,6 +3413,140 @@ pub(crate) const CLAUDE_PEER_LAUNCH_CMD: &str =
 /// This is Strategy C from issue #97. Strategy B (shell-init wrapper
 /// so a raw `claude` command is transparently upgraded) is deferred
 /// to a follow-up PR.
+/// Walk a layout subtree and return the cwd that should be used for
+/// the pane hosting that subtree's root position. For a bare `Pane`
+/// leaf that's simply its own cwd; for a `Split` we inherit from the
+/// `first` child so the parent pane (already present before the split)
+/// and the subtree agree. Relative paths are joined onto `base`. A
+/// `None` result means "use default" (inherit from parent pane or
+/// process cwd).
+fn subtree_root_cwd(node: &LayoutNodeSpec, base: &std::path::Path) -> Option<PathBuf> {
+    match node {
+        LayoutNodeSpec::Pane { cwd, .. } => cwd.as_deref().and_then(|s| {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                let p = PathBuf::from(t);
+                Some(if p.is_absolute() { p } else { base.join(p) })
+            }
+        }),
+        LayoutNodeSpec::Split { first, .. } => subtree_root_cwd(first, base),
+    }
+}
+
+/// Pre-flight check: walk the layout tree and fail fast if any `cwd`
+/// field doesn't point at an existing directory. Keeps the mutation
+/// semantics consistent with `Request::Split` / `Request::NewTab` —
+/// bad cwd = no partial layout.
+fn validate_layout_cwds(node: &LayoutNodeSpec, base: &std::path::Path) -> Result<()> {
+    match node {
+        LayoutNodeSpec::Pane { cwd, id, .. } => {
+            if let Some(raw) = cwd {
+                let t = raw.trim();
+                if !t.is_empty() {
+                    let p = PathBuf::from(t);
+                    let joined = if p.is_absolute() { p } else { base.join(p) };
+                    let meta = std::fs::metadata(&joined).map_err(|e| {
+                        anyhow::anyhow!(
+                            "layout pane '{id}' cwd {} is not accessible: {e}",
+                            joined.display()
+                        )
+                    })?;
+                    if !meta.is_dir() {
+                        return Err(anyhow::anyhow!(
+                            "layout pane '{id}' cwd {} is not a directory",
+                            joined.display()
+                        ));
+                    }
+                }
+            }
+            Ok(())
+        }
+        LayoutNodeSpec::Split { first, second, .. } => {
+            validate_layout_cwds(first, base)?;
+            validate_layout_cwds(second, base)?;
+            Ok(())
+        }
+    }
+}
+
+/// Resolve an optional `cwd` string from an IPC Split / NewTab request
+/// into an absolute `PathBuf`. Relative paths are joined onto `base`
+/// (the target pane's cwd for Split, the server's process cwd for
+/// NewTab). Missing / non-directory paths surface as
+/// [`ipc::err_code::CWD_INVALID`] so the caller can distinguish them
+/// from other failure codes. Returns `Ok(None)` when the caller did
+/// not supply a cwd (including empty / whitespace) — preserving the
+/// pre-cwd default-inheritance behavior.
+pub(crate) fn resolve_optional_cwd(
+    cwd: Option<&str>,
+    base: &std::path::Path,
+) -> std::result::Result<Option<PathBuf>, ipc::CodedError> {
+    let raw = match cwd {
+        Some(s) => s.trim(),
+        None => return Ok(None),
+    };
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let candidate = PathBuf::from(raw);
+    let joined = if candidate.is_absolute() {
+        candidate
+    } else {
+        base.join(candidate)
+    };
+    // Canonicalize so the stored cwd is stable and follows `..` /
+    // symlinks deterministically. Canonicalize also implicitly
+    // verifies existence — a missing path errors out here.
+    let canon = std::fs::canonicalize(&joined).map_err(|e| {
+        ipc::CodedError::new(
+            ipc::err_code::CWD_INVALID,
+            format!("cwd {} is not accessible: {e}", joined.display()),
+        )
+    })?;
+    // Directory check goes against the canonical (verbatim-prefixed on
+    // Windows) path, not the stripped one. Long paths / UNC shares can
+    // fail `is_dir()` once the `\\?\` prefix is removed, so we verify
+    // first and then strip purely for display/storage.
+    if !canon.is_dir() {
+        return Err(ipc::CodedError::new(
+            ipc::err_code::CWD_INVALID,
+            format!("cwd {} is not a directory", canon.display()),
+        ));
+    }
+    // Windows' canonicalize returns a `\\?\C:\...` verbatim path,
+    // which leaks into `PaneInfo.cwd` / MCP list output and looks
+    // wrong in user-facing tooling. Strip the prefix for storage so
+    // the PTY cwd string matches what a shell would show.
+    Ok(Some(strip_verbatim_prefix(canon)))
+}
+
+/// Strip Windows `\\?\` (verbatim) and `\\?\UNC\` prefixes from a
+/// canonicalized path. On non-Windows this is an identity function.
+/// Kept as a free function so both the IPC cwd resolver and any
+/// future code paths that serialize canonicalized paths can share one
+/// definition. Prefers string manipulation over `dunce` so we don't
+/// add a dependency for a few lines of path-prefix cleanup.
+pub(crate) fn strip_verbatim_prefix(p: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = p.to_string_lossy().into_owned();
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            // `\\?\UNC\server\share\...` → `\\server\share\...`
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+        PathBuf::from(s)
+    }
+    #[cfg(not(windows))]
+    {
+        p
+    }
+}
+
 fn default_command_for_role(role: Option<&str>) -> Option<String> {
     match role {
         Some("claude") => Some(CLAUDE_PEER_LAUNCH_CMD.to_string()),
@@ -4188,6 +4396,7 @@ mod tests {
             id: id.to_string(),
             command: None,
             role: None,
+            cwd: None,
         }
     }
 
@@ -4475,6 +4684,7 @@ mod tests {
                 None,
                 Some("victim".into()),
                 None,
+                None,
             )
             .expect("split with reused name");
         assert_ne!(new_id, victim_id_before);
@@ -4560,6 +4770,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("split succeeds");
         // Drain PaneStarted events from the split so the assertion below
@@ -4606,7 +4817,7 @@ mod tests {
         let sender_id = app.ws().focused_pane_id;
         // Open a fresh tab; its pane id is distinct from sender's.
         let other_tab_pane = app
-            .handle_new_tab(None, None, None, None)
+            .handle_new_tab(None, None, None, None, None)
             .expect("new tab succeeds");
         assert_ne!(
             other_tab_pane, sender_id,
@@ -4641,6 +4852,7 @@ mod tests {
                 None,
                 Some("sibling".into()),
                 Some("worker".into()),
+                None,
             )
             .expect("split succeeds");
         let peers = app.handle_peer_list(sender_id).expect("peer list");
@@ -4693,6 +4905,7 @@ mod tests {
                 id: "secretary".into(),
                 command: Some("claude".into()),
                 role: None,
+                cwd: None,
             },
         };
         let mut app = App::new(40, 80).expect("App::new");
@@ -4722,6 +4935,7 @@ mod tests {
                 id: "worker".into(),
                 command: Some("echo hello".into()),
                 role: None,
+                cwd: None,
             },
         };
         let mut app = App::new(40, 80).expect("App::new");
@@ -4751,6 +4965,7 @@ mod tests {
                 Some("echo custom".into()),
                 None,
                 Some("claude".into()),
+                None,
             )
             .expect("split succeeds");
         let pane = app.ws().panes.get(&new_id).expect("pane exists");
@@ -4787,6 +5002,7 @@ mod tests {
                 None,
                 Some("worker-1".into()),
                 Some("worker".into()),
+                None,
             )
             .expect("split succeeds");
 
@@ -4828,11 +5044,13 @@ mod tests {
                     id: "keeper".into(),
                     command: None,
                     role: Some("keeper-role".into()),
+                    cwd: None,
                 }),
                 second: Box::new(crate::layout_config::LayoutNodeSpec::Pane {
                     id: "new-leaf".into(),
                     command: None,
                     role: Some("leaf-role".into()),
+                    cwd: None,
                 }),
             },
         };
@@ -4884,6 +5102,7 @@ mod tests {
             None,
             Some("first".into()),
             None,
+            None,
         )
         .expect("first split should succeed");
 
@@ -4899,6 +5118,7 @@ mod tests {
                 ipc::Direction::Vertical,
                 None,
                 Some("overflow".into()),
+                None,
                 None,
             )
             .expect_err("too-narrow split must be refused");
@@ -4942,6 +5162,7 @@ mod tests {
             None,
             Some("first".into()),
             None,
+            None,
         )
         .expect("first split should succeed");
 
@@ -4958,6 +5179,7 @@ mod tests {
                 ipc::Direction::Vertical,
                 None,
                 Some("narrow".into()),
+                None,
                 None,
             )
             .expect("split should succeed once min_pane_width is lowered");
@@ -5010,6 +5232,7 @@ mod tests {
                 Some("tab-pane".into()),
                 Some("tab label".into()),
                 Some("tab-role".into()),
+                None,
             )
             .expect("new tab succeeds");
 
@@ -5033,6 +5256,199 @@ mod tests {
         assert_eq!(role.as_deref(), Some("tab-role"));
 
         app.shutdown();
+    }
+
+    #[test]
+    fn handle_split_with_cwd_spawns_pane_in_requested_dir() {
+        // Split with an explicit absolute cwd and confirm the pane's
+        // stored cwd reflects it (canonicalized). Validates the full
+        // wire: AppCommand::Split cwd → handle_split → resolve →
+        // split_focused_pane(cwd_override) → Pane::new_with_cwd.
+        let tmp = std::env::temp_dir();
+        let canon = std::fs::canonicalize(&tmp).unwrap_or(tmp);
+
+        let mut app = App::new(40, 80).expect("App::new");
+        let new_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                None,
+                None,
+                Some(canon.to_string_lossy().to_string()),
+            )
+            .expect("split with cwd succeeds");
+
+        let pane_cwd = app
+            .ws()
+            .panes
+            .get(&new_id)
+            .map(|p| p.cwd.clone())
+            .expect("new pane exists");
+        // std::fs::canonicalize the caller-supplied path and compare;
+        // both the handler and the test normalize the same way so the
+        // pane cwd must match exactly.
+        assert_eq!(
+            std::fs::canonicalize(&pane_cwd).unwrap_or(pane_cwd.clone()),
+            canon,
+            "pane cwd must be the cwd passed to handle_split"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_split_with_invalid_cwd_refuses_before_mutation() {
+        // A missing cwd must return CWD_INVALID and must NOT allocate
+        // a new pane / register a name.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_count_before = app.ws().layout.pane_count();
+
+        let err = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                Some("should-not-land".into()),
+                None,
+                Some("/this/path/definitely/does/not/exist/ccmux-test".into()),
+            )
+            .expect_err("invalid cwd must be refused");
+        assert_eq!(err.code, Some(ipc::err_code::CWD_INVALID));
+        assert_eq!(
+            app.ws().layout.pane_count(),
+            pane_count_before,
+            "refused split must not grow the layout"
+        );
+        assert!(
+            !app.ws().pane_names.contains_key("should-not-land"),
+            "refused split must not register its requested name"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_new_tab_with_invalid_cwd_refuses_before_mutation() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let tab_count_before = app.workspaces.len();
+
+        let err = app
+            .handle_new_tab(
+                None,
+                Some("should-not-land".into()),
+                None,
+                None,
+                Some("/this/path/definitely/does/not/exist/ccmux-test".into()),
+            )
+            .expect_err("invalid cwd must be refused");
+        assert_eq!(err.code, Some(ipc::err_code::CWD_INVALID));
+        assert_eq!(
+            app.workspaces.len(),
+            tab_count_before,
+            "refused new_tab must not grow the tab list"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_split_relative_cwd_resolves_against_target_pane_cwd() {
+        // Plant a subdir under the target pane's cwd and split with a
+        // relative cwd pointing at it. The resolved pane cwd must
+        // equal the canonicalized subdir.
+        let tmp = std::env::temp_dir().join("ccmux-cwd-test-target");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("mkdir tmp");
+        let sub = tmp.join("child");
+        std::fs::create_dir_all(&sub).expect("mkdir child");
+
+        let mut app = App::new(40, 80).expect("App::new");
+        // Rewrite the focused pane's cwd to the tmp dir so the
+        // relative resolution has a known base. This mirrors how the
+        // shell would report its cwd via OSC 7 at runtime.
+        let focused = app.ws().focused_pane_id;
+        if let Some(pane) = app.ws_mut().panes.get_mut(&focused) {
+            pane.cwd = tmp.clone();
+        }
+
+        let new_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                None,
+                None,
+                Some("child".into()),
+            )
+            .expect("relative cwd resolves");
+
+        let pane_cwd = app.ws().panes.get(&new_id).map(|p| p.cwd.clone()).unwrap();
+        let expected = std::fs::canonicalize(&sub).unwrap_or(sub.clone());
+        let got = std::fs::canonicalize(&pane_cwd).unwrap_or(pane_cwd);
+        assert_eq!(got, expected);
+        app.shutdown();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn resolve_optional_cwd_accepts_none_and_empty() {
+        let base = std::env::temp_dir();
+        assert!(resolve_optional_cwd(None, &base).unwrap().is_none());
+        assert!(resolve_optional_cwd(Some(""), &base).unwrap().is_none());
+        assert!(resolve_optional_cwd(Some("   "), &base).unwrap().is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strip_verbatim_prefix_normalizes_windows_paths() {
+        // `\\?\C:\foo` → `C:\foo`
+        let drive = strip_verbatim_prefix(PathBuf::from(r"\\?\C:\foo\bar"));
+        assert_eq!(drive, PathBuf::from(r"C:\foo\bar"));
+        // `\\?\UNC\server\share\...` → `\\server\share\...`
+        let unc = strip_verbatim_prefix(PathBuf::from(r"\\?\UNC\srv\share\x"));
+        assert_eq!(unc, PathBuf::from(r"\\srv\share\x"));
+        // Non-verbatim paths pass through unchanged.
+        let plain = strip_verbatim_prefix(PathBuf::from(r"C:\already\plain"));
+        assert_eq!(plain, PathBuf::from(r"C:\already\plain"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_optional_cwd_strips_verbatim_prefix_on_windows() {
+        // Use the current exe's parent as a definitely-existing dir.
+        let base = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|x| x.to_path_buf()))
+            .unwrap_or_else(std::env::temp_dir);
+        let resolved = resolve_optional_cwd(Some(&base.to_string_lossy()), &base)
+            .expect("resolve should succeed")
+            .expect("cwd should be Some");
+        let s = resolved.to_string_lossy();
+        assert!(
+            !s.starts_with(r"\\?\"),
+            "resolved cwd must not expose verbatim prefix, got {s}"
+        );
+    }
+
+    #[test]
+    fn resolve_optional_cwd_rejects_nonexistent_path() {
+        let base = std::env::temp_dir();
+        let err = resolve_optional_cwd(Some("/definitely/not/a/real/path/ccmux-xyz-zzz"), &base)
+            .expect_err("missing path must fail");
+        assert_eq!(err.code, Some(ipc::err_code::CWD_INVALID));
+    }
+
+    #[test]
+    fn list_includes_pane_cwd() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        app.handle_app_command(AppCommand::List { reply: reply_tx });
+        let infos = reply_rx.recv().expect("list reply");
+        let info = infos.iter().find(|p| p.id == pane_id).unwrap();
+        assert!(
+            info.cwd.is_some(),
+            "list must surface the pane's resolved cwd"
+        );
     }
 
     #[test]

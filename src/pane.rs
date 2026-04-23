@@ -59,6 +59,7 @@ pub struct Pane {
 
 impl Pane {
     /// Create a new pane with a PTY shell.
+    #[allow(dead_code)] // retained for tests / external callers that don't care about cwd
     pub fn new(id: usize, rows: u16, cols: u16, event_tx: Sender<AppEvent>) -> Result<Self> {
         Self::new_with_cwd(id, rows, cols, event_tx, None)
     }

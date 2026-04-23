@@ -149,8 +149,31 @@ fn main() -> Result<()> {
         cli.lang,
     );
 
+    // If a layout was requested and its root node is a single pane
+    // with an explicit cwd, pre-load the layout so we can spawn the
+    // initial pane in that directory instead of the process cwd.
+    // Keep the full `apply_layout` call below — this is just a
+    // bootstrap detail for the root leaf.
+    let preloaded_layout: Option<layout_config::LayoutConfig> = match cli.layout.as_deref() {
+        Some(name) => Some(layout_config::LayoutConfig::load(name)?),
+        None => None,
+    };
+    let initial_cwd = preloaded_layout
+        .as_ref()
+        .and_then(|cfg| cfg.root_pane_cwd())
+        .map(|s| {
+            let p = std::path::PathBuf::from(s);
+            if p.is_absolute() {
+                p
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                    .join(p)
+            }
+        });
+
     // Create app (spawns the initial pane, which captures the env above).
-    let mut app = app::App::new(size.height, size.width)?;
+    let mut app = app::App::new_with_cwd(size.height, size.width, initial_cwd)?;
     app.apply_config(&user_config);
     app.set_min_pane_size(cli.min_pane_width, cli.min_pane_height);
     app.image_picker = image_picker;
@@ -198,9 +221,8 @@ fn main() -> Result<()> {
     // Phase 2 (--layout): expand a multi-pane layout from a TOML file.
     // Each leaf pane's command (if any) is queued via the same Phase 1
     // mechanism so all panes flush once their shells are ready.
-    if let Some(layout_name) = cli.layout.as_deref() {
-        let cfg = layout_config::LayoutConfig::load(layout_name)?;
-        app.apply_layout(&cfg)?;
+    if let Some(cfg) = preloaded_layout.as_ref() {
+        app.apply_layout(cfg)?;
     }
 
     // Main event loop

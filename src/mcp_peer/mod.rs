@@ -272,11 +272,14 @@ Pane control tools (all scoped to the current ccmux tab, except new_tab which is
 cross-tab tool):\n\
 - list_panes: Inspect all panes in the current tab, including geometry and the focus flag.\n\
 - spawn_pane: Split an existing pane to create a new one. Optionally runs a startup command, \
-assigns a stable name, or attaches a role label.\n\
+assigns a stable name, attaches a role label, or sets an explicit working directory via \
+`cwd` (absolute, or relative to the caller pane's cwd). Use `cwd` instead of `cd <dir> && ...` \
+inside `command` so the claude auto-upgrade keeps working.\n\
 - close_pane: Close a pane by id or name. Refuses when it's the last pane of the last tab.\n\
 - focus_pane: Move keyboard focus to another pane in the same tab.\n\
 - new_tab: Open a brand-new tab with a fresh pane and switch focus to it. Unlike the other \
-pane-control tools, this reaches outside the current tab.\n\
+pane-control tools, this reaches outside the current tab. Accepts the same `cwd` option \
+as spawn_pane for setting the new pane's working directory.\n\
 - inspect_pane: Snapshot the visible screen of a pane so you can detect interactive \
 prompts, banners, or mode indicators in another pane without asking it. Returns plain \
 text by default; pass format=\"grid\" for row-addressable JSON or lines=N to trim to \
@@ -376,6 +379,10 @@ fn tools_spec() -> Value {
                     "role": {
                         "type": "string",
                         "description": "Optional free-form role label (e.g. 'worker', 'leader'). Shown in the UI and in list_panes output."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory for the new pane. Absolute paths are used as-is; relative paths are resolved against the caller pane's cwd. When omitted, the new pane inherits the target pane's cwd (prior behavior). Use this instead of embedding `cd <path> && ...` in `command` — keeps the shell-quoting and the claude auto-upgrade intact."
                     }
                 },
                 "required": ["direction"]
@@ -430,6 +437,10 @@ fn tools_spec() -> Value {
                     "role": {
                         "type": "string",
                         "description": "Optional free-form role label attached to the new pane."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory for the new tab's pane. Absolute paths are used as-is; relative paths are resolved against the caller pane's cwd. When omitted, the ccmux server's current cwd is used."
                     }
                 }
             }
@@ -819,9 +830,67 @@ fn format_pane_list(panes: &[PaneInfo]) -> String {
             "\n  geometry: x={} y={} width={} height={}",
             p.x, p.y, p.width, p.height
         ));
+        if let Some(cwd) = &p.cwd {
+            out.push_str(&format!("\n  cwd: {cwd}"));
+        }
         out.push('\n');
     }
     out
+}
+
+/// Resolve a user-supplied `cwd` into what the IPC layer wants: either
+/// `None` (use server default) or an absolute-path string. Relative
+/// paths are joined onto the caller pane's cwd — the pane the Claude
+/// agent is running inside — so Claude's tool calls map to the same
+/// cwd its shell would interpret `cd <path>` against. Returns
+/// `Err(message)` on unresolvable input (caller pane vanished, etc.);
+/// server-side `CWD_INVALID` handles filesystem-level validation.
+fn resolve_mcp_cwd(
+    endpoint: &EndpointName,
+    caller_pane: usize,
+    cwd: Option<&str>,
+) -> std::result::Result<Option<String>, String> {
+    let s = match cwd {
+        Some(s) => s.trim(),
+        None => return Ok(None),
+    };
+    if s.is_empty() {
+        return Ok(None);
+    }
+    let path = std::path::Path::new(s);
+    if path.is_absolute() {
+        return Ok(Some(s.to_string()));
+    }
+    // Relative path — need caller pane's cwd. A single `Request::List`
+    // round-trip is cheap and keeps IPC stateless.
+    //
+    // Snapshot semantics: we resolve against whatever cwd the server
+    // knows at this instant, which is driven by OSC 7 updates from the
+    // pane's shell. If the shell has `cd`-ed but the update hasn't
+    // reached ccmux yet, the resolution uses the stale value. Callers
+    // that need strict ordering should send an absolute path instead
+    // of trusting "current" cwd.
+    let panes: Vec<PaneInfo> = match client::send_request(endpoint, &Request::List) {
+        Ok(Response::Ok { data }) => serde_json::from_value(data)
+            .map_err(|e| format!("decode pane list while resolving cwd: {e}"))?,
+        Ok(Response::Err { message, code }) => {
+            return Err(format!(
+                "list panes to resolve cwd: {}",
+                fmt_code(&message, &code)
+            ));
+        }
+        Ok(other) => return Err(format!("unexpected ccmux response: {other:?}")),
+        Err(e) => return Err(format!("list panes to resolve cwd: {e}")),
+    };
+    let base = panes
+        .iter()
+        .find(|p| p.id == caller_pane)
+        .and_then(|p| p.cwd.clone())
+        .ok_or_else(|| {
+            format!("cannot resolve relative cwd: caller pane {caller_pane} has no known cwd")
+        })?;
+    let joined = std::path::Path::new(&base).join(path);
+    Ok(Some(joined.to_string_lossy().to_string()))
 }
 
 fn handle_spawn_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
@@ -833,10 +902,20 @@ fn handle_spawn_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
     let command = opt_string(args, "command").map(|c| upgrade_claude_command(&c));
     let name = opt_string(args, "name");
     let role = opt_string(args, "role");
+    let cwd = opt_string(args, "cwd");
 
-    let (_caller_pane, endpoint) = match require_connected(ctx, id, "spawn pane") {
+    let (caller_pane, endpoint) = match require_connected(ctx, id, "spawn pane") {
         Ok(t) => t,
         Err(resp) => return resp,
+    };
+    // Resolve a relative cwd against the caller pane's cwd so relative
+    // paths in Claude's tool calls behave the way a user would expect
+    // when typing them into the pane's shell. Absolute paths are left
+    // untouched; `None` is forwarded as-is so the server falls back to
+    // its default (target pane's cwd for Split).
+    let cwd = match resolve_mcp_cwd(endpoint, caller_pane, cwd.as_deref()) {
+        Ok(v) => v,
+        Err(msg) => return err_response(id, -32602, &msg),
     };
     match client::send_request(
         endpoint,
@@ -846,6 +925,7 @@ fn handle_spawn_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
             command,
             id: name,
             role,
+            cwd,
         },
     ) {
         Ok(Response::Ok { data }) => {
@@ -937,10 +1017,15 @@ fn handle_new_tab(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
     let name = opt_string(args, "name");
     let label = opt_string(args, "label");
     let role = opt_string(args, "role");
+    let cwd = opt_string(args, "cwd");
 
-    let (_caller_pane, endpoint) = match require_connected(ctx, id, "open new tab") {
+    let (caller_pane, endpoint) = match require_connected(ctx, id, "open new tab") {
         Ok(t) => t,
         Err(resp) => return resp,
+    };
+    let cwd = match resolve_mcp_cwd(endpoint, caller_pane, cwd.as_deref()) {
+        Ok(v) => v,
+        Err(msg) => return err_response(id, -32602, &msg),
     };
     match client::send_request(
         endpoint,
@@ -949,6 +1034,7 @@ fn handle_new_tab(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
             id: name,
             label,
             role,
+            cwd,
         },
     ) {
         Ok(Response::Ok { data }) => {
@@ -1703,6 +1789,7 @@ mod tests {
                 y: 0,
                 width: 80,
                 height: 24,
+                cwd: None,
             },
             PaneInfo {
                 id: 2,
@@ -1713,6 +1800,7 @@ mod tests {
                 y: 0,
                 width: 40,
                 height: 24,
+                cwd: None,
             },
         ];
         let text = format_pane_list(&panes);
@@ -1771,6 +1859,31 @@ mod tests {
             .expect("required array");
         let required_names: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
         assert!(required_names.contains(&"direction"), "{required_names:?}");
+    }
+
+    #[test]
+    fn spawn_pane_and_new_tab_schemas_advertise_cwd() {
+        // Regression guard for issue #135: callers must see `cwd` as
+        // an optional property on both pane-creation tools so they
+        // can stop embedding `cd <dir> &&` in `command`.
+        let spec = tools_spec();
+        for tool in ["spawn_pane", "new_tab"] {
+            let entry = spec
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t.get("name").and_then(|v| v.as_str()) == Some(tool))
+                .unwrap_or_else(|| panic!("{tool} entry"));
+            let props = entry
+                .get("inputSchema")
+                .and_then(|s| s.get("properties"))
+                .and_then(|p| p.as_object())
+                .unwrap_or_else(|| panic!("{tool} properties"));
+            assert!(
+                props.contains_key("cwd"),
+                "{tool} schema must advertise cwd property"
+            );
+        }
     }
 
     #[test]
