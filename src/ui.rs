@@ -1050,21 +1050,37 @@ fn pick_caret_col_on_row(screen: &vt100::Screen, row: u16) -> u16 {
 /// Resolve Claude's visible caret position on the current screen,
 /// accounting for wrapped input rows.
 ///
-/// Algorithm (Proposal A of Issue #147):
+/// Algorithm (Proposal A of Issue #147, extended for ← navigation):
 ///   1. Find `prompt_row` bottom-up (row whose first few cols contain
 ///      `>`/`❯`/… — Claude's input box prompt glyph).
-///   2. Walk downward up to `CLAUDE_INPUT_WALK_MAX` rows, collecting
-///      the last row that looks like wrapped input content. Stop on
-///      nested prompts, hint rows, or two consecutive blank rows.
-///   3. Run the 3-tier column search on that last row.
+///   2. Walk downward up to `CLAUDE_INPUT_WALK_MAX` rows to compute
+///      `input_row_last` — the bottom of the wrapped input block.
+///   3. Scan `[prompt_row ..= input_row_last]` bottom-to-top for the
+///      row that actually paints the inverse caret cell. The user can
+///      move the caret back up with ← onto any wrapped row, including
+///      the prompt row itself, and Claude redraws the inverse marker
+///      on whichever row currently owns the caret. Picking the
+///      bottom-most row with an inverse cell keeps the end-of-input
+///      case (caret on last wrapped line) working while also handling
+///      ← navigation back to earlier wrapped lines.
+///   4. When no row in the block has an inverse cell (caret blink
+///      OFF, or text-only state), fall back to the 3-tier column
+///      search on `input_row_last`.
 ///
 /// Returns `None` when no prompt row is visible; callers fall back to
 /// `claude_caret_cache` and finally to the raw vt100 cursor.
 fn resolve_claude_caret(screen: &vt100::Screen) -> Option<(u16, u16)> {
     let prompt_row = find_prompt_row(screen)?;
-    let row = resolve_input_row_last(screen, prompt_row);
-    let col = pick_caret_col_on_row(screen, row);
-    Some((row, col))
+    let last = resolve_input_row_last(screen, prompt_row);
+    let cols = screen.size().1;
+    for row in (prompt_row..=last).rev() {
+        for col in (0..cols).rev() {
+            if screen.cell(row, col).is_some_and(|c| c.inverse()) {
+                return Some((row, col));
+            }
+        }
+    }
+    Some((last, pick_caret_col_on_row(screen, last)))
 }
 
 fn debug_log_caret_scan(
@@ -1672,6 +1688,38 @@ mod claude_caret_tests {
         let (r, c) = resolve_claude_caret(screen).unwrap();
         assert_eq!(r, 3, "caret must land on wrapped continuation row");
         assert_eq!(c, 4, "caret should sit on the inverse cell after `  bb`");
+    }
+
+    #[test]
+    fn wrapped_input_caret_can_return_to_prompt_row() {
+        // Regression for Issue #147 follow-up: after wrapping onto a
+        // continuation row, the user presses ← to move the caret back
+        // onto the prompt row. Claude repaints the inverse caret on
+        // row 2 (prompt row) while row 3 still shows the wrapped
+        // tail with no inverse cell. The resolver must track the
+        // caret back to row 2 instead of sticking to the bottom row.
+        let mut bytes = at(2, 0);
+        bytes.extend_from_slice(b"> aa");
+        bytes.extend_from_slice(INV_ON);
+        bytes.extend_from_slice(b"a");
+        bytes.extend_from_slice(INV_OFF);
+        bytes.extend_from_slice(b"aaaaa");
+        bytes.extend_from_slice(&at(3, 0));
+        bytes.extend_from_slice(b"  bb");
+        let p = make_screen(5, 10, &bytes);
+        let screen = p.screen();
+
+        assert_eq!(
+            resolve_input_row_last(screen, 2),
+            3,
+            "walk still reaches the wrapped continuation row"
+        );
+        let (r, c) = resolve_claude_caret(screen).unwrap();
+        assert_eq!(
+            r, 2,
+            "caret must follow the inverse cell back onto the prompt row"
+        );
+        assert_eq!(c, 4, "inverse caret sits on the `a` at col 4 of row 2");
     }
 
     #[test]
