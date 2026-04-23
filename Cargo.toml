@@ -78,7 +78,7 @@ name = "ccmux"
 # shell prompt. Sticky-caret path now engages only while the PTY
 # cursor is actually hidden; new regression test covers the gating
 # helper. Patch bump — pure bug fix on top of 0.15.1.
-version = "0.15.2"
+version = "0.16.0"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
