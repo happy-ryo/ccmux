@@ -825,131 +825,10 @@ fn render_terminal_content(
         // both blink and streaming bursts instead of chasing vt100
         // around the screen.
         let detected: Option<(u16, u16)> = if claude_pane {
-            // An "isolated" inverse cell — neither neighbor on the
-            // same row is inverse — is the signature of Claude's
-            // single-cell input caret. Spinner / progress lines
-            // such as `* Osmosing...` or `● Committed 8` paint the
-            // marker glyph plus the trailing label all in inverse
-            // video, so each of their cells has at least one
-            // inverse neighbor and is rejected here. Selection
-            // highlights and other multi-cell inverse spans are
-            // rejected the same way.
-            //
-            // Caveat: a CJK double-width caret cell may end up
-            // adjacent to an inverse continuation half — verify on
-            // real CJK editing flows before relying on this for
-            // multi-byte caret tracking.
-            // Locate Claude's input row by scanning bottom-up for
-            // the `>` prompt glyph in one of the first few columns.
-            // Claude Code always renders `> ` (or just `>`) at the
-            // left edge of its input box, so finding it gives us
-            // the input row directly — no need to guess from vt100
-            // cursor or pane geometry. Spinner / status / streaming
-            // rows never start with `>` so they are excluded by
-            // construction.
-            let screen_rows = screen.size().0;
-            let cols = screen.size().1;
-            let mut input_row: Option<u16> = None;
-            for row in (0..screen_rows).rev() {
-                for col in 0..cols.min(8) {
-                    if screen.cell(row, col).is_some_and(|c| {
-                        matches!(
-                            c.contents(),
-                            ">" | "\u{276F}"
-                                | "\u{203A}"
-                                | "\u{27E9}"
-                                | "\u{3009}"
-                                | "\u{276D}"
-                                | "\u{2771}"
-                        )
-                    }) {
-                        input_row = Some(row);
-                        break;
-                    }
-                }
-                if input_row.is_some() {
-                    break;
-                }
-            }
+            let found = resolve_claude_caret(screen);
             if let Some(path) = std::env::var_os("CCMUX_DEBUG_CURSOR_LOG") {
                 if is_focused {
-                    let mut bottom_chars = String::new();
-                    let start_row = screen_rows.saturating_sub(8);
-                    for row in start_row..screen_rows {
-                        bottom_chars.push_str(&format!("r{row}:"));
-                        for col in 0..cols.min(12) {
-                            let s = screen
-                                .cell(row, col)
-                                .map(|c| c.contents().to_string())
-                                .unwrap_or_default();
-                            bottom_chars.push_str(&format!("[{s}]"));
-                        }
-                        bottom_chars.push(' ');
-                    }
-                    let line = format!(
-                        "[ccmux dbg] input_row={:?} bottom: {}\n",
-                        input_row, bottom_chars
-                    );
-                    if let Ok(mut f) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(std::path::PathBuf::from(&path))
-                    {
-                        use std::io::Write;
-                        let _ = f.write_all(line.as_bytes());
-                    }
-                }
-            }
-            // On the resolved input row, find the right-most
-            // inverse cell. The isolation check used elsewhere
-            // (rejecting multi-cell inverse spans) doesn't apply
-            // here — IME composition under CJK input renders the
-            // entire span as contiguous inverse, and we still
-            // want to land the caret at its trailing edge so the
-            // IME candidate window anchors below the right place.
-            // Spinner / status / streaming rows are already
-            // excluded by the input_row search above (they don't
-            // start with `❯`/`>`), so we cannot accidentally pick
-            // up a spinner glyph here.
-            // Pin the host caret to the input row even when no
-            // inverse cell exists there. IME composition pre-edit
-            // is rendered by the host terminal at the host caret
-            // position **before** any keystrokes reach Claude, so
-            // an empty input box still needs the caret pinned to
-            // the right cell — otherwise pre-edit text shows up
-            // wherever vt100's cursor was last parked (typically
-            // the spinner row Claude is currently writing to).
-            //
-            // Position priority on the resolved input row:
-            //   1. Right-most inverse cell — Claude's painted
-            //      caret marker (end-of-input blink, mid-line
-            //      edit, IME composition trailing edge).
-            //   2. Right-most non-blank cell + 1 — end of typed
-            //      content, where the next char would land.
-            //   3. Just after the prompt glyph — empty input box.
-            let mut found: Option<(u16, u16)> = None;
-            if let Some(row) = input_row {
-                for col in (0..cols).rev() {
-                    if screen.cell(row, col).is_some_and(|c| c.inverse()) {
-                        found = Some((row, col));
-                        break;
-                    }
-                }
-                if found.is_none() {
-                    let mut last_nonblank: Option<u16> = None;
-                    for col in (0..cols).rev() {
-                        if let Some(c) = screen.cell(row, col) {
-                            let s = c.contents();
-                            if !s.is_empty() && s != " " {
-                                last_nonblank = Some(col);
-                                break;
-                            }
-                        }
-                    }
-                    let col = last_nonblank
-                        .map(|c| c.saturating_add(1).min(cols.saturating_sub(1)))
-                        .unwrap_or(2);
-                    found = Some((row, col));
+                    debug_log_caret_scan(screen, found, &path);
                 }
             }
             if let Some(pos) = found {
@@ -1022,6 +901,203 @@ fn should_track_claude_caret(
     hide_cursor: bool,
 ) -> bool {
     is_claude_running || (claude_ever_seen && hide_cursor)
+}
+
+/// Prompt glyphs Claude Code renders at the left edge of its input box.
+const CLAUDE_PROMPT_GLYPHS: &[&str] = &[
+    ">", "\u{276F}", // ❯
+    "\u{203A}", // ›
+    "\u{27E9}", // ⟩
+    "\u{3009}", // 〉
+    "\u{276D}", // ❭
+    "\u{2771}", // ❱
+];
+
+/// Columns scanned at the left of a row when looking for a prompt glyph.
+const CLAUDE_PROMPT_SCAN_COLS: u16 = 8;
+
+/// Maximum rows to walk downward from `prompt_row` while probing for
+/// a wrapped continuation of Claude's input box. Each continuation row
+/// must pass the `is_continuation_candidate` check below, so large
+/// values are safe; the cap just bounds worst-case work per frame.
+const CLAUDE_INPUT_WALK_MAX: u16 = 20;
+
+fn cell_is_prompt_glyph(screen: &vt100::Screen, row: u16, col: u16) -> bool {
+    screen
+        .cell(row, col)
+        .is_some_and(|c| CLAUDE_PROMPT_GLYPHS.iter().any(|g| *g == c.contents()))
+}
+
+fn row_starts_with_prompt(screen: &vt100::Screen, row: u16) -> bool {
+    let cols = screen.size().1.min(CLAUDE_PROMPT_SCAN_COLS);
+    (0..cols).any(|col| cell_is_prompt_glyph(screen, row, col))
+}
+
+fn row_col0_is_blank(screen: &vt100::Screen, row: u16) -> bool {
+    screen
+        .cell(row, 0)
+        .map(|c| {
+            let s = c.contents();
+            s.is_empty() || s == " "
+        })
+        .unwrap_or(true)
+}
+
+/// A row qualifies as a wrapped-input continuation iff (a) col 0 is
+/// blank (Claude indents continuation to match the prompt glyph width)
+/// AND (b) the row has some non-blank content somewhere. Status /
+/// hint / footer rows (`? for shortcuts`, `Tip: …`, etc.) have
+/// non-blank content starting at col 0 and are rejected by (a); fully
+/// blank padding rows are rejected by (b) and handled by the blank
+/// streak counter in `resolve_input_row_last`.
+fn is_continuation_candidate(screen: &vt100::Screen, row: u16) -> bool {
+    row_col0_is_blank(screen, row) && row_has_non_blank(screen, row)
+}
+
+fn row_has_non_blank(screen: &vt100::Screen, row: u16) -> bool {
+    let cols = screen.size().1;
+    for col in 0..cols {
+        if let Some(c) = screen.cell(row, col) {
+            let s = c.contents();
+            if !s.is_empty() && s != " " {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Find the bottom-most row that contains a Claude prompt glyph
+/// (`>`/`❯`/…) in its first few columns. Returns `None` if no prompt
+/// row is visible (e.g. Claude is fully occluded by streaming).
+fn find_prompt_row(screen: &vt100::Screen) -> Option<u16> {
+    let screen_rows = screen.size().0;
+    (0..screen_rows)
+        .rev()
+        .find(|&row| row_starts_with_prompt(screen, row))
+}
+
+/// Walk downward from `prompt_row` to find the bottom-most row that
+/// still belongs to Claude's input box. Stops when it encounters a
+/// nested prompt, a status/footer row (any row with non-blank content
+/// at col 0), or two consecutive blank rows (input-box padding /
+/// bottom of screen).
+///
+/// Returns the last row that qualified as a wrapped continuation.
+/// Defaults to `prompt_row` when nothing below it looks like wrapped
+/// content.
+fn resolve_input_row_last(screen: &vt100::Screen, prompt_row: u16) -> u16 {
+    let screen_rows = screen.size().0;
+    let mut last = prompt_row;
+    let mut blank_streak = 0u16;
+    let max_row = prompt_row
+        .saturating_add(CLAUDE_INPUT_WALK_MAX)
+        .min(screen_rows.saturating_sub(1));
+    let mut r = prompt_row.saturating_add(1);
+    while r <= max_row {
+        if row_starts_with_prompt(screen, r) {
+            break;
+        }
+        if row_has_non_blank(screen, r) {
+            // Has content — only accept as continuation if col 0 is
+            // blank. Any row whose col 0 carries a non-space glyph is
+            // a status / hint / footer line (e.g. `? for shortcuts`,
+            // `Tip: …`) and terminates the walk without being
+            // promoted.
+            if is_continuation_candidate(screen, r) {
+                last = r;
+                blank_streak = 0;
+            } else {
+                break;
+            }
+        } else {
+            blank_streak += 1;
+            if blank_streak >= 2 {
+                break;
+            }
+        }
+        r = r.saturating_add(1);
+    }
+    last
+}
+
+/// Pick the column for Claude's visible caret on `row` using the
+/// 3-tier priority established by PR #133: rightmost inverse cell,
+/// else rightmost non-blank cell + 1, else column 2 (just after the
+/// prompt glyph).
+fn pick_caret_col_on_row(screen: &vt100::Screen, row: u16) -> u16 {
+    let cols = screen.size().1;
+    for col in (0..cols).rev() {
+        if screen.cell(row, col).is_some_and(|c| c.inverse()) {
+            return col;
+        }
+    }
+    let mut last_nonblank: Option<u16> = None;
+    for col in (0..cols).rev() {
+        if let Some(c) = screen.cell(row, col) {
+            let s = c.contents();
+            if !s.is_empty() && s != " " {
+                last_nonblank = Some(col);
+                break;
+            }
+        }
+    }
+    last_nonblank
+        .map(|c| c.saturating_add(1).min(cols.saturating_sub(1)))
+        .unwrap_or(2)
+}
+
+/// Resolve Claude's visible caret position on the current screen,
+/// accounting for wrapped input rows.
+///
+/// Algorithm (Proposal A of Issue #147):
+///   1. Find `prompt_row` bottom-up (row whose first few cols contain
+///      `>`/`❯`/… — Claude's input box prompt glyph).
+///   2. Walk downward up to `CLAUDE_INPUT_WALK_MAX` rows, collecting
+///      the last row that looks like wrapped input content. Stop on
+///      nested prompts, hint rows, or two consecutive blank rows.
+///   3. Run the 3-tier column search on that last row.
+///
+/// Returns `None` when no prompt row is visible; callers fall back to
+/// `claude_caret_cache` and finally to the raw vt100 cursor.
+fn resolve_claude_caret(screen: &vt100::Screen) -> Option<(u16, u16)> {
+    let prompt_row = find_prompt_row(screen)?;
+    let row = resolve_input_row_last(screen, prompt_row);
+    let col = pick_caret_col_on_row(screen, row);
+    Some((row, col))
+}
+
+fn debug_log_caret_scan(
+    screen: &vt100::Screen,
+    resolved: Option<(u16, u16)>,
+    path: &std::ffi::OsStr,
+) {
+    let (screen_rows, cols) = screen.size();
+    let start_row = screen_rows.saturating_sub(8);
+    let mut bottom_chars = String::new();
+    for row in start_row..screen_rows {
+        bottom_chars.push_str(&format!("r{row}:"));
+        for col in 0..cols.min(12) {
+            let s = screen
+                .cell(row, col)
+                .map(|c| c.contents().to_string())
+                .unwrap_or_default();
+            bottom_chars.push_str(&format!("[{s}]"));
+        }
+        bottom_chars.push(' ');
+    }
+    let line = format!(
+        "[ccmux dbg] resolved={:?} bottom: {}\n",
+        resolved, bottom_chars
+    );
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::path::PathBuf::from(path))
+    {
+        use std::io::Write;
+        let _ = f.write_all(line.as_bytes());
+    }
 }
 
 // ─── Preview ──────────────────────────────────────────────
@@ -1531,5 +1607,219 @@ mod overlay_wrap_tests {
         assert!(should_track_claude_caret(false, true, true));
         assert!(!should_track_claude_caret(false, true, false));
         assert!(should_track_claude_caret(true, false, false));
+    }
+}
+
+#[cfg(test)]
+mod claude_caret_tests {
+    use super::{
+        find_prompt_row, pick_caret_col_on_row, resolve_claude_caret, resolve_input_row_last,
+    };
+
+    /// Drive a vt100 parser with raw bytes to construct a screen for
+    /// assertions. Using the parser directly (rather than hand-building
+    /// cells) keeps tests faithful to real Claude output.
+    fn make_screen(rows: u16, cols: u16, bytes: &[u8]) -> vt100::Parser {
+        let mut parser = vt100::Parser::new(rows, cols, 0);
+        parser.process(bytes);
+        parser
+    }
+
+    // SGR 7 = inverse on, SGR 27 = inverse off.
+    const INV_ON: &[u8] = b"\x1b[7m";
+    const INV_OFF: &[u8] = b"\x1b[27m";
+
+    fn at(r: u16, c: u16) -> Vec<u8> {
+        format!("\x1b[{};{}H", r + 1, c + 1).into_bytes()
+    }
+
+    #[test]
+    fn single_line_prompt_places_caret_on_prompt_row() {
+        // `> hi█` on row 2 of a 4-row screen.
+        let mut bytes = at(2, 0);
+        bytes.extend_from_slice(b"> hi");
+        bytes.extend_from_slice(INV_ON);
+        bytes.extend_from_slice(b" ");
+        bytes.extend_from_slice(INV_OFF);
+        let p = make_screen(4, 20, &bytes);
+        let screen = p.screen();
+
+        assert_eq!(find_prompt_row(screen), Some(2));
+        assert_eq!(resolve_input_row_last(screen, 2), 2);
+        let (r, c) = resolve_claude_caret(screen).unwrap();
+        assert_eq!(r, 2);
+        // Caret is the inverse blank at col 4 (after `> hi`).
+        assert_eq!(c, 4);
+    }
+
+    #[test]
+    fn wrapped_input_tracks_caret_onto_continuation_row() {
+        // Row 2: `> aaaaaaaa` (prompt + 8 chars, fills width 10 after `> `)
+        // Row 3: `  bb█`     (continuation with inverse caret)
+        let mut bytes = at(2, 0);
+        bytes.extend_from_slice(b"> aaaaaaaa");
+        bytes.extend_from_slice(&at(3, 0));
+        bytes.extend_from_slice(b"  bb");
+        bytes.extend_from_slice(INV_ON);
+        bytes.extend_from_slice(b" ");
+        bytes.extend_from_slice(INV_OFF);
+        let p = make_screen(5, 10, &bytes);
+        let screen = p.screen();
+
+        assert_eq!(find_prompt_row(screen), Some(2));
+        // The walk must descend to the continuation row.
+        assert_eq!(resolve_input_row_last(screen, 2), 3);
+        let (r, c) = resolve_claude_caret(screen).unwrap();
+        assert_eq!(r, 3, "caret must land on wrapped continuation row");
+        assert_eq!(c, 4, "caret should sit on the inverse cell after `  bb`");
+    }
+
+    #[test]
+    fn wrapped_input_without_inverse_falls_back_to_last_nonblank_plus_one() {
+        // Continuation row has text but no inverse cell (caret blink
+        // OFF phase). The fallback should still place the caret on the
+        // continuation row, just after its last non-blank column.
+        let mut bytes = at(2, 0);
+        bytes.extend_from_slice(b"> aaaaaaaa");
+        bytes.extend_from_slice(&at(3, 0));
+        bytes.extend_from_slice(b"  bbb");
+        let p = make_screen(5, 10, &bytes);
+        let screen = p.screen();
+
+        let (r, c) = resolve_claude_caret(screen).unwrap();
+        assert_eq!(r, 3);
+        // Last non-blank on row 3 is col 4 (`b`); fallback lands at col 5.
+        assert_eq!(c, 5);
+    }
+
+    #[test]
+    fn hint_row_stops_the_downward_walk() {
+        // Hint `? for shortcuts` below the input row must NOT be
+        // included — the caret stays on the prompt row.
+        let mut bytes = at(2, 0);
+        bytes.extend_from_slice(b"> hi");
+        bytes.extend_from_slice(&at(3, 0));
+        bytes.extend_from_slice(b"? for shortcuts");
+        let p = make_screen(5, 20, &bytes);
+        let screen = p.screen();
+
+        assert_eq!(resolve_input_row_last(screen, 2), 2);
+    }
+
+    #[test]
+    fn tip_footer_row_stops_the_walk() {
+        // Guard against the `? for shortcuts`-only bias: any row whose
+        // col 0 carries a non-blank glyph (e.g. `Tip: …`) must
+        // terminate the walk, even when the footer text differs.
+        let mut bytes = at(2, 0);
+        bytes.extend_from_slice(b"> hi");
+        bytes.extend_from_slice(&at(3, 0));
+        bytes.extend_from_slice(b"Tip: press Alt+Enter to send");
+        let p = make_screen(5, 30, &bytes);
+        let screen = p.screen();
+
+        assert_eq!(resolve_input_row_last(screen, 2), 2);
+    }
+
+    #[test]
+    fn continuation_containing_question_mark_is_not_treated_as_hint() {
+        // A wrapped continuation whose text happens to start with `?`
+        // after the indent (e.g. `  ?foo`) must still be tracked. The
+        // indent at col 0 is what distinguishes continuation from
+        // hint rows.
+        let mut bytes = at(2, 0);
+        bytes.extend_from_slice(b"> aaaaaaaa");
+        bytes.extend_from_slice(&at(3, 0));
+        bytes.extend_from_slice(b"  ?foo");
+        let p = make_screen(5, 10, &bytes);
+        let screen = p.screen();
+
+        assert_eq!(
+            resolve_input_row_last(screen, 2),
+            3,
+            "col 0 indent marks this as continuation, not a hint"
+        );
+    }
+
+    #[test]
+    fn walk_tracks_seven_wrapped_continuation_rows() {
+        // Narrow pane where input wraps many times. Each continuation
+        // row must be reachable by the downward walk (cap is high
+        // enough to cover realistic wrap depths).
+        let mut bytes = at(0, 0);
+        bytes.extend_from_slice(b"> aaaaaaaa"); // row 0
+        for r in 1..=7u16 {
+            bytes.extend_from_slice(&at(r, 0));
+            bytes.extend_from_slice(b"  bb");
+        }
+        let p = make_screen(10, 10, &bytes);
+        let screen = p.screen();
+
+        assert_eq!(resolve_input_row_last(screen, 0), 7);
+    }
+
+    #[test]
+    fn nested_prompt_below_stops_the_walk_before_it() {
+        // A second `>` prompt below the first marks a new input box
+        // and must not be swallowed as a continuation row.
+        let mut bytes = at(1, 0);
+        bytes.extend_from_slice(b"> older");
+        bytes.extend_from_slice(&at(3, 0));
+        bytes.extend_from_slice(b"> newer");
+        let p = make_screen(5, 20, &bytes);
+        let screen = p.screen();
+
+        // `find_prompt_row` picks the bottom-most prompt.
+        assert_eq!(find_prompt_row(screen), Some(3));
+        // Walk from the lower prompt downward — nothing beneath.
+        assert_eq!(resolve_input_row_last(screen, 3), 3);
+    }
+
+    #[test]
+    fn two_consecutive_blank_rows_stop_the_walk() {
+        // Row 1 prompt, rows 2 and 3 blank → walk stops without
+        // promoting last beyond row 1.
+        let mut bytes = at(1, 0);
+        bytes.extend_from_slice(b"> hi");
+        let p = make_screen(5, 10, &bytes);
+        let screen = p.screen();
+
+        assert_eq!(resolve_input_row_last(screen, 1), 1);
+    }
+
+    #[test]
+    fn no_prompt_row_returns_none() {
+        // Screen has text but no `>`/`❯` — e.g. plain shell or
+        // streaming occlusion. Caller must fall back to cache/cursor.
+        let bytes = b"hello world".to_vec();
+        let p = make_screen(3, 20, &bytes);
+        assert!(resolve_claude_caret(p.screen()).is_none());
+    }
+
+    #[test]
+    fn empty_input_row_places_caret_right_after_prompt() {
+        // `> ` with no text, no inverse cell. The trailing space is a
+        // real cell and our non-blank search skips spaces, so the
+        // last-non-blank fallback anchors on the `>` at col 0 and
+        // places the caret at col 1 (directly after the prompt). The
+        // hard-coded `2` fallback only fires when the row has zero
+        // non-blank cells — see `fully_blank_prompt_row_falls_back_to_col_two`.
+        let mut bytes = at(2, 0);
+        bytes.extend_from_slice(b"> ");
+        let p = make_screen(4, 10, &bytes);
+        let screen = p.screen();
+
+        assert_eq!(pick_caret_col_on_row(screen, 2), 1);
+        let (r, c) = resolve_claude_caret(screen).unwrap();
+        assert_eq!((r, c), (2, 1));
+    }
+
+    #[test]
+    fn fully_blank_prompt_row_falls_back_to_col_two() {
+        // Edge case: a row with zero non-blank cells. The col search
+        // falls through to the hard-coded `2` fallback inherited from
+        // PR #133.
+        let p = make_screen(4, 10, b"");
+        assert_eq!(pick_caret_col_on_row(p.screen(), 2), 2);
     }
 }
