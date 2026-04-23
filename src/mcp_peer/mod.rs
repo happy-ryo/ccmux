@@ -396,7 +396,7 @@ fn tools_spec() -> Value {
         },
         {
             "name": "spawn_claude_pane",
-            "description": "Higher-level convenience over `spawn_pane`: splits a pane and launches Claude Code with the ccmux-peers channel enabled by construction, so the orchestrating caller never has to synthesize the `--dangerously-load-development-channels server:ccmux-peers` flag or worry about shell-quoting a launch string. Structured fields (`permission_mode`, `model`) are rendered into the final command exactly once; extra `args[]` are appended after them. Conflicting overrides inside `args[]` (--dangerously-load-development-channels / --permission-mode / --model) are rejected with `invalid-params` — use the structured fields instead. Pane creation semantics (split refusal, cwd validation, name / role attachment) match `spawn_pane`.",
+            "description": "Higher-level convenience over `spawn_pane`: splits a pane and launches Claude Code with the ccmux-peers channel enabled by construction, so the orchestrating caller never has to synthesize the `--dangerously-load-development-channels server:ccmux-peers` flag. Structured fields (`permission_mode`, `model`) are rendered into the final command exactly once; extra `args[]` are appended after them. ccmux applies POSIX-style shell quoting for values that contain whitespace or shell metacharacters, targeting bash / zsh / Git Bash — values containing single quotes may not round-trip cleanly on PowerShell-fallback Windows hosts, so prefer alphanumerics + `_-./:@+%=` in structured values. Conflicting overrides inside `args[]` (--dangerously-load-development-channels / --permission-mode / --model) are rejected with `invalid-params` — use the structured fields instead. Pane creation semantics (split refusal, cwd validation, name / role attachment) match `spawn_pane`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1009,14 +1009,25 @@ const CLAUDE_RESERVED_FLAGS: &[&str] = &[
     "--model",
 ];
 
-/// POSIX-style shell quoting good enough for the shells `ccmux` spawns
-/// (bash / zsh / sh on Unix, Git Bash on Windows, and single-quoted
-/// literals in PowerShell — the last treats `'...'` as a literal too).
+/// POSIX-style shell quoting targeted at the shells `ccmux` actually
+/// runs Claude under on the agent-harness path: bash / zsh / sh on
+/// Unix, Git Bash on Windows (the default when present).
+///
 /// A value made of "safe" chars (alphanumerics plus a small punctuation
 /// set that never triggers word-splitting / globbing / variable
 /// expansion) passes through unquoted so the resulting command line
 /// stays readable. Anything else gets wrapped in single quotes with
 /// embedded single quotes escaped as `'\''`.
+///
+/// **Scope limitation:** PowerShell's single-quoted literal does not
+/// interpret the `'\''` escape sequence, so a value that mixes single
+/// quotes with other characters won't round-trip cleanly when the
+/// caller's Windows host lacks Git Bash and falls back to PowerShell.
+/// Realistic `spawn_claude_pane` values (permission modes, model ids,
+/// flag tokens) never contain single quotes, so the practical exposure
+/// is minimal; if callers need PowerShell-safe launches for exotic
+/// values they should pass an absolute path or pre-quoted string
+/// through `args[]` and understand the shell contract themselves.
 ///
 /// Shared between `build_claude_launch_command` and its tests.
 fn shell_quote(value: &str) -> String {
