@@ -5533,6 +5533,38 @@ mod tests {
     }
 
     #[test]
+    fn handle_set_pane_identity_removes_all_stale_name_entries() {
+        // Defense-in-depth: even though normal flow keeps at most one
+        // pane_names entry per pane, planting two manually must not
+        // leave the stale one behind after a rename or clear. The
+        // filter loop walks every key that maps to this pane; this
+        // regression guard pins that behavior.
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+        app.ws_mut().pane_names.insert("one".into(), pane_id);
+        app.ws_mut().pane_names.insert("two".into(), pane_id);
+
+        // Rename to a fresh name — both stale entries must vanish.
+        let info = app
+            .handle_set_pane_identity(&ipc::PaneRef::Focused, Some(Some("fresh".into())), None)
+            .expect("rename succeeds");
+        assert_eq!(info.name.as_deref(), Some("fresh"));
+        assert!(!app.ws().pane_names.contains_key("one"));
+        assert!(!app.ws().pane_names.contains_key("two"));
+        assert_eq!(app.ws().pane_names.get("fresh").copied(), Some(pane_id));
+
+        // Plant two again and clear — both must be removed.
+        app.ws_mut().pane_names.insert("alt".into(), pane_id);
+        let info = app
+            .handle_set_pane_identity(&ipc::PaneRef::Focused, Some(None), None)
+            .expect("clear succeeds");
+        assert!(info.name.is_none());
+        assert!(!app.ws().pane_names.contains_key("fresh"));
+        assert!(!app.ws().pane_names.contains_key("alt"));
+        app.shutdown();
+    }
+
+    #[test]
     fn handle_set_pane_identity_rejects_unknown_pane() {
         let mut app = App::new(40, 80).expect("App::new");
         let err = app

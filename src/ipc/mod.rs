@@ -716,6 +716,24 @@ mod tests {
     }
 
     #[test]
+    fn set_pane_identity_omits_keys_when_keep_keep() {
+        // Regression guard: `skip_serializing_if = "Option::is_none"`
+        // on name / role must keep omit semantics on the wire. If a
+        // future refactor drops the attribute, a server round-tripping
+        // a "leave unchanged" record would silently turn it into
+        // "clear both" — `null` deserializes to Some(None) via the
+        // double_option helper.
+        let r = Request::SetPaneIdentity {
+            target: PaneRef::Focused,
+            name: None,
+            role: None,
+        };
+        let s = serde_json::to_string(&r).unwrap();
+        assert!(!s.contains("\"name\""), "name key leaked: {s}");
+        assert!(!s.contains("\"role\""), "role key leaked: {s}");
+    }
+
+    #[test]
     fn set_pane_identity_roundtrips() {
         let r = Request::SetPaneIdentity {
             target: PaneRef::Name("worker".into()),
