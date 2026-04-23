@@ -797,21 +797,16 @@ fn render_terminal_content(
     // and calls `frame.set_cursor_position` itself, so last-write-wins
     // already puts the caret inside the composition box when the
     // overlay is open. No extra gate needed.
-    // Use the sticky `claude_ever_seen()` here (not
-    // `is_claude_running()`) because Claude rewrites its OSC title to
-    // the in-flight task name (e.g. `✶ Write a 5000-character novel`)
-    // and the live "claude" literal frequently drops out — at which
-    // point a non-latched check would flip to false and the hardware
-    // caret would vanish (Claude hides the PTY cursor via DECTCEM).
-    // `claude_ever_seen()` is sticky: once Claude has been observed
-    // running in this pane (by OSC title), keep treating the pane
-    // as a Claude pane even when Claude rewrites the title to a
-    // task-specific string that no longer literally contains
-    // "claude". A non-latched check would flip to false and the
-    // hardware caret would vanish — Claude hides the PTY cursor
-    // via DECTCEM and relies on the host cursor being shown over
-    // its own visible caret marker.
-    let claude_pane = pane.claude_ever_seen();
+    // Use the sticky `claude_ever_seen()` latch only while the PTY is
+    // actively hiding its cursor. That preserves Claude's task-title
+    // rewrite behavior (title drops "claude" mid-session) without
+    // misclassifying a pane that once ran Claude but has since
+    // returned to a normal shell prompt.
+    let claude_pane = should_track_claude_caret(
+        pane.is_claude_running(),
+        pane.claude_ever_seen(),
+        screen.hide_cursor(),
+    );
     let show_cursor = is_focused && (!screen.hide_cursor() || claude_pane);
     if show_cursor {
         let cursor = screen.cursor_position();
@@ -1019,6 +1014,14 @@ fn render_terminal_content(
             }
         }
     }
+}
+
+fn should_track_claude_caret(
+    is_claude_running: bool,
+    claude_ever_seen: bool,
+    hide_cursor: bool,
+) -> bool {
+    is_claude_running || (claude_ever_seen && hide_cursor)
 }
 
 // ─── Preview ──────────────────────────────────────────────
@@ -1466,7 +1469,7 @@ fn vt100_color_to_ratatui(color: vt100::Color) -> Color {
 
 #[cfg(test)]
 mod overlay_wrap_tests {
-    use super::wrap_overlay_buffer;
+    use super::{should_track_claude_caret, wrap_overlay_buffer};
 
     #[test]
     fn empty_buffer_reports_origin() {
@@ -1521,5 +1524,12 @@ mod overlay_wrap_tests {
         let (rows, r, c) = wrap_overlay_buffer("ab\ncd", 5, 10);
         assert_eq!(rows, vec!["ab".to_string(), "cd".to_string()]);
         assert_eq!((r, c), (1, 2));
+    }
+
+    #[test]
+    fn sticky_claude_latch_only_applies_while_pty_cursor_is_hidden() {
+        assert!(should_track_claude_caret(false, true, true));
+        assert!(!should_track_claude_caret(false, true, false));
+        assert!(should_track_claude_caret(true, false, false));
     }
 }
