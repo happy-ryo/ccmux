@@ -375,6 +375,7 @@ mod tests {
             command: Some("echo".into()),
             id: Some("foo".into()),
             role: None,
+            cwd: None,
         };
         let mut out: Vec<u8> = Vec::new();
         write_request_line(&mut out, &req).unwrap();

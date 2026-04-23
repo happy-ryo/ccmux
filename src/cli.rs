@@ -155,6 +155,11 @@ pub enum IpcCommand {
         /// Free-form role label attached to the new pane.
         #[arg(long)]
         role: Option<String>,
+        /// Working directory for the new pane. Relative paths are
+        /// resolved against the caller's shell cwd and sent as an
+        /// absolute path to the ccmux server.
+        #[arg(long)]
+        cwd: Option<String>,
     },
     /// Split a pane and optionally run a command in the new side.
     Split {
@@ -178,6 +183,12 @@ pub enum IpcCommand {
         /// Free-form role label attached to the new pane.
         #[arg(long)]
         role: Option<String>,
+        /// Working directory for the new pane. Relative paths are
+        /// resolved against the caller's shell cwd and sent as an
+        /// absolute path to the ccmux server. When omitted, the new
+        /// pane inherits the target pane's cwd.
+        #[arg(long)]
+        cwd: Option<String>,
     },
     /// Snapshot the visible screen of a pane. Returns JSON with one
     /// entry per screen row so callers can match against fixed
@@ -300,11 +311,13 @@ impl IpcCommand {
                 id,
                 label,
                 role,
+                cwd,
             } => Ok(Request::NewTab {
                 command: command.clone(),
                 id: id.clone(),
                 label: label.clone(),
                 role: role.clone(),
+                cwd: resolve_cli_cwd(cwd.as_deref())?,
             }),
             IpcCommand::Send {
                 name,
@@ -331,6 +344,7 @@ impl IpcCommand {
                 command,
                 id,
                 role,
+                cwd,
             } => {
                 let dir = match direction.as_str() {
                     "vertical" => Direction::Vertical,
@@ -343,6 +357,7 @@ impl IpcCommand {
                     command: command.clone(),
                     id: id.clone(),
                     role: role.clone(),
+                    cwd: resolve_cli_cwd(cwd.as_deref())?,
                 })
             }
             IpcCommand::Events { .. } => Ok(Request::Subscribe),
@@ -367,6 +382,30 @@ impl IpcCommand {
             ),
         }
     }
+}
+
+/// Resolve a `--cwd` CLI argument against the caller's shell cwd and
+/// hand the ccmux server an absolute path. Server-side validation
+/// (existence / directory check) still runs, so typos still produce a
+/// `cwd_invalid` error — this helper is purely about matching user
+/// intuition when they type a relative path at their shell.
+fn resolve_cli_cwd(raw: Option<&str>) -> anyhow::Result<Option<String>> {
+    let s = match raw {
+        Some(s) => s.trim(),
+        None => return Ok(None),
+    };
+    if s.is_empty() {
+        return Ok(None);
+    }
+    let p = PathBuf::from(s);
+    let absolute = if p.is_absolute() {
+        p
+    } else {
+        std::env::current_dir()
+            .map_err(|e| anyhow::anyhow!("failed to read current_dir for --cwd: {e}"))?
+            .join(p)
+    };
+    Ok(Some(absolute.to_string_lossy().to_string()))
 }
 
 #[cfg(test)]
@@ -583,11 +622,13 @@ mod tests {
                 id,
                 label,
                 role,
+                cwd,
             }) => {
                 assert_eq!(command.as_deref(), Some("cce"));
                 assert_eq!(id.as_deref(), Some("engineering"));
                 assert_eq!(label.as_deref(), Some("eng"));
                 assert!(role.is_none());
+                assert!(cwd.is_none());
             }
             other => panic!("expected NewTab, got {other:?}"),
         }
@@ -604,11 +645,13 @@ mod tests {
                 id,
                 label,
                 role,
+                cwd,
             } => {
                 assert_eq!(command.as_deref(), Some("ccr"));
                 assert_eq!(id.as_deref(), Some("research"));
                 assert!(label.is_none());
                 assert!(role.is_none());
+                assert!(cwd.is_none());
             }
             other => panic!("expected NewTab, got {other:?}"),
         }

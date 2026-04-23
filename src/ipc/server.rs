@@ -428,6 +428,7 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
             command,
             id,
             role,
+            cwd,
         } => {
             let (reply_tx, reply_rx) = oneshot::channel();
             if command_tx
@@ -437,6 +438,7 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
                     command,
                     name: id,
                     role,
+                    cwd,
                     reply: reply_tx,
                 })
                 .is_err()
@@ -456,6 +458,7 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
             id,
             label,
             role,
+            cwd,
         } => {
             let (reply_tx, reply_rx) = oneshot::channel();
             if command_tx
@@ -464,6 +467,7 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
                     name: id,
                     label,
                     role,
+                    cwd,
                     reply: reply_tx,
                 })
                 .is_err()
@@ -687,6 +691,7 @@ mod tests {
                 command: None,
                 id: None,
                 role: None,
+                cwd: None,
             },
             &tx,
         );
@@ -741,6 +746,7 @@ mod tests {
                 id: Some("engineering".into()),
                 label: None,
                 role: None,
+                cwd: None,
             },
             &tx,
         );
@@ -822,6 +828,7 @@ mod tests {
                 command: None,
                 id: None,
                 role: Some("worker".into()),
+                cwd: None,
             },
             &tx,
         );
@@ -844,6 +851,7 @@ mod tests {
                 id: None,
                 label: None,
                 role: Some("leader".into()),
+                cwd: None,
             },
             &tx,
         );
