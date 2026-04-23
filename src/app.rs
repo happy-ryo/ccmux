@@ -93,6 +93,17 @@ pub enum AppCommand {
         body: String,
         reply: oneshot::Sender<std::result::Result<(), ipc::CodedError>>,
     },
+    /// Rename or clear the `name` / `role` of an existing pane. See
+    /// [`ipc::Request::SetPaneIdentity`] for the three-state semantics
+    /// of each field. Success returns the pane's updated [`PaneInfo`]
+    /// so callers can confirm the new identity without a separate
+    /// `List` round-trip.
+    SetPaneIdentity {
+        target: PaneRef,
+        name: Option<Option<String>>,
+        role: Option<Option<String>>,
+        reply: oneshot::Sender<std::result::Result<PaneInfo, ipc::CodedError>>,
+    },
 }
 
 /// Resolve a [`PaneRef`] to a concrete pane id.
@@ -3039,6 +3050,15 @@ impl App {
                 let result = self.handle_peer_send(from_pane, &target, body);
                 let _ = reply.send(result);
             }
+            AppCommand::SetPaneIdentity {
+                target,
+                name,
+                role,
+                reply,
+            } => {
+                let result = self.handle_set_pane_identity(&target, name, role);
+                let _ = reply.send(result);
+            }
         }
     }
 
@@ -3125,6 +3145,131 @@ impl App {
             ts_ms: ipc::events::now_ms(),
         });
         Ok(())
+    }
+
+    /// Apply a name / role change to an existing pane. See
+    /// [`ipc::Request::SetPaneIdentity`] for the three-state semantics.
+    /// Both updates are validated up-front so a bad name never leaves
+    /// the role half-applied.
+    fn handle_set_pane_identity(
+        &mut self,
+        target: &PaneRef,
+        name: Option<Option<String>>,
+        role: Option<Option<String>>,
+    ) -> std::result::Result<PaneInfo, ipc::CodedError> {
+        let (ws_idx, pane_id) = self.resolve_pane_across_workspaces(target).ok_or_else(|| {
+            ipc::CodedError::new(
+                ipc::err_code::PANE_NOT_FOUND,
+                format!("pane not found: {target:?}"),
+            )
+        })?;
+
+        // Validate the requested name *before* mutating anything so an
+        // in_use / invalid result leaves both name and role untouched.
+        // Keep the "current name" lookup so idempotent re-sets are a
+        // no-op instead of a collision with the caller themselves.
+        if let Some(Some(new_name)) = &name {
+            {
+                let trimmed = new_name.trim();
+                if trimmed.is_empty() {
+                    return Err(ipc::CodedError::new(
+                        ipc::err_code::NAME_INVALID,
+                        "name must not be empty — pass null to clear",
+                    ));
+                }
+                if trimmed.chars().all(|c| c.is_ascii_digit()) {
+                    return Err(ipc::CodedError::new(
+                        ipc::err_code::NAME_INVALID,
+                        format!(
+                            "name {trimmed:?} is all-digits; would collide with numeric pane ids"
+                        ),
+                    ));
+                }
+                // Name characters match the layout TOML rule so all
+                // addressing surfaces agree on the character set.
+                if !trimmed
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                {
+                    return Err(ipc::CodedError::new(
+                        ipc::err_code::NAME_INVALID,
+                        format!("name {trimmed:?} has invalid characters; allowed: [A-Za-z0-9_-]"),
+                    ));
+                }
+                // Collision check, scoped to this pane's workspace so
+                // the same name may exist in other tabs (mirrors the
+                // layout rule). Self-collision is fine — it's how
+                // idempotent re-sets stay no-ops.
+                let ws = &self.workspaces[ws_idx];
+                if let Some(&holder) = ws.pane_names.get(trimmed) {
+                    if holder != pane_id {
+                        return Err(ipc::CodedError::new(
+                            ipc::err_code::NAME_IN_USE,
+                            format!(
+                                "name {trimmed:?} is already held by pane {holder} in this tab"
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Validation passed — apply updates.
+        let ws = &mut self.workspaces[ws_idx];
+        if let Some(name_change) = name {
+            // Drop any existing entry keyed to this pane first so the
+            // pre/post maps never transiently both contain it. Matters
+            // when the pane's existing name equals the new one with
+            // different casing, or when clearing.
+            let keys_to_remove: Vec<String> = ws
+                .pane_names
+                .iter()
+                .filter_map(|(k, &v)| (v == pane_id).then_some(k.clone()))
+                .collect();
+            for k in keys_to_remove {
+                ws.pane_names.remove(&k);
+            }
+            if let Some(new_name) = name_change {
+                ws.pane_names.insert(new_name.trim().to_string(), pane_id);
+            }
+        }
+        if let Some(role_change) = role {
+            if let Some(pane) = ws.panes.get_mut(&pane_id) {
+                pane.role = role_change
+                    .map(|r| r.trim().to_string())
+                    .filter(|r| !r.is_empty());
+            }
+        }
+        self.dirty = true;
+
+        // Build a PaneInfo reply mirroring the shape produced by
+        // `AppCommand::List` so callers can consume both uniformly.
+        let ws = &self.workspaces[ws_idx];
+        let name_for_pane = ws
+            .pane_names
+            .iter()
+            .find(|(_, &id)| id == pane_id)
+            .map(|(n, _)| n.clone());
+        let pane = ws.panes.get(&pane_id).ok_or_else(|| {
+            ipc::CodedError::new(ipc::err_code::PANE_VANISHED, "pane vanished mid-update")
+        })?;
+        let rect = ws
+            .last_pane_rects
+            .iter()
+            .find(|(id, _)| *id == pane_id)
+            .map(|(_, r)| *r)
+            .unwrap_or_default();
+        Ok(PaneInfo {
+            id: pane_id,
+            name: name_for_pane,
+            role: pane.role.clone(),
+            focused: ws.focused_pane_id == pane_id,
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            cwd: Some(pane.cwd.to_string_lossy().to_string()),
+        })
     }
 
     fn handle_inspect(
@@ -5255,6 +5400,145 @@ mod tests {
         assert_eq!(name.as_deref(), Some("tab-pane"));
         assert_eq!(role.as_deref(), Some("tab-role"));
 
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_set_pane_identity_sets_name_and_role() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+
+        let info = app
+            .handle_set_pane_identity(
+                &ipc::PaneRef::Focused,
+                Some(Some("secretary".into())),
+                Some(Some("leader".into())),
+            )
+            .expect("set identity succeeds");
+        assert_eq!(info.id, pane_id);
+        assert_eq!(info.name.as_deref(), Some("secretary"));
+        assert_eq!(info.role.as_deref(), Some("leader"));
+        assert_eq!(app.ws().pane_names.get("secretary").copied(), Some(pane_id));
+        assert_eq!(
+            app.ws()
+                .panes
+                .get(&pane_id)
+                .and_then(|p| p.role.clone())
+                .as_deref(),
+            Some("leader")
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_set_pane_identity_null_clears_existing_value() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+        app.ws_mut().pane_names.insert("old".into(), pane_id);
+        if let Some(pane) = app.ws_mut().panes.get_mut(&pane_id) {
+            pane.role = Some("old-role".into());
+        }
+
+        let info = app
+            .handle_set_pane_identity(&ipc::PaneRef::Focused, Some(None), Some(None))
+            .expect("clear succeeds");
+        assert!(info.name.is_none());
+        assert!(info.role.is_none());
+        assert!(!app.ws().pane_names.contains_key("old"));
+        assert!(app.ws().panes.get(&pane_id).unwrap().role.is_none());
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_set_pane_identity_keep_leaves_values_untouched() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+        app.ws_mut().pane_names.insert("keeper".into(), pane_id);
+        if let Some(pane) = app.ws_mut().panes.get_mut(&pane_id) {
+            pane.role = Some("keeper-role".into());
+        }
+
+        // Both fields None → no-op call errors out? No — the handler
+        // allows it (MCP layer guards against accidental no-op). Here
+        // we exercise "update role only, keep name".
+        let info = app
+            .handle_set_pane_identity(&ipc::PaneRef::Focused, None, Some(Some("updated".into())))
+            .expect("role-only update");
+        assert_eq!(info.name.as_deref(), Some("keeper"));
+        assert_eq!(info.role.as_deref(), Some("updated"));
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_set_pane_identity_rejects_name_collision() {
+        // Split so we have two panes, name them distinctly, then try
+        // to rename pane B to pane A's name. Must refuse with
+        // NAME_IN_USE and leave both existing mappings intact.
+        let mut app = App::new(40, 80).expect("App::new");
+        let a_id = app.ws().focused_pane_id;
+        app.ws_mut().pane_names.insert("alpha".into(), a_id);
+        let b_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                Some("beta".into()),
+                None,
+                None,
+            )
+            .expect("split");
+
+        let err = app
+            .handle_set_pane_identity(&ipc::PaneRef::Id(b_id), Some(Some("alpha".into())), None)
+            .expect_err("colliding rename must fail");
+        assert_eq!(err.code, Some(ipc::err_code::NAME_IN_USE));
+        // Pre-collision state preserved.
+        assert_eq!(app.ws().pane_names.get("alpha").copied(), Some(a_id));
+        assert_eq!(app.ws().pane_names.get("beta").copied(), Some(b_id));
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_set_pane_identity_idempotent_on_self_name() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+        app.ws_mut().pane_names.insert("keeper".into(), pane_id);
+
+        let info = app
+            .handle_set_pane_identity(&ipc::PaneRef::Focused, Some(Some("keeper".into())), None)
+            .expect("self-name must not collide");
+        assert_eq!(info.name.as_deref(), Some("keeper"));
+        assert_eq!(app.ws().pane_names.get("keeper").copied(), Some(pane_id));
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_set_pane_identity_rejects_all_digit_name() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let err = app
+            .handle_set_pane_identity(&ipc::PaneRef::Focused, Some(Some("123".into())), None)
+            .expect_err("all-digit name must fail");
+        assert_eq!(err.code, Some(ipc::err_code::NAME_INVALID));
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_set_pane_identity_rejects_invalid_characters() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let err = app
+            .handle_set_pane_identity(&ipc::PaneRef::Focused, Some(Some("has space".into())), None)
+            .expect_err("space in name must fail");
+        assert_eq!(err.code, Some(ipc::err_code::NAME_INVALID));
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_set_pane_identity_rejects_unknown_pane() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let err = app
+            .handle_set_pane_identity(&ipc::PaneRef::Id(9999), Some(Some("anything".into())), None)
+            .expect_err("unknown pane must fail");
+        assert_eq!(err.code, Some(ipc::err_code::PANE_NOT_FOUND));
         app.shutdown();
     }
 

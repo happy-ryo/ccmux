@@ -169,6 +169,71 @@ pub enum Request {
         target: PaneRef,
         body: String,
     },
+    /// Rename or (re)assign the stable `name` / `role` of an existing
+    /// pane. Both fields use three-state semantics over the wire:
+    ///
+    /// - missing key        → leave the current value unchanged
+    /// - `null`             → clear the current value
+    /// - `"some-string"`    → set to the provided value
+    ///
+    /// Serde handles this via [`double_option`] on the two fields.
+    ///
+    /// Validation (server-side):
+    /// - a non-empty `name` must not collide with another pane in the
+    ///   same tab (`name_in_use`).
+    /// - a non-empty `name` must not be all-digits, since the pane
+    ///   addressing rule interprets digit strings as numeric ids
+    ///   (`name_invalid`).
+    /// - setting `name` to the target's current name or `role` to the
+    ///   target's current role is a silent no-op (idempotent).
+    SetPaneIdentity {
+        target: PaneRef,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        name: Option<Option<String>>,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        role: Option<Option<String>>,
+    },
+}
+
+/// Serde helper for the "missing / null / value" three-state pattern
+/// used by [`Request::SetPaneIdentity`]. Missing key deserializes to
+/// `None`, explicit `null` to `Some(None)`, and any value to
+/// `Some(Some(value))`. Requires `#[serde(default)]` on the field so
+/// missing keys resolve to `None` rather than an error.
+pub mod double_option {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S, T>(value: &Option<Option<T>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: Serialize,
+    {
+        match value {
+            Some(inner) => inner.serialize(serializer),
+            // `skip_serializing_if = "Option::is_none"` on the field
+            // means we never reach this arm for outer-None; serializing
+            // the outer-None as a bare `null` would be wrong anyway —
+            // a caller round-tripping that record back through the
+            // wire would turn "leave unchanged" into "clear".
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        Ok(Some(Option::<T>::deserialize(deserializer)?))
+    }
 }
 
 /// Identifies a pane in a request. Names are user-friendly and stable
@@ -330,6 +395,15 @@ pub mod err_code {
     /// directory. Emitted by `Split` / `NewTab` before any pane is
     /// created so failed calls never leave a half-mutated layout.
     pub const CWD_INVALID: &str = "cwd_invalid";
+    /// `SetPaneIdentity` was asked to assign a name that another pane
+    /// in the same workspace already holds. The caller should either
+    /// pick a different name or retire the existing holder first.
+    pub const NAME_IN_USE: &str = "name_in_use";
+    /// `SetPaneIdentity` was asked to assign a name that violates
+    /// the naming rules (currently: non-empty and not all-digits,
+    /// since digit strings are interpreted as numeric ids by
+    /// `PaneRef::Name` resolution).
+    pub const NAME_INVALID: &str = "name_invalid";
 }
 
 /// App-side error carrying a free-form message plus an optional
@@ -587,6 +661,68 @@ mod tests {
             } => {}
             other => panic!("expected empty NewTab, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn set_pane_identity_missing_fields_default_to_keep() {
+        // Bare payload with just `target` must deserialize to both
+        // name / role in "keep" state (outer None). Prevents a regression
+        // where `#[serde(default)]` would be dropped from the field and
+        // every call implicitly cleared the values.
+        let raw = r#"{"cmd":"set_pane_identity","target":{"focused":null}}"#;
+        let parsed: Request = serde_json::from_str(raw).unwrap();
+        match parsed {
+            Request::SetPaneIdentity {
+                target,
+                name: None,
+                role: None,
+            } => {
+                assert!(matches!(target, PaneRef::Focused));
+            }
+            other => panic!("expected SetPaneIdentity keep/keep, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_pane_identity_null_means_clear() {
+        let raw =
+            r#"{"cmd":"set_pane_identity","target":{"focused":null},"name":null,"role":null}"#;
+        let parsed: Request = serde_json::from_str(raw).unwrap();
+        match parsed {
+            Request::SetPaneIdentity {
+                name: Some(None),
+                role: Some(None),
+                ..
+            } => {}
+            other => panic!("expected clear/clear, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_pane_identity_string_means_set() {
+        let raw = r#"{"cmd":"set_pane_identity","target":{"focused":null},"name":"secretary","role":"leader"}"#;
+        let parsed: Request = serde_json::from_str(raw).unwrap();
+        match parsed {
+            Request::SetPaneIdentity {
+                name: Some(Some(n)),
+                role: Some(Some(r)),
+                ..
+            } => {
+                assert_eq!(n, "secretary");
+                assert_eq!(r, "leader");
+            }
+            other => panic!("expected set/set, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_pane_identity_roundtrips() {
+        let r = Request::SetPaneIdentity {
+            target: PaneRef::Name("worker".into()),
+            name: Some(Some("renamed".into())),
+            role: Some(None),
+        };
+        assert_eq!(roundtrip(&r), r);
     }
 
     #[test]
