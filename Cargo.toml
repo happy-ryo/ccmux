@@ -90,7 +90,7 @@ name = "ccmux"
 # Claude launches: structured permission_mode / model / args[] fields
 # replace free-form command string synthesis, with the peer channel
 # enabled by construction. Minor bump because it's a new MCP tool.
-version = "0.18.0"
+version = "0.18.1"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
