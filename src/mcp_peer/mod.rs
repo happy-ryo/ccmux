@@ -1009,12 +1009,54 @@ const CLAUDE_RESERVED_FLAGS: &[&str] = &[
     "--model",
 ];
 
+/// POSIX-style shell quoting good enough for the shells `ccmux` spawns
+/// (bash / zsh / sh on Unix, Git Bash on Windows, and single-quoted
+/// literals in PowerShell — the last treats `'...'` as a literal too).
+/// A value made of "safe" chars (alphanumerics plus a small punctuation
+/// set that never triggers word-splitting / globbing / variable
+/// expansion) passes through unquoted so the resulting command line
+/// stays readable. Anything else gets wrapped in single quotes with
+/// embedded single quotes escaped as `'\''`.
+///
+/// Shared between `build_claude_launch_command` and its tests.
+fn shell_quote(value: &str) -> String {
+    // Empty string can never be left bare — the shell would drop it
+    // entirely, silently losing an argument slot.
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    let is_safe = value.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || matches!(c, '_' | '-' | '.' | '/' | ':' | '@' | '+' | '%' | '=')
+    });
+    if is_safe {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('\'');
+    for c in value.chars() {
+        if c == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
+}
+
 /// Build the final `claude` launch command for `spawn_claude_pane`.
 /// Order (matches the issue #137 spec):
 ///   1. `claude --dangerously-load-development-channels server:ccmux-peers`
 ///   2. `--permission-mode <permission_mode>` if present
 ///   3. `--model <model>` if present
 ///   4. caller-supplied `args[]`
+///
+/// Each value (structured field or extra arg) flows through
+/// `shell_quote` so whitespace and shell metacharacters can't
+/// re-split the command when the PTY's shell parses it. The
+/// `CLAUDE_PEER_LAUNCH_CMD` prefix is a trusted, space-delimited
+/// constant and is emitted verbatim.
 fn build_claude_launch_command(
     permission_mode: Option<&str>,
     model: Option<&str>,
@@ -1023,14 +1065,14 @@ fn build_claude_launch_command(
     let mut parts: Vec<String> = vec![CLAUDE_PEER_LAUNCH_CMD.to_string()];
     if let Some(mode) = permission_mode {
         parts.push("--permission-mode".to_string());
-        parts.push(mode.to_string());
+        parts.push(shell_quote(mode));
     }
     if let Some(m) = model {
         parts.push("--model".to_string());
-        parts.push(m.to_string());
+        parts.push(shell_quote(m));
     }
     for a in extra_args {
-        parts.push(a.clone());
+        parts.push(shell_quote(a));
     }
     parts.join(" ")
 }
@@ -1043,6 +1085,11 @@ fn build_claude_launch_command(
 /// through by combining it with its value.
 fn validate_claude_extra_args(args: &[String]) -> std::result::Result<(), String> {
     for a in args {
+        // `split('=')` always yields at least one element, so
+        // `next().unwrap_or("")` degrades to an empty head for inputs
+        // that start with `=` or are empty — neither of which matches
+        // any reserved flag, so the `contains` check below falls
+        // through cleanly to "allowed".
         let head = a.split('=').next().unwrap_or("");
         if CLAUDE_RESERVED_FLAGS.contains(&head) {
             return Err(format!(
@@ -2158,6 +2205,113 @@ mod tests {
             "/some-workflow".to_string(),
         ])
         .expect("unrelated flags must be allowed");
+    }
+
+    #[test]
+    fn shell_quote_passes_safe_chars_through() {
+        assert_eq!(shell_quote("sonnet"), "sonnet");
+        assert_eq!(shell_quote("bypassPermissions"), "bypassPermissions");
+        assert_eq!(shell_quote("--resume"), "--resume");
+        assert_eq!(shell_quote("/some-workflow"), "/some-workflow");
+        assert_eq!(shell_quote("claude-opus-4-6"), "claude-opus-4-6");
+        assert_eq!(shell_quote("a=b"), "a=b");
+    }
+
+    #[test]
+    fn shell_quote_wraps_whitespace_in_single_quotes() {
+        assert_eq!(shell_quote("hello world"), "'hello world'");
+        assert_eq!(
+            shell_quote("C:/Program Files/claude"),
+            "'C:/Program Files/claude'"
+        );
+    }
+
+    #[test]
+    fn shell_quote_escapes_embedded_single_quotes() {
+        // POSIX trick: close the quote, emit an escaped ', reopen.
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn shell_quote_wraps_empty_string_so_no_arg_is_dropped() {
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn shell_quote_wraps_shell_metacharacters() {
+        // `$`, `*`, `` ` ``, `;` etc must not be left bare — even if
+        // no expansion target exists today, letting them through makes
+        // the command re-parseable and breaks the "ccmux owns quoting"
+        // contract that spawn_claude_pane documents.
+        assert!(shell_quote("foo$bar").starts_with('\''));
+        assert!(shell_quote("foo;bar").starts_with('\''));
+        assert!(shell_quote("foo*").starts_with('\''));
+        assert!(shell_quote("foo`bar").starts_with('\''));
+    }
+
+    #[test]
+    fn build_claude_launch_command_quotes_values_with_whitespace() {
+        // Regression guard for the Codex blocker: values with spaces
+        // must not be re-split by the shell. A space-bearing
+        // permission_mode or model or arg now round-trips as a single
+        // shell token.
+        let got = build_claude_launch_command(
+            Some("accept edits"),
+            Some("my model"),
+            &["--config".to_string(), "C:/Program Files/foo".to_string()],
+        );
+        assert!(
+            got.contains("--permission-mode 'accept edits'"),
+            "permission_mode not quoted: {got}"
+        );
+        assert!(
+            got.contains("--model 'my model'"),
+            "model not quoted: {got}"
+        );
+        assert!(
+            got.contains("'C:/Program Files/foo'"),
+            "arg with space not quoted: {got}"
+        );
+    }
+
+    #[test]
+    fn validate_claude_extra_args_does_not_reject_empty_head_boundary() {
+        // `=oops` and `""` split into an empty head, which must not
+        // match any reserved flag. Guard so a future refactor that
+        // normalizes flag names can't accidentally treat "" as a
+        // reserved match.
+        validate_claude_extra_args(&["=oops".to_string(), String::new()])
+            .expect("empty / no-head strings are not reserved flags");
+    }
+
+    #[test]
+    fn spawn_claude_pane_accepts_empty_args_array() {
+        // `args: []` is a legitimate "I have no extra args" payload —
+        // the handler must not reject it, and must still call ccmux.
+        // We can't reach the full IPC path without a server, so we
+        // settle for: `build_claude_launch_command` handles empty
+        // extra_args cleanly, mirroring what the handler forwards.
+        let got = build_claude_launch_command(None, None, &[]);
+        assert_eq!(got, CLAUDE_PEER_LAUNCH_CMD);
+    }
+
+    #[test]
+    fn spawn_claude_pane_rejects_null_args_as_invalid_params() {
+        // `args: null` is not a missing key — it's explicitly present
+        // with a null value, which the schema disallows. The handler
+        // must return -32602, not silently treat it as "no args".
+        let ctx = connected_ctx_with(Arc::new((
+            Mutex::new(EventBuffer::default()),
+            Condvar::new(),
+        )));
+        let id = json!(1);
+        let resp =
+            handle_spawn_claude_pane(&id, &json!({ "direction": "vertical", "args": null }), &ctx);
+        let err_code = resp
+            .get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_i64());
+        assert_eq!(err_code, Some(-32602), "resp={resp}");
     }
 
     #[test]
