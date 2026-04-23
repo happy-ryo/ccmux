@@ -275,6 +275,10 @@ cross-tab tool):\n\
 assigns a stable name, attaches a role label, or sets an explicit working directory via \
 `cwd` (absolute, or relative to the caller pane's cwd). Use `cwd` instead of `cd <dir> && ...` \
 inside `command` so the claude auto-upgrade keeps working.\n\
+- spawn_claude_pane: Higher-level convenience when the target process is Claude Code. Takes \
+structured `permission_mode` / `model` / `args[]` fields instead of a free-form command \
+string, and always enables the peer channel. Prefer this over `spawn_pane(command=\"claude ...\")` \
+for orchestrator flows — keeps Claude launch policy in ccmux instead of in every prompt.\n\
 - close_pane: Close a pane by id or name. Refuses when it's the last pane of the last tab.\n\
 - focus_pane: Move keyboard focus to another pane in the same tab.\n\
 - new_tab: Open a brand-new tab with a fresh pane and switch focus to it. Unlike the other \
@@ -295,11 +299,13 @@ Each response includes a `next_since` cursor to pass back on the next call. Opti
 `types` filter narrows returned events without losing the cursor advance, but it does \
 not extend the long-poll: a non-matching event still returns early with events=[] \
 and an advanced cursor, so the caller should re-poll for the next window.\n\n\
-Launching Claude Code: when spawn_pane or new_tab is asked to start Claude Code, pass \
-command=\"claude\" (plus any normal claude arguments you want). The MCP automatically \
-upgrades a bare `claude` invocation to the Alt+P peer-enabled form \
-(`claude --dangerously-load-development-channels server:ccmux-peers`) so the new instance \
-joins the peer network. You do NOT need to type that flag yourself.\n\n\
+Launching Claude Code: prefer spawn_claude_pane for Claude launches — it takes structured \
+`permission_mode` / `model` / `args[]` fields, always enables the peer channel, and keeps \
+launch policy in ccmux so orchestrator prompts never have to synthesize shell-quoted command \
+strings. For arbitrary shell commands (non-Claude), use spawn_pane / new_tab. When those \
+are asked to run a bare `claude` invocation the MCP still auto-upgrades it to the \
+peer-enabled form (`claude --dangerously-load-development-channels server:ccmux-peers`), but \
+spawn_claude_pane is the recommended API for agent harnesses.\n\n\
 IMPORTANT about pane control: these tools affect the user's live layout. Use them with \
 restraint — don't close or focus panes you don't own unless the user asked you to. When in \
 doubt, ask first."
@@ -383,6 +389,50 @@ fn tools_spec() -> Value {
                     "cwd": {
                         "type": "string",
                         "description": "Optional working directory for the new pane. Absolute paths are used as-is; relative paths are resolved against the caller pane's cwd. When omitted, the new pane inherits the target pane's cwd (prior behavior). Use this instead of embedding `cd <path> && ...` in `command` — keeps the shell-quoting and the claude auto-upgrade intact."
+                    }
+                },
+                "required": ["direction"]
+            }
+        },
+        {
+            "name": "spawn_claude_pane",
+            "description": "Higher-level convenience over `spawn_pane`: splits a pane and launches Claude Code with the ccmux-peers channel enabled by construction, so the orchestrating caller never has to synthesize the `--dangerously-load-development-channels server:ccmux-peers` flag or worry about shell-quoting a launch string. Structured fields (`permission_mode`, `model`) are rendered into the final command exactly once; extra `args[]` are appended after them. Conflicting overrides inside `args[]` (--dangerously-load-development-channels / --permission-mode / --model) are rejected with `invalid-params` — use the structured fields instead. Pane creation semantics (split refusal, cwd validation, name / role attachment) match `spawn_pane`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "enum": ["vertical", "horizontal"],
+                        "description": "`vertical` splits side-by-side (new pane to the right); `horizontal` splits top/bottom (new pane on the bottom)."
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Pane to split. Numeric id, stable name, or the literal 'focused'. Defaults to 'focused' when omitted."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Optional stable id for the new pane so it can be addressed by name later."
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "Optional free-form role label (e.g. 'worker', 'foreman', 'curator'). Shown in the UI and in list_panes output."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory for the new pane. Absolute paths are used as-is; relative paths are resolved against the caller pane's cwd. Same semantics as `spawn_pane`'s cwd."
+                    },
+                    "permission_mode": {
+                        "type": "string",
+                        "description": "Rendered into the launch command as `--permission-mode <value>`. Typical values: 'default', 'acceptEdits', 'bypassPermissions', 'plan'. Not pre-validated against a fixed enum so new Claude permission modes work without a ccmux release."
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Rendered into the launch command as `--model <value>` (e.g. 'sonnet', 'opus', or a fully-qualified model id)."
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Additional Claude CLI args appended after the structured fields. Must NOT contain --dangerously-load-development-channels, --permission-mode, or --model — pass those via the structured fields instead, or the call is rejected with invalid-params."
                     }
                 },
                 "required": ["direction"]
@@ -667,6 +717,7 @@ fn handle_tools_call(id: &Value, params: &Value, ctx: &PeerCtx) -> Result<Value>
         ),
         "list_panes" => handle_list_panes(id, ctx),
         "spawn_pane" => handle_spawn_pane(id, &args, ctx),
+        "spawn_claude_pane" => handle_spawn_claude_pane(id, &args, ctx),
         "close_pane" => handle_close_pane(id, &args, ctx),
         "focus_pane" => handle_focus_pane(id, &args, ctx),
         "new_tab" => handle_new_tab(id, &args, ctx),
@@ -940,6 +991,160 @@ fn handle_spawn_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
             id,
             -32603,
             &format!("ccmux refused spawn_pane: {}", fmt_code(&message, &code)),
+        ),
+        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+    }
+}
+
+/// Flags that `spawn_claude_pane` must own — the structured fields
+/// render these exactly once, so letting callers also inject them via
+/// `args[]` would produce ambiguous command lines (e.g. two
+/// `--permission-mode` entries, or a dropped peer-channel flag if a
+/// caller overrides it with a narrower value). Rejecting is cleaner
+/// than silent de-dup.
+const CLAUDE_RESERVED_FLAGS: &[&str] = &[
+    "--dangerously-load-development-channels",
+    "--permission-mode",
+    "--model",
+];
+
+/// Build the final `claude` launch command for `spawn_claude_pane`.
+/// Order (matches the issue #137 spec):
+///   1. `claude --dangerously-load-development-channels server:ccmux-peers`
+///   2. `--permission-mode <permission_mode>` if present
+///   3. `--model <model>` if present
+///   4. caller-supplied `args[]`
+fn build_claude_launch_command(
+    permission_mode: Option<&str>,
+    model: Option<&str>,
+    extra_args: &[String],
+) -> String {
+    let mut parts: Vec<String> = vec![CLAUDE_PEER_LAUNCH_CMD.to_string()];
+    if let Some(mode) = permission_mode {
+        parts.push("--permission-mode".to_string());
+        parts.push(mode.to_string());
+    }
+    if let Some(m) = model {
+        parts.push("--model".to_string());
+        parts.push(m.to_string());
+    }
+    for a in extra_args {
+        parts.push(a.clone());
+    }
+    parts.join(" ")
+}
+
+/// Parse the `args` JSON array for `spawn_claude_pane`, rejecting
+/// entries that match any of the structured-field flags (which the
+/// caller must pass via `permission_mode` / `model`) or attempt to
+/// override the peer-channel flag. Matches both bare flags (`--foo`)
+/// and the `--foo=value` form so a caller can't sneak a reserved flag
+/// through by combining it with its value.
+fn validate_claude_extra_args(args: &[String]) -> std::result::Result<(), String> {
+    for a in args {
+        let head = a.split('=').next().unwrap_or("");
+        if CLAUDE_RESERVED_FLAGS.contains(&head) {
+            return Err(format!(
+                "args[] must not contain {head:?} — pass it via the structured field \
+                 ({}) instead",
+                match head {
+                    "--permission-mode" => "permission_mode",
+                    "--model" => "model",
+                    "--dangerously-load-development-channels" =>
+                        "implicit (always added by spawn_claude_pane)",
+                    _ => "<structured>",
+                }
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn handle_spawn_claude_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
+    let direction = match parse_direction(args.get("direction").and_then(|v| v.as_str())) {
+        Ok(d) => d,
+        Err(msg) => return err_response(id, -32602, &msg),
+    };
+    let target = parse_target(args.get("target").and_then(|v| v.as_str()));
+    let name = opt_string(args, "name");
+    let role = opt_string(args, "role");
+    let cwd = opt_string(args, "cwd");
+    let permission_mode = opt_string(args, "permission_mode");
+    let model = opt_string(args, "model");
+
+    // `args` must be a JSON array of strings when present — reject
+    // anything else instead of silently coercing, so typos surface.
+    let extra_args: Vec<String> = match args.get("args") {
+        None => Vec::new(),
+        Some(Value::Array(items)) => {
+            let mut out = Vec::with_capacity(items.len());
+            for (idx, v) in items.iter().enumerate() {
+                match v.as_str() {
+                    Some(s) => out.push(s.to_string()),
+                    None => {
+                        return err_response(
+                            id,
+                            -32602,
+                            &format!("args[{idx}] must be a string, got {v}"),
+                        );
+                    }
+                }
+            }
+            out
+        }
+        Some(other) => {
+            return err_response(
+                id,
+                -32602,
+                &format!("`args` must be an array of strings; got {other}"),
+            );
+        }
+    };
+    if let Err(msg) = validate_claude_extra_args(&extra_args) {
+        return err_response(id, -32602, &msg);
+    }
+
+    let command =
+        build_claude_launch_command(permission_mode.as_deref(), model.as_deref(), &extra_args);
+
+    let (caller_pane, endpoint) = match require_connected(ctx, id, "spawn claude pane") {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    // Relative cwd resolution mirrors `spawn_pane` so the two tools
+    // give identical path semantics; only the command construction
+    // differs.
+    let cwd = match resolve_mcp_cwd(endpoint, caller_pane, cwd.as_deref()) {
+        Ok(v) => v,
+        Err(msg) => return err_response(id, -32602, &msg),
+    };
+    match client::send_request(
+        endpoint,
+        &Request::Split {
+            target,
+            direction,
+            command: Some(command.clone()),
+            id: name,
+            role,
+            cwd,
+        },
+    ) {
+        Ok(Response::Ok { data }) => {
+            let new_id = data.get("id").and_then(|v| v.as_u64());
+            let msg = match new_id {
+                Some(n) => format!("Spawned Claude pane id={n}. Launch command: {command}"),
+                None => format!("Spawned Claude pane (id not reported). Launch command: {command}"),
+            };
+            ok_response(id, tool_text_result(&msg))
+        }
+        Ok(Response::Err { message, code }) => err_response(
+            id,
+            -32603,
+            &format!(
+                "ccmux refused spawn_claude_pane: {}",
+                fmt_code(&message, &code)
+            ),
         ),
         Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
         Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
@@ -1859,6 +2064,159 @@ mod tests {
             .expect("required array");
         let required_names: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
         assert!(required_names.contains(&"direction"), "{required_names:?}");
+    }
+
+    #[test]
+    fn tools_spec_advertises_spawn_claude_pane() {
+        // Guard for #137 — the higher-level Claude launcher must be
+        // discoverable from tools/list so orchestrators find it
+        // before falling back to spawn_pane(command=\"claude ...\").
+        let spec = tools_spec();
+        let names: Vec<&str> = spec
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t.get("name").and_then(|v| v.as_str()))
+            .collect();
+        assert!(
+            names.contains(&"spawn_claude_pane"),
+            "spawn_claude_pane missing from tools list: {names:?}"
+        );
+    }
+
+    #[test]
+    fn build_claude_launch_command_bare_defaults_to_peer_channel_only() {
+        let got = build_claude_launch_command(None, None, &[]);
+        assert_eq!(got, CLAUDE_PEER_LAUNCH_CMD);
+    }
+
+    #[test]
+    fn build_claude_launch_command_renders_permission_mode_and_model() {
+        let got = build_claude_launch_command(Some("bypassPermissions"), Some("sonnet"), &[]);
+        assert_eq!(
+            got,
+            format!("{CLAUDE_PEER_LAUNCH_CMD} --permission-mode bypassPermissions --model sonnet")
+        );
+    }
+
+    #[test]
+    fn build_claude_launch_command_appends_extra_args_after_structured() {
+        let got = build_claude_launch_command(
+            Some("auto"),
+            None,
+            &["--resume".to_string(), "--verbose".to_string()],
+        );
+        assert_eq!(
+            got,
+            format!("{CLAUDE_PEER_LAUNCH_CMD} --permission-mode auto --resume --verbose")
+        );
+    }
+
+    #[test]
+    fn build_claude_launch_command_always_includes_peer_channel_flag() {
+        // Regression guard: any future refactor of the ordering must
+        // keep the peer-channel flag at the front so Claude joins
+        // ccmux-peers even when permission_mode / model are unset.
+        let got = build_claude_launch_command(None, None, &["--resume".to_string()]);
+        assert!(
+            got.contains("--dangerously-load-development-channels server:ccmux-peers"),
+            "peer-channel flag missing: {got}"
+        );
+    }
+
+    #[test]
+    fn validate_claude_extra_args_rejects_reserved_flags() {
+        for bad in [
+            "--dangerously-load-development-channels",
+            "--permission-mode",
+            "--model",
+        ] {
+            let err = validate_claude_extra_args(&[bad.to_string()])
+                .expect_err("must reject reserved flag");
+            assert!(
+                err.contains(bad),
+                "error must name the rejected flag: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_claude_extra_args_rejects_flag_equals_value_form() {
+        // `--model=opus` shares the `--model` head, so the validator
+        // must split on `=` and still reject. Otherwise a caller could
+        // sneak a second --model past the structured field.
+        let err = validate_claude_extra_args(&["--model=opus".to_string()])
+            .expect_err("must reject --model=... form too");
+        assert!(err.contains("--model"), "{err}");
+    }
+
+    #[test]
+    fn validate_claude_extra_args_allows_unrelated_flags() {
+        validate_claude_extra_args(&[
+            "--resume".to_string(),
+            "--verbose".to_string(),
+            "/some-workflow".to_string(),
+        ])
+        .expect("unrelated flags must be allowed");
+    }
+
+    #[test]
+    fn spawn_claude_pane_rejects_non_array_args() {
+        let ctx = connected_ctx_with(Arc::new((
+            Mutex::new(EventBuffer::default()),
+            Condvar::new(),
+        )));
+        let id = json!(1);
+        let resp = handle_spawn_claude_pane(
+            &id,
+            &json!({ "direction": "vertical", "args": "not-an-array" }),
+            &ctx,
+        );
+        let err_code = resp
+            .get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_i64());
+        assert_eq!(err_code, Some(-32602), "resp={resp}");
+    }
+
+    #[test]
+    fn spawn_claude_pane_rejects_missing_direction() {
+        let ctx = connected_ctx_with(Arc::new((
+            Mutex::new(EventBuffer::default()),
+            Condvar::new(),
+        )));
+        let id = json!(1);
+        let resp = handle_spawn_claude_pane(&id, &json!({}), &ctx);
+        let err_code = resp
+            .get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_i64());
+        assert_eq!(err_code, Some(-32602), "resp={resp}");
+    }
+
+    #[test]
+    fn spawn_claude_pane_rejects_reserved_flag_in_args() {
+        // End-to-end: the dispatcher must catch reserved flags before
+        // touching ccmux IPC, so the rejection happens even when the
+        // server is fully reachable.
+        let ctx = connected_ctx_with(Arc::new((
+            Mutex::new(EventBuffer::default()),
+            Condvar::new(),
+        )));
+        let id = json!(1);
+        let resp = handle_spawn_claude_pane(
+            &id,
+            &json!({
+                "direction": "vertical",
+                "args": ["--permission-mode", "plan"]
+            }),
+            &ctx,
+        );
+        let err_code = resp
+            .get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_i64());
+        assert_eq!(err_code, Some(-32602), "resp={resp}");
     }
 
     #[test]
