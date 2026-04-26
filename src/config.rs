@@ -1,6 +1,6 @@
 //! User-level configuration loaded from
-//! `${XDG_CONFIG_HOME or ~/.config}/ccmux/config.toml` on Unix, or
-//! `%APPDATA%/ccmux/config.toml` on Windows.
+//! `${XDG_CONFIG_HOME or ~/.config}/renga/config.toml` on Unix, or
+//! `%APPDATA%/renga/config.toml` on Windows.
 //!
 //! Precedence: CLI flags override the config file, which overrides
 //! built-in defaults. Missing or malformed files never fail startup —
@@ -147,7 +147,7 @@ impl Config {
     /// defaults; malformed TOML returns defaults and prints a
     /// warning. The return value is always a usable Config so
     /// callers never have to decide what to do on I/O errors —
-    /// `ccmux` must keep starting.
+    /// `renga` must keep starting.
     pub fn load() -> Self {
         let path = match config_path() {
             Some(p) => p,
@@ -162,7 +162,7 @@ impl Config {
         match std::fs::metadata(path) {
             Ok(meta) if meta.len() > MAX_CONFIG_BYTES => {
                 eprintln!(
-                    "ccmux: config {} exceeds {MAX_CONFIG_BYTES} bytes; using defaults",
+                    "renga: config {} exceeds {MAX_CONFIG_BYTES} bytes; using defaults",
                     path.display()
                 );
                 return Self::default();
@@ -170,7 +170,7 @@ impl Config {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
             Err(e) => {
-                eprintln!("ccmux: config {} stat failed: {e}", path.display());
+                eprintln!("renga: config {} stat failed: {e}", path.display());
                 return Self::default();
             }
         }
@@ -178,7 +178,7 @@ impl Config {
             Ok(s) => s,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
             Err(e) => {
-                eprintln!("ccmux: config {} unreadable: {e}", path.display());
+                eprintln!("renga: config {} unreadable: {e}", path.display());
                 return Self::default();
             }
         };
@@ -186,7 +186,7 @@ impl Config {
             Ok(cfg) => cfg,
             Err(e) => {
                 eprintln!(
-                    "ccmux: config {} has invalid TOML: {e}; using defaults",
+                    "renga: config {} has invalid TOML: {e}; using defaults",
                     path.display()
                 );
                 Self::default()
@@ -230,7 +230,7 @@ impl Config {
 /// (e.g. a stripped-down sandbox with no `$HOME`); callers fall
 /// through to defaults.
 fn config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|base| base.join("ccmux").join("config.toml"))
+    dirs::config_dir().map(|base| base.join("renga").join("config.toml"))
 }
 
 #[cfg(test)]
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn unknown_sections_are_ignored_for_forward_compat() {
-        // A newer ccmux might add `[telemetry]`; the older binary
+        // A newer renga might add `[telemetry]`; the older binary
         // must continue to boot instead of erroring out.
         let cfg: Config = toml::from_str(
             r#"
@@ -349,7 +349,7 @@ mod tests {
 
     #[test]
     fn load_from_missing_file_returns_default() {
-        let tmp = std::env::temp_dir().join(format!("ccmux-missing-{}.toml", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("renga-missing-{}.toml", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
         let cfg = Config::load_from(&tmp);
         assert_eq!(cfg.ime.mode, ImeMode::Hotkey);
@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     fn load_from_valid_file_returns_parsed() {
-        let tmp = std::env::temp_dir().join(format!("ccmux-valid-{}.toml", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("renga-valid-{}.toml", std::process::id()));
         std::fs::write(&tmp, "[ime]\nmode = \"off\"\n").unwrap();
         let cfg = Config::load_from(&tmp);
         std::fs::remove_file(&tmp).ok();
@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn load_from_malformed_file_returns_default_and_does_not_panic() {
-        let tmp = std::env::temp_dir().join(format!("ccmux-bad-{}.toml", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("renga-bad-{}.toml", std::process::id()));
         std::fs::write(&tmp, "this is = not { valid toml").unwrap();
         let cfg = Config::load_from(&tmp);
         std::fs::remove_file(&tmp).ok();
@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn load_from_oversized_file_returns_default() {
-        let tmp = std::env::temp_dir().join(format!("ccmux-big-{}.toml", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("renga-big-{}.toml", std::process::id()));
         // Write ~128 KB — above the 64 KB cap — of valid-looking TOML.
         // The cap should short-circuit before parsing.
         let big = format!("# {}\n[ime]\nmode = \"off\"\n", "x".repeat(130_000));

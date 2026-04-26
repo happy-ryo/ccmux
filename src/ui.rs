@@ -826,7 +826,7 @@ fn render_terminal_content(
         // around the screen.
         let detected: Option<(u16, u16)> = if claude_pane {
             let found = resolve_claude_caret(screen);
-            if let Some(path) = std::env::var_os("CCMUX_DEBUG_CURSOR_LOG") {
+            if let Some(path) = std::env::var_os("RENGA_DEBUG_CURSOR_LOG") {
                 if is_focused {
                     debug_log_caret_scan(screen, found, &path);
                 }
@@ -1103,7 +1103,7 @@ fn debug_log_caret_scan(
         bottom_chars.push(' ');
     }
     let line = format!(
-        "[ccmux dbg] resolved={:?} bottom: {}\n",
+        "[renga dbg] resolved={:?} bottom: {}\n",
         resolved, bottom_chars
     );
     if let Ok(mut f) = std::fs::OpenOptions::new()

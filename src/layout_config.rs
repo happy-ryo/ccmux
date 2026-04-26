@@ -30,9 +30,9 @@ pub enum LayoutNodeSpec {
         role: Option<String>,
         /// Optional working directory for the pane. Absolute paths
         /// are used as-is; relative paths are resolved against the
-        /// directory from which `ccmux --layout` was invoked. When
+        /// directory from which `renga --layout` was invoked. When
         /// omitted, the pane inherits the parent pane's cwd (root
-        /// leaf falls back to the ccmux process cwd).
+        /// leaf falls back to the renga process cwd).
         #[serde(default)]
         cwd: Option<String>,
     },
@@ -66,9 +66,9 @@ impl LayoutConfig {
     }
 
     /// Resolve the path to a layout file by name. Search order:
-    ///   1. `$CCMUX_LAYOUTS_DIR/<name>.toml` (env override, for tests)
-    ///   2. `./ccmux-layouts/<name>.toml` (project local)
-    ///   3. `~/.config/ccmux/layouts/<name>.toml` (user global)
+    ///   1. `$RENGA_LAYOUTS_DIR/<name>.toml` (env override, for tests)
+    ///   2. `./renga-layouts/<name>.toml` (project local)
+    ///   3. `~/.config/renga/layouts/<name>.toml` (user global)
     pub fn resolve_path(name: &str) -> Result<PathBuf> {
         let candidates = Self::candidate_paths(name);
         for p in &candidates {
@@ -85,7 +85,7 @@ impl LayoutConfig {
     }
 
     fn candidate_paths(name: &str) -> Vec<PathBuf> {
-        let env_dir = std::env::var("CCMUX_LAYOUTS_DIR").ok();
+        let env_dir = std::env::var("RENGA_LAYOUTS_DIR").ok();
         candidate_paths_from(name, env_dir.as_deref(), dirs::config_dir())
     }
 
@@ -139,7 +139,7 @@ impl LayoutConfig {
 
 /// Pure version of `candidate_paths` that takes the env override and
 /// user-config dir as arguments. Split out so tests can verify the
-/// search order without mutating the process-wide `CCMUX_LAYOUTS_DIR`
+/// search order without mutating the process-wide `RENGA_LAYOUTS_DIR`
 /// env var (which races under `cargo test`'s parallel runner).
 fn candidate_paths_from(
     name: &str,
@@ -153,9 +153,9 @@ fn candidate_paths_from(
             out.push(PathBuf::from(env_dir).join(&file));
         }
     }
-    out.push(PathBuf::from("ccmux-layouts").join(&file));
+    out.push(PathBuf::from("renga-layouts").join(&file));
     if let Some(cfg_dir) = user_cfg_dir {
-        out.push(cfg_dir.join("ccmux").join("layouts").join(&file));
+        out.push(cfg_dir.join("renga").join("layouts").join(&file));
     }
     out
 }
@@ -451,21 +451,21 @@ mod tests {
     #[test]
     fn env_override_comes_first() {
         // Test the pure helper directly so we don't race with other
-        // tests on the shared `CCMUX_LAYOUTS_DIR` env var.
+        // tests on the shared `RENGA_LAYOUTS_DIR` env var.
         let paths = candidate_paths_from(
             "foo",
-            Some("/tmp/ccmux-test-layouts"),
+            Some("/tmp/renga-test-layouts"),
             Some(PathBuf::from("/fake-user-cfg")),
         );
-        assert_eq!(paths[0], PathBuf::from("/tmp/ccmux-test-layouts/foo.toml"));
+        assert_eq!(paths[0], PathBuf::from("/tmp/renga-test-layouts/foo.toml"));
     }
 
     #[test]
     fn empty_env_override_is_ignored() {
-        // `CCMUX_LAYOUTS_DIR=""` must not become a bogus `./foo.toml`
+        // `RENGA_LAYOUTS_DIR=""` must not become a bogus `./foo.toml`
         // candidate — we only honor a non-empty override.
         let paths = candidate_paths_from("foo", Some(""), Some(PathBuf::from("/fake-user-cfg")));
-        assert_eq!(paths[0], PathBuf::from("ccmux-layouts/foo.toml"));
+        assert_eq!(paths[0], PathBuf::from("renga-layouts/foo.toml"));
     }
 
     #[test]
@@ -474,10 +474,10 @@ mod tests {
         // directory and the user config dir is the fallback.
         let paths = candidate_paths_from("foo", None, Some(PathBuf::from("/home/user/.config")));
         assert_eq!(paths.len(), 2);
-        assert_eq!(paths[0], PathBuf::from("ccmux-layouts/foo.toml"));
+        assert_eq!(paths[0], PathBuf::from("renga-layouts/foo.toml"));
         assert_eq!(
             paths[1],
-            PathBuf::from("/home/user/.config/ccmux/layouts/foo.toml")
+            PathBuf::from("/home/user/.config/renga/layouts/foo.toml")
         );
     }
 }

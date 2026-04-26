@@ -2,7 +2,7 @@
 //! terminal setup (see README § "macOS: Option as Meta"). macOS
 //! terminals bind `Option+<key>` to Unicode input by default so
 //! `Alt+T` / `Alt+P` / `Alt+1..9` / `Alt+Left/Right` never reach
-//! ccmux. Users who don't know the fix read it as a ccmux bug.
+//! renga. Users who don't know the fix read it as a renga bug.
 //!
 //! The tip surfaces as a transient banner on first launch and is
 //! dismissed either by any key press or a 20 s timeout. Dismissal
@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 /// the banner without touching the marker file, so scripted sessions
 /// that don't want the banner don't accidentally mark a real macOS
 /// user "dismissed" on their behalf.
-pub const ENV_SUPPRESS: &str = "CCMUX_NO_MACOS_TIP";
+pub const ENV_SUPPRESS: &str = "RENGA_NO_MACOS_TIP";
 
 /// How long the banner stays up before self-dismissing.
 pub const AUTO_DISMISS: std::time::Duration = std::time::Duration::from_secs(20);
@@ -31,7 +31,7 @@ pub const AUTO_DISMISS: std::time::Duration = std::time::Duration::from_secs(20)
 /// determined (sandbox without `$HOME`); the caller treats that as
 /// "can't persist dismissal, show in-memory for this run only".
 pub fn marker_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|base| base.join("ccmux").join(".macos_tip_dismissed"))
+    dirs::config_dir().map(|base| base.join("renga").join(".macos_tip_dismissed"))
 }
 
 pub fn is_dismissed(path: &Path) -> bool {
@@ -46,7 +46,7 @@ pub fn mark_dismissed(path: &Path) {
     if let Some(parent) = path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
             eprintln!(
-                "ccmux: couldn't create {} for macOS tip marker: {e}",
+                "renga: couldn't create {} for macOS tip marker: {e}",
                 parent.display()
             );
             return;
@@ -54,7 +54,7 @@ pub fn mark_dismissed(path: &Path) {
     }
     if let Err(e) = fs::File::create(path) {
         eprintln!(
-            "ccmux: couldn't touch macOS tip marker {}: {e}",
+            "renga: couldn't touch macOS tip marker {}: {e}",
             path.display()
         );
     }
@@ -66,7 +66,7 @@ pub fn mark_dismissed(path: &Path) {
 /// 1. `--show-macos-tip` — force on (still macOS-gated; showing a
 ///    macOS-specific setup tip on Linux makes no sense).
 /// 2. `--no-macos-tip` — force off.
-/// 3. `CCMUX_NO_MACOS_TIP` env var set and non-empty — force off.
+/// 3. `RENGA_NO_MACOS_TIP` env var set and non-empty — force off.
 /// 4. Marker file exists — off.
 /// 5. Non-macOS host — off.
 /// 6. Otherwise — on.
@@ -94,7 +94,7 @@ mod tests {
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    // Tests that read or mutate CCMUX_NO_MACOS_TIP hold this lock so
+    // Tests that read or mutate RENGA_NO_MACOS_TIP hold this lock so
     // they don't race each other. Cargo runs tests in parallel by
     // default, and env mutations are process-global.
     fn env_lock() -> &'static Mutex<()> {
@@ -105,7 +105,7 @@ mod tests {
     fn unique_marker() -> PathBuf {
         let pid = std::process::id();
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("ccmux-macos-tip-test-{pid}-{n}"))
+        std::env::temp_dir().join(format!("renga-macos-tip-test-{pid}-{n}"))
     }
 
     struct EnvGuard {

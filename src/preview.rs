@@ -62,7 +62,7 @@ impl Preview {
     /// language so error placeholders ("File too large", etc.) render
     /// in the user's chosen language without `Preview` having to carry
     /// a persistent `Lang` field — a new messages pointer is injected
-    /// on every load, which is enough because ccmux doesn't support
+    /// on every load, which is enough because renga doesn't support
     /// mid-session language switching. If that ever changes, the
     /// `file_path == path` early-return below must also invalidate
     /// any cached error lines so they get re-rendered in the new

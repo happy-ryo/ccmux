@@ -1,4 +1,4 @@
-//! `ccmux mcp install / uninstall / status` — thin wrappers around the
+//! `renga mcp install / uninstall / status` — thin wrappers around the
 //! `claude` CLI's MCP management commands.
 //!
 //! We intentionally do **not** edit Claude Code's config files
@@ -9,7 +9,7 @@
 //!
 //! The tradeoff is a hard dependency on the `claude` binary being on
 //! PATH. We surface a clear error in that case rather than silently
-//! falling back to file-editing: the user installed ccmux with MCP
+//! falling back to file-editing: the user installed renga with MCP
 //! features, so Claude Code being available is a reasonable
 //! expectation to assert.
 
@@ -20,9 +20,9 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use crate::cli::McpAction;
 
-const SERVER_NAME: &str = "ccmux-peers";
+const SERVER_NAME: &str = "renga-peers";
 
-/// Entry point from `main.rs` for the `ccmux mcp <action>` subcommand.
+/// Entry point from `main.rs` for the `renga mcp <action>` subcommand.
 pub fn run(action: &McpAction) -> Result<()> {
     match action {
         McpAction::Install { force } => install(*force),
@@ -35,7 +35,7 @@ pub fn run(action: &McpAction) -> Result<()> {
 
 fn install(force: bool) -> Result<()> {
     ensure_claude_cli_available()?;
-    let exe = current_ccmux_exe()?;
+    let exe = current_renga_exe()?;
 
     // Validate the exe path can even be registered BEFORE we touch
     // any existing state. If we did this after `remove_silent()` on
@@ -44,8 +44,8 @@ fn install(force: bool) -> Result<()> {
     // the existing entry stays intact when we can't replace it.
     let exe_str = exe.to_str().ok_or_else(|| {
         anyhow!(
-            "ccmux binary path is not valid UTF-8 ({}); cannot register as an MCP command. \
-             Move the binary to a UTF-8 path and re-run `ccmux mcp install`.",
+            "renga binary path is not valid UTF-8 ({}); cannot register as an MCP command. \
+             Move the binary to a UTF-8 path and re-run `renga mcp install`.",
             exe.display()
         )
     })?;
@@ -53,8 +53,8 @@ fn install(force: bool) -> Result<()> {
     if let Some(existing) = find_existing_entry()? {
         if !force {
             println!(
-                "ccmux-peers is already registered → {existing}\n\
-                 Re-run with `ccmux mcp install --force` to overwrite with: {exe_str}"
+                "renga-peers is already registered → {existing}\n\
+                 Re-run with `renga mcp install --force` to overwrite with: {exe_str}"
             );
             return Ok(());
         }
@@ -89,7 +89,7 @@ fn install(force: bool) -> Result<()> {
         "Registered {SERVER_NAME} → {exe_str}\n\
          Next: launch Claude Code with \
          `claude --dangerously-load-development-channels server:{SERVER_NAME}` \
-         from inside a ccmux pane (or press Alt+P in a pane to insert the \
+         from inside a renga pane (or press Alt+P in a pane to insert the \
          same command)."
     );
     Ok(())
@@ -131,7 +131,7 @@ fn status() -> Result<()> {
         None => {
             println!(
                 "{SERVER_NAME} is NOT registered.\n\
-                 Run `ccmux mcp install` to register it."
+                 Run `renga mcp install` to register it."
             );
             Ok(())
         }
@@ -151,14 +151,14 @@ fn ensure_claude_cli_available() -> Result<()> {
         )),
         Err(e) => Err(anyhow!(
             "`claude` CLI not found on PATH ({e}). Install Claude Code first, \
-             or add it to PATH, then re-run `ccmux mcp install / uninstall / status`."
+             or add it to PATH, then re-run `renga mcp install / uninstall / status`."
         )),
     }
 }
 
-fn current_ccmux_exe() -> Result<PathBuf> {
+fn current_renga_exe() -> Result<PathBuf> {
     std::env::current_exe()
-        .context("resolve path to the running ccmux binary (needed for mcp_servers.json)")
+        .context("resolve path to the running renga binary (needed for mcp_servers.json)")
 }
 
 /// Run `claude mcp list` and return the line mentioning our server, if

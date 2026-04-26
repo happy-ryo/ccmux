@@ -1,4 +1,4 @@
-//! IPC protocol for controlling a running ccmux instance from outside.
+//! IPC protocol for controlling a running renga instance from outside.
 //!
 //! Wire format: newline-delimited JSON. Each line is one [`Request`] from
 //! client to server, followed by exactly one [`Response`] from server to
@@ -13,15 +13,15 @@
 //! other processes running as that same user.
 //!
 //! - On Unix, the socket lives under an owner-only directory
-//!   (`$XDG_RUNTIME_DIR/ccmux/` or `/tmp/ccmux-UID/` with mode `0700`).
+//!   (`$XDG_RUNTIME_DIR/renga/` or `/tmp/renga-UID/` with mode `0700`).
 //!   A different UID on the same host cannot reach it.
-//! - On Windows, the Named Pipe is named `\\.\pipe\ccmux-<pid>` and
+//! - On Windows, the Named Pipe is named `\\.\pipe\renga-<pid>` and
 //!   inherits default session-scoped permissions from the OS.
 //!
-//! The `CCMUX_TOKEN` env var is **not** a secret. It exists only to
-//! detect PID re-use: if a child shell inherited a stale `CCMUX_SOCKET`
-//! whose PID now belongs to a different ccmux instance, the token on
-//! the wire won't match the child's `CCMUX_TOKEN` and the client
+//! The `RENGA_TOKEN` env var is **not** a secret. It exists only to
+//! detect PID re-use: if a child shell inherited a stale `RENGA_SOCKET`
+//! whose PID now belongs to a different renga instance, the token on
+//! the wire won't match the child's `RENGA_TOKEN` and the client
 //! refuses the command. Any same-user process that can read
 //! `/proc/<pid>/environ` can also read the token — on the same-user
 //! trust model that's already inside the boundary.
@@ -36,7 +36,7 @@ use std::time::Duration;
 pub(crate) const APP_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Client margin for connect + JSON write/read + scheduling on top of
-/// the server's [`APP_REPLY_TIMEOUT`]. Kept small so `ccmux send` in
+/// the server's [`APP_REPLY_TIMEOUT`]. Kept small so `renga send` in
 /// a shell script aborts within a few seconds if something is wrong.
 pub(crate) const CLIENT_MARGIN: Duration = Duration::from_secs(5);
 
@@ -52,7 +52,7 @@ pub mod server;
 
 pub use events::EventBus;
 
-/// One IPC call from a client to the running ccmux instance.
+/// One IPC call from a client to the running renga instance.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Request {
@@ -117,7 +117,7 @@ pub enum Request {
         role: Option<String>,
         /// Working directory for the new tab's initial pane. Absolute
         /// paths are used as-is; relative paths are resolved against
-        /// the ccmux server's process cwd. When omitted, the server's
+        /// the renga server's process cwd. When omitted, the server's
         /// current cwd is used (prior behavior). Fails with
         /// `cwd_invalid` before any layout mutation when the resolved
         /// path is missing or not a directory.
@@ -151,11 +151,11 @@ pub enum Request {
     /// List peers visible from the caller's pane. Scope is always
     /// "panes in the same workspace as `from_pane`, excluding
     /// `from_pane` itself". Used by the bundled MCP peer server
-    /// (`ccmux mcp-peer`) to serve its `list_peers` tool. Wire-compat
+    /// (`renga mcp-peer`) to serve its `list_peers` tool. Wire-compat
     /// with claude-peers-mcp's tool signature is handled in the MCP
-    /// layer; this request is ccmux-internal.
+    /// layer; this request is renga-internal.
     PeerList {
-        /// The caller's own pane id (from `CCMUX_PANE_ID` env).
+        /// The caller's own pane id (from `RENGA_PANE_ID` env).
         from_pane: usize,
     },
     /// Deliver `body` to `target`'s peer inbox. Silently no-ops if
@@ -278,8 +278,8 @@ pub struct PaneInfo {
     pub id: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Free-form label. Set via layout TOML `role = ...`, `ccmux split
-    /// --role ...`, or `ccmux new-tab --role ...`. Unlike `name`, not
+    /// Free-form label. Set via layout TOML `role = ...`, `renga split
+    /// --role ...`, or `renga new-tab --role ...`. Unlike `name`, not
     /// unique.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
@@ -387,9 +387,9 @@ pub mod err_code {
     /// client so it can distinguish "setup broken" from "request
     /// invalid".
     pub const IO_ERROR: &str = "io_error";
-    /// `ccmux close` was asked to remove the only pane of the only
+    /// `renga close` was asked to remove the only pane of the only
     /// remaining tab. Refused so the TUI doesn't end up with an empty
-    /// layout; the caller should shut down ccmux instead.
+    /// layout; the caller should shut down renga instead.
     pub const LAST_PANE: &str = "last_pane";
     /// Caller supplied a `cwd` that does not exist or is not a
     /// directory. Emitted by `Split` / `NewTab` before any pane is
@@ -409,7 +409,7 @@ pub mod err_code {
 /// App-side error carrying a free-form message plus an optional
 /// stable code from [`err_code`]. Replaces the previous
 /// `Result<T, String>` reply shape on [`crate::app::AppCommand`] so
-/// ccmux clients (including `aainc-ops`) can match on the code
+/// renga clients (including `aainc-ops`) can match on the code
 /// instead of grepping human-readable text.
 ///
 /// Uncoded variants still work — older App paths or new cases that
@@ -481,7 +481,7 @@ impl From<&str> for CodedError {
 pub enum Event {
     /// Emitted when a pane has been added to the active workspace.
     /// `name` is populated if the pane was given a stable IPC name
-    /// (layout `id` or `ccmux split --id`). `role` is the free-form
+    /// (layout `id` or `renga split --id`). `role` is the free-form
     /// label set via Phase 1 mechanisms.
     PaneStarted {
         id: usize,

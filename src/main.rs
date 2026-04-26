@@ -34,8 +34,8 @@ fn main() -> Result<()> {
     let cli = cli::Cli::parse();
     cli.validate_exec()?;
 
-    // Phase 3: subcommands (`ccmux list`, `ccmux send`, …) are IPC
-    // clients and MUST be runnable from inside a ccmux pane — that's
+    // Phase 3: subcommands (`renga list`, `renga send`, …) are IPC
+    // clients and MUST be runnable from inside a renga pane — that's
     // the whole point. Dispatch them before the nested-TUI guard kicks
     // in, so the `CCMUX=1` env var set by the parent doesn't block
     // legitimate client invocations.
@@ -53,10 +53,10 @@ fn main() -> Result<()> {
     }
 
     // No subcommand: we're about to launch another TUI. Refuse if we're
-    // already inside a ccmux pane, since nesting vt100 parsers in
+    // already inside a renga pane, since nesting vt100 parsers in
     // vt100 parsers produces unreadable output and confuses the mouse.
     if std::env::var("CCMUX").is_ok() {
-        eprintln!("ccmux: already running inside a ccmux pane (nested instance not allowed).");
+        eprintln!("renga: already running inside a renga pane (nested instance not allowed).");
         eprintln!(
             "       Open a new tab with Alt+T (or Ctrl+T) or split with Ctrl+D / Ctrl+E instead."
         );
@@ -68,7 +68,7 @@ fn main() -> Result<()> {
         if dir.is_dir() {
             std::env::set_current_dir(dir)?;
         } else {
-            eprintln!("ccmux: not a directory: {}", dir.display());
+            eprintln!("renga: not a directory: {}", dir.display());
             std::process::exit(1);
         }
     }
@@ -104,9 +104,9 @@ fn main() -> Result<()> {
     let size = terminal.size()?;
 
     // Phase 3: start the IPC server BEFORE spawning child PTYs so the
-    // first `CCMUX_SOCKET` value children see is the real one. Children
+    // first `RENGA_SOCKET` value children see is the real one. Children
     // inherit env from this process (via portable-pty's CommandBuilder),
-    // and we publish `CCMUX` as a "you're inside ccmux" flag here too.
+    // and we publish `CCMUX` as a "you're inside renga" flag here too.
     let our_pid = std::process::id();
     // Endpoint resolution can fail on Unix if we can't create the
     // owner-only socket directory (read-only FS, permission-constrained
@@ -116,7 +116,7 @@ fn main() -> Result<()> {
     let ipc_endpoint = match ipc::endpoint::endpoint_for_pid(our_pid) {
         Ok(ep) => Some(ep),
         Err(e) => {
-            eprintln!("ccmux: IPC endpoint unavailable ({e}); external commands disabled.");
+            eprintln!("renga: IPC endpoint unavailable ({e}); external commands disabled.");
             None
         }
     };
@@ -128,7 +128,7 @@ fn main() -> Result<()> {
     // Session token derived from the process's start nanoseconds so a
     // client connecting through a stale socket file whose PID got
     // re-used cannot be silently fooled — the server echoes this token
-    // on hello, and the client verifies it against `CCMUX_TOKEN`.
+    // on hello, and the client verifies it against `RENGA_TOKEN`.
     let session_token = format!(
         "{}-{}",
         our_pid,
@@ -199,9 +199,9 @@ fn main() -> Result<()> {
             Ok(server) => Some(server),
             Err(e) => {
                 // IPC is non-essential for the TUI itself — fail soft so users
-                // without the required socket permissions can still use ccmux
+                // without the required socket permissions can still use renga
                 // as a plain multiplexer.
-                eprintln!("ccmux: IPC server failed to start ({e}); external commands disabled.");
+                eprintln!("renga: IPC server failed to start ({e}); external commands disabled.");
                 None
             }
         },
@@ -245,22 +245,22 @@ fn main() -> Result<()> {
     result
 }
 
-/// Handle an IPC subcommand (`ccmux send …`, `ccmux list`, etc.).
-/// Resolves the endpoint from the `CCMUX_SOCKET` env var the parent
-/// ccmux published to its child PTYs; prints the server's response to
+/// Handle an IPC subcommand (`renga send …`, `renga list`, etc.).
+/// Resolves the endpoint from the `RENGA_SOCKET` env var the parent
+/// renga published to its child PTYs; prints the server's response to
 /// stdout and exits with a non-zero code on error so shell scripts can
 /// branch on it.
 fn run_ipc_client(cmd: &cli::IpcCommand) -> Result<()> {
     // `--count 0` on `events` is a degenerate "drain zero events"
     // request. Short-circuit before any environment lookup so the
     // command is a true no-op: it must succeed even when run outside
-    // a ccmux pane (where `CCMUX_SOCKET` would be unset).
+    // a renga pane (where `RENGA_SOCKET` would be unset).
     if let cli::IpcCommand::Events { count: Some(0), .. } = cmd {
         return Ok(());
     }
 
     let endpoint = ipc::endpoint::endpoint_from_env()
-        .map_err(|e| anyhow::anyhow!("{e}; run this from inside a ccmux pane"))?;
+        .map_err(|e| anyhow::anyhow!("{e}; run this from inside a renga pane"))?;
 
     // `events` uses the subscription path (long-lived stream), not the
     // single-shot request/response path.
@@ -297,7 +297,7 @@ fn run_ipc_client(cmd: &cli::IpcCommand) -> Result<()> {
     }
 }
 
-/// Run `ccmux events` with optional stop budgets. Bounds the drain so
+/// Run `renga events` with optional stop budgets. Bounds the drain so
 /// shell callers can poll inside a `/loop` cycle without hanging.
 ///
 /// Architecture: a worker thread holds the subscription and forwards
@@ -327,7 +327,7 @@ fn run_events(
     let (tx, rx) = mpsc::channel::<ipc::Event>();
     let endpoint_clone = endpoint.clone();
     std::thread::Builder::new()
-        .name("ccmux-events-reader".into())
+        .name("renga-events-reader".into())
         .spawn(move || {
             let _ = ipc::client::subscribe_events(&endpoint_clone, |event| tx.send(event).is_ok());
         })

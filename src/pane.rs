@@ -49,7 +49,7 @@ pub struct Pane {
     pub claude_caret_cache: Mutex<Option<(u16, u16)>>,
     /// Free-form label for tools/humans. Unlike the name (registered in
     /// `Workspace.pane_names` as the unique IPC key), `role` may repeat
-    /// and may be absent. Surfaced via `ccmux list`.
+    /// and may be absent. Surfaced via `renga list`.
     pub role: Option<String>,
     /// Set once the App has published a `PaneExited` event for this
     /// pane. Guards the multiple exit pathways (explicit close, tab
@@ -98,12 +98,12 @@ impl Pane {
             cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         cmd.cwd(&work_dir);
         cmd.env("TERM", "xterm-256color");
-        cmd.env("CCMUX", "1"); // marker to detect nested ccmux
+        cmd.env("CCMUX", "1"); // marker to detect nested renga
                                // Per-pane identity for the MCP peer subprocess (see #97). The
                                // subprocess is spawned by Claude Code, which inherits env
-                               // from this PTY, so reading `CCMUX_PANE_ID` at startup is how
-                               // the subprocess tells ccmux's IPC server which pane it is.
-        cmd.env("CCMUX_PANE_ID", id.to_string());
+                               // from this PTY, so reading `RENGA_PANE_ID` at startup is how
+                               // the subprocess tells renga's IPC server which pane it is.
+        cmd.env("RENGA_PANE_ID", id.to_string());
 
         let child = pair
             .slave
@@ -173,15 +173,15 @@ impl Pane {
         // Leading space prevents it from appearing in bash history
         if shell_name.contains("bash") {
             let setup = concat!(
-                " __ccmux_osc7() { printf '\\033]7;file://%s%s\\007' \"$HOSTNAME\" \"$PWD\"; };",
-                " PROMPT_COMMAND=\"__ccmux_osc7;${PROMPT_COMMAND}\";",
+                " __renga_osc7() { printf '\\033]7;file://%s%s\\007' \"$HOSTNAME\" \"$PWD\"; };",
+                " PROMPT_COMMAND=\"__renga_osc7;${PROMPT_COMMAND}\";",
                 " clear\n",
             );
             let _ = pane.write_input(setup.as_bytes());
         } else if shell_name.contains("zsh") {
             let setup = concat!(
-                " __ccmux_osc7() { printf '\\033]7;file://%s%s\\007' \"$HOST\" \"$PWD\"; };",
-                " precmd_functions+=(__ccmux_osc7);",
+                " __renga_osc7() { printf '\\033]7;file://%s%s\\007' \"$HOST\" \"$PWD\"; };",
+                " precmd_functions+=(__renga_osc7);",
                 " clear\n",
             );
             let _ = pane.write_input(setup.as_bytes());
@@ -353,13 +353,13 @@ impl Pane {
     /// local_row)` — pane content-area coordinates, 0-origin — should
     /// be handled. Mirrors [`Pane::wheel_forward_bytes`] (Issue #52 /
     /// PR #53) for non-wheel events: the same click that lands in a
-    /// plain shell is a ccmux concern (focus, scrollbar, drag-select)
+    /// plain shell is a renga concern (focus, scrollbar, drag-select)
     /// while a click on a pane running Claude Code `/tui fullscreen`,
     /// vim, lazygit, etc. needs to reach the PTY as an xterm mouse
     /// report so the app can handle it.
     ///
     /// Returns `Some(bytes)` when the caller should forward the report
-    /// to the PTY (and skip the ccmux-side handlers for this event).
+    /// to the PTY (and skip the renga-side handlers for this event).
     /// Returns `None` when mouse reporting is disabled, or when the
     /// active [`MouseProtocolMode`] doesn't cover this event type —
     /// e.g. plain `Press` mode never emits release events, so
@@ -511,7 +511,7 @@ impl Drop for Pane {
 }
 
 /// Which mouse button the report encodes. Only the three physical
-/// buttons ccmux actually receives from crossterm — extra buttons
+/// buttons renga actually receives from crossterm — extra buttons
 /// (4/5/wheel, side buttons) are handled by their own paths and
 /// don't round-trip through this enum.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
