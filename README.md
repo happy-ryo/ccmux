@@ -8,7 +8,7 @@
 
 ## What renga is
 
-renga is a terminal where the panes know they are AI agents. Splits, tabs, and focus work like any TUI multiplexer, but the substrate underneath treats each pane as a first-class agent endpoint: it detects which panes are running Claude Code, gives those panes an authoritative peer channel (an MCP server scoped to the renga tab) so agents can address each other by stable id or role, and exposes pane-control tools (`spawn_claude_pane`, `set_pane_identity`, `new_tab`, …) so an orchestrator agent can grow its own workforce without the user wiring shell commands by hand.
+renga is a terminal where the panes know they are AI agents. Splits, tabs, and focus work like any TUI multiplexer, but the substrate underneath treats each pane as a first-class agent endpoint: it detects which panes are running Claude Code, gives those panes an authoritative peer channel (an MCP server scoped to the renga tab) so agents can address each other by numeric id or a stable user-assigned name, and exposes pane-control tools (`spawn_claude_pane`, `set_pane_identity`, `new_tab`, …) so an orchestrator agent can grow its own workforce without the user wiring shell commands by hand. Each pane also carries an optional `role` label (used for filtering and display), but message routing itself is by id or name.
 
 The target use case is **agent orchestration** — a "secretary" pane dispatching tasks to "worker" panes, sub-agents comparing approaches in parallel, a long-running session reaching out to a sibling for a quick lookup. If you only ever run one Claude Code at a time, renga's value over your current terminal is small. If you run several, the peer channel and the AI-aware pane model are the point.
 
@@ -52,9 +52,9 @@ From the secretary's chat, growing the team and dispatching a task is two MCP ca
   message="please grep src/ for TODO(perf) and report file:line + 1 line of context"
 ```
 
-worker-1 sees a `<channel source="renga-peers" from_id="…" from_name="secretary">…</channel>` tag in its next turn, recognises it as a peer request (not user input — the tag's `source` attribute makes that distinction), does the work, and replies back via `send_message(to_id="secretary", …)`. Stable role/name lookups mean the secretary never has to track numeric pane ids; `set_pane_identity` lets it relabel a pane mid-session if needed.
+worker-1 sees a `<channel source="renga-peers" from_id="…" from_name="secretary">…</channel>` tag in its next turn, recognises it as a peer request (not user input — the tag's `source` attribute makes that distinction), does the work, and replies back via `send_message(to_id="secretary", …)`. Stable name lookups mean the secretary addresses peers as `"secretary"` / `"worker-1"` instead of chasing numeric ids; `set_pane_identity` lets it (re)assign a pane's name mid-session if needed.
 
-The same primitives scale to richer layouts (dispatcher + multiple workers across tabs, evaluator panes that watch a worker's output, …). See [Peer messaging between Claude Code panes](#peer-messaging-between-claude-code-panes) for the full tool surface.
+The same primitives scale to richer layouts: a dispatcher with several workers in one tab, evaluator panes watching a worker's output, or sibling tabs each holding an isolated team (peer messaging is scoped per tab — `new_tab` widens layout, it doesn't bridge channels). See [Peer messaging between Claude Code panes](#peer-messaging-between-claude-code-panes) for the full tool surface.
 
 ## Features
 
