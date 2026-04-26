@@ -48,7 +48,7 @@ npm install -g @suisya-systems/renga@latest
 
 > Previously installed `ccmux-fork`? Migrate with: `npm uninstall -g ccmux-fork && npm install -g @suisya-systems/renga`
 >
-> Previously installed the upstream `renga-cli`? Migrate with: `npm uninstall -g renga-cli && npm install -g @suisya-systems/renga`
+> Previously installed the upstream `ccmux-cli`? Migrate with: `npm uninstall -g ccmux-cli && npm install -g @suisya-systems/renga`
 
 ### Download binary
 

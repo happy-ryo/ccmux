@@ -16,10 +16,10 @@ Migrating from previous `ccmux-fork`:
 npm uninstall -g ccmux-fork && npm install -g @suisya-systems/renga
 ```
 
-Migrating from the upstream `renga-cli`:
+Migrating from the upstream `ccmux-cli`:
 
 ```bash
-npm uninstall -g renga-cli && npm install -g @suisya-systems/renga
+npm uninstall -g ccmux-cli && npm install -g @suisya-systems/renga
 ```
 
 ## Usage
