@@ -1,4 +1,4 @@
-# Welcome to ccmux
+# Welcome to renga
 
 ## How We Use Claude
 
@@ -19,7 +19,7 @@ Top MCP Servers:
 ## Your Setup Checklist
 
 ### Codebases
-- [ ] ccmux — https://github.com/shin-sibainu/ccmux
+- [ ] renga — https://github.com/happy-ryo/ccmux
 
 ### MCP Servers to Activate
   (none configured yet — add servers here as the team adopts them)

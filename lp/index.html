@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ccmux-fork — fork of ccmux</title>
+    <title>renga-fork — fork of renga</title>
     <meta
       name="description"
-      content="Fork of Shin-sibainu/ccmux with independent development. Installs as ccmux-fork on npm."
+      content="Fork of Shin-sibainu/ccmux with independent development. Installs as renga-fork on npm."
     />
     <link rel="alternate" hreflang="en" href="./index.html" />
     <link rel="alternate" hreflang="ja" href="./ja.html" />
@@ -167,11 +167,11 @@
         <span class="sep">·</span>
         <a href="./ja.html" hreflang="ja">日本語</a>
       </nav>
-      <h1>ccmux-fork</h1>
+      <h1>renga-fork</h1>
       <p class="tagline">
         Fork of
         <a href="https://github.com/Shin-sibainu/ccmux">Shin-sibainu/ccmux</a>
-        with independent development. Installs as <code>ccmux-fork</code> on npm.
+        with independent development. Installs as <code>renga-fork</code> on npm.
       </p>
 
       <figure class="hero">
@@ -196,19 +196,19 @@
         <a href="https://github.com/Shin-sibainu/ccmux">upstream repository</a>.
       </p>
 
-      <pre><code>$ npm install -g ccmux-fork</code></pre>
+      <pre><code>$ npm install -g renga-fork</code></pre>
 
       <p>
-        Migrating from upstream <code>ccmux-cli</code>:
+        Migrating from upstream <code>renga-cli</code>:
       </p>
-      <pre><code>$ npm uninstall -g ccmux-cli
-$ npm install -g ccmux-fork</code></pre>
+      <pre><code>$ npm uninstall -g renga-cli
+$ npm install -g renga-fork</code></pre>
 
       <h2>macOS setup: Option as Meta</h2>
       <p style="color: var(--muted); font-size: 0.9rem; margin-top: -4px;">
         macOS terminals bind <code>Option+&lt;key&gt;</code> to Unicode
         input (<code>å</code>, <code>∫</code>, <code>π</code> …) by
-        default, so ccmux's <code>Alt+T</code> / <code>Alt+P</code> /
+        default, so renga's <code>Alt+T</code> / <code>Alt+P</code> /
         <code>Alt+R</code> / <code>Alt+S</code> / <code>Alt+1..9</code>
         / <code>Alt+Left/Right</code> shortcuts never reach the app.
         Flip Option to act as a Meta key — a one-line change in every
@@ -286,7 +286,7 @@ $ npm install -g ccmux-fork</code></pre>
             <td>
               Peer messaging between Claude Code panes in the same tab
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                <code>ccmux mcp install</code> registers a stdio MCP server; same-tab Claude Code instances discover each other via <code>list_peers</code> and exchange messages via <code>send_message</code>. Peer messages arrive as <code>&lt;channel source="ccmux-peers"&gt;</code> tags, distinct from user input.
+                <code>renga mcp install</code> registers a stdio MCP server; same-tab Claude Code instances discover each other via <code>list_peers</code> and exchange messages via <code>send_message</code>. Peer messages arrive as <code>&lt;channel source="renga-peers"&gt;</code> tags, distinct from user input.
                 <code>Alt+P</code> inserts the peer-enabled launch command into the focused pane.
               </span>
             </td>
@@ -297,7 +297,7 @@ $ npm install -g ccmux-fork</code></pre>
             <td>
               MCP pane control from inside Claude Code
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                Same <code>ccmux mcp install</code> exposes <code>list_panes</code>, <code>spawn_pane</code>, <code>close_pane</code>, <code>focus_pane</code>, <code>new_tab</code> so a Claude instance can split the layout, spin up a sibling Claude, or switch focus — without the user leaving the conversation. A bare <code>command="claude"</code> is auto-upgraded to the <code>Alt+P</code> peer-enabled launch, so new Claude panes join the peer network automatically.
+                Same <code>renga mcp install</code> exposes <code>list_panes</code>, <code>spawn_pane</code>, <code>close_pane</code>, <code>focus_pane</code>, <code>new_tab</code> so a Claude instance can split the layout, spin up a sibling Claude, or switch focus — without the user leaving the conversation. A bare <code>command="claude"</code> is auto-upgraded to the <code>Alt+P</code> peer-enabled launch, so new Claude panes join the peer network automatically.
               </span>
             </td>
             <td class="mark">—</td>
@@ -328,7 +328,7 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
-              Pane lifecycle events (<code>ccmux events --timeout / --count</code>)
+              Pane lifecycle events (<code>renga events --timeout / --count</code>)
               <br /><span style="color: var(--muted); font-size: 0.85em;">
                 subscribe to <code>PaneStarted</code> / <code>PaneExited</code> as
                 newline-delimited JSON, with heartbeat-based half-close detection
@@ -342,8 +342,8 @@ $ npm install -g ccmux-fork</code></pre>
             <td>
               Screen snapshot + layout inspection
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                <code>ccmux inspect</code> returns a row-by-row JSON snapshot;
-                <code>ccmux list</code> now includes each pane's rect so external
+                <code>renga inspect</code> returns a row-by-row JSON snapshot;
+                <code>renga list</code> now includes each pane's rect so external
                 tools can match by on-screen position
               </span>
             </td>
@@ -364,7 +364,7 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
-              <code>ccmux close</code> subcommand
+              <code>renga close</code> subcommand
               <br /><span style="color: var(--muted); font-size: 0.85em;">
                 terminate a pane from a script; refuses on the last pane of
                 the last tab so you can't accidentally kill the session
@@ -420,7 +420,7 @@ $ npm install -g ccmux-fork</code></pre>
     </main>
     <footer>
       MIT License. Not an official Anthropic product. Claude and Claude Code are
-      trademarks of Anthropic, PBC. Original ccmux © Shin-sibainu.
+      trademarks of Anthropic, PBC. Original renga © Shin-sibainu.
     </footer>
   </body>
 </html>

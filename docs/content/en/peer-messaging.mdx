@@ -2,53 +2,53 @@
 
 import { Callout } from 'nextra/components'
 
-Let multiple Claude Code instances running in the same ccmux tab exchange structured messages through an MCP channel. One Claude can ask its sibling to research something, hand off a failing test, or coordinate — without the user relaying every message manually.
+Let multiple Claude Code instances running in the same renga tab exchange structured messages through an MCP channel. One Claude can ask its sibling to research something, hand off a failing test, or coordinate — without the user relaying every message manually.
 
 <Callout type="info">
-  Peer messages land in the receiver's context as `<channel source="ccmux-peers">...</channel>` tags. **This is the only mechanism that keeps them distinct from user input**. A polling-based approach would surface them as ordinary tool results, with no interrupt-style UX.
+  Peer messages land in the receiver's context as `<channel source="renga-peers">...</channel>` tags. **This is the only mechanism that keeps them distinct from user input**. A polling-based approach would surface them as ordinary tool results, with no interrupt-style UX.
 </Callout>
 
-## Scope authority: the ccmux tab
+## Scope authority: the renga tab
 
-[`claude-peers-mcp`](https://github.com/happy-ryo/claude-peers-mcp) infers peer scope from `cwd` / `git_root` / `PID` — heuristics that collide when the same repo is opened from two places. ccmux-peers uses **the ccmux tab as the authoritative scope**: the user literally put these panes next to each other, which is a stronger signal than "they share a cwd". ccmux owns pane lifecycle, so peer liveness is exact — no PID polling, no SQLite GC.
+[`claude-peers-mcp`](https://github.com/happy-ryo/claude-peers-mcp) infers peer scope from `cwd` / `git_root` / `PID` — heuristics that collide when the same repo is opened from two places. renga-peers uses **the renga tab as the authoritative scope**: the user literally put these panes next to each other, which is a stronger signal than "they share a cwd". renga owns pane lifecycle, so peer liveness is exact — no PID polling, no SQLite GC.
 
-Channel names differ (`server:ccmux-peers` vs `server:claude-peers`), so the two can coexist in the same Claude Code install. Use ccmux-peers when you're inside ccmux, claude-peers-mcp for everything else.
+Channel names differ (`server:renga-peers` vs `server:claude-peers`), so the two can coexist in the same Claude Code install. Use renga-peers when you're inside renga, claude-peers-mcp for everything else.
 
 ## Setup (one-time)
 
 ```bash
-ccmux mcp install
+renga mcp install
 ```
 
-Registers the running `ccmux` binary as the `ccmux-peers` MCP server in Claude Code's user-scope config. Internally shells out to `claude mcp add-json`, so Claude Code owns the on-disk schema and ccmux stays out of its evolution.
+Registers the running `renga` binary as the `renga-peers` MCP server in Claude Code's user-scope config. Internally shells out to `claude mcp add-json`, so Claude Code owns the on-disk schema and renga stays out of its evolution.
 
-Idempotent — re-runs without `--force` print the current entry and bail. Pass `--force` to overwrite after a ccmux upgrade. Use `ccmux mcp uninstall` to remove and `ccmux mcp status` to inspect.
+Idempotent — re-runs without `--force` print the current entry and bail. Pass `--force` to overwrite after a renga upgrade. Use `renga mcp uninstall` to remove and `renga mcp status` to inspect.
 
 <Callout type="warning">
-  `ccmux mcp install` fails if the `claude` CLI is not on PATH. Install Claude Code first.
+  `renga mcp install` fails if the `claude` CLI is not on PATH. Install Claude Code first.
 </Callout>
 
 ## Launching Claude Code with the peer channel
 
-Peer messaging rides MCP's experimental channel protocol. Claude Code needs the `--dangerously-load-development-channels server:ccmux-peers` flag **at every startup**; there is no env-var equivalent today. ccmux gives you two shortcuts so you don't have to type that by hand.
+Peer messaging rides MCP's experimental channel protocol. Claude Code needs the `--dangerously-load-development-channels server:renga-peers` flag **at every startup**; there is no env-var equivalent today. renga gives you two shortcuts so you don't have to type that by hand.
 
 ### `Alt+P` — works in any pane
 
-While focused on a pane, press `Alt+P`. ccmux writes
+While focused on a pane, press `Alt+P`. renga writes
 
 ```
-claude --dangerously-load-development-channels server:ccmux-peers
+claude --dangerously-load-development-channels server:renga-peers
 ```
 
 into the pane's PTY (trailing space, **no Enter**). Review, optionally add flags (`/foo`, a file path, etc.), press Enter yourself to run. Works identically across bash / zsh / fish / pwsh / cmd.exe because the keystroke is a pre-PTY write, not a shell hook.
 
-### `ccmux split --role claude` — auto-launch in a new pane
+### `renga split --role claude` — auto-launch in a new pane
 
 Split or open a tab with `--role claude` and the new pane auto-runs the flagged `claude` command:
 
 ```bash
-ccmux split --direction vertical --role claude
-ccmux new-tab --role claude
+renga split --direction vertical --role claude
+renga new-tab --role claude
 ```
 
 An explicit `--command "…"` overrides the auto-launch, so the role path is a default, not a lock-in.
@@ -59,7 +59,7 @@ Exposed by the MCP server to each Claude pane:
 
 | Tool | Effect |
 |---|---|
-| `list_peers(scope?)` | Lists other panes in the caller's ccmux tab. Caller excluded. `scope` is accepted for wire-compat with `claude-peers-mcp` but ignored — ccmux always treats scope as the current tab. |
+| `list_peers(scope?)` | Lists other panes in the caller's renga tab. Caller excluded. `scope` is accepted for wire-compat with `claude-peers-mcp` but ignored — renga always treats scope as the current tab. |
 | `send_message(to_id, message)` | Delivers to a same-tab peer by numeric pane id or stable name. Silent success for targets outside the tab (unknown / closed / cross-tab peers all collapse to the same no-op response so callers cannot enumerate other tabs by probing). |
 | `check_messages` | Manual inbox drain. Channel push is the primary delivery path; this is a fallback for when you suspect a dropped push. |
 | `set_summary(text)` | v1 stub (accepted and ignored). `list_peers` surfaces pane `name` / `role` as the summary substitute; a real `set_summary` may land in v2. |
@@ -88,7 +88,7 @@ In Claude A's chat:
 Claude B's next turn sees:
 
 ```xml
-<channel source="ccmux-peers" from_id="1" from_name="leader">
+<channel source="renga-peers" from_id="1" from_name="leader">
 read src/app.rs::handle_split and summarise
 </channel>
 ```
@@ -97,34 +97,34 @@ B recognises this as a peer request (from the tag source), executes, and replies
 
 ## Delivery semantics
 
-- **In-memory, tab lifetime.** Inboxes vanish when the ccmux process exits. Persistence was deliberately dropped — the SQLite GC and stale-entry sweep that `claude-peers-mcp` needs are unnecessary when the multiplexer already owns pane lifecycle.
+- **In-memory, tab lifetime.** Inboxes vanish when the renga process exits. Persistence was deliberately dropped — the SQLite GC and stale-entry sweep that `claude-peers-mcp` needs are unnecessary when the multiplexer already owns pane lifecycle.
 - **Bounded queue.** 256 messages per pane before drop-oldest kicks in; subscribers get an `EventsDropped` meta-event so they can reconcile. Built on the existing IPC EventBus, no new plumbing.
 - **Fire-and-forget.** `send_message` has no correlation id, no delivery confirmation. If Claude wants to reply, it calls `send_message(to_id=from_id, ...)` itself.
 - **Silent cross-tab drop.** Sends addressed to panes in other tabs succeed at the wire level but deliver nothing. Unknown peers, closed peers, and cross-tab peers are all indistinguishable to the sender — intentional, so the sender cannot enumerate other tabs by probing ids.
 
 ## Troubleshooting
 
-### `list_peers` reports "ccmux not reachable from this Claude Code instance"
+### `list_peers` reports "renga not reachable from this Claude Code instance"
 
-Claude Code was launched outside a ccmux pane, or without inheriting the pane's env. Re-launch via `Alt+P` or `ccmux split --role claude` from inside ccmux.
+Claude Code was launched outside a renga pane, or without inheriting the pane's env. Re-launch via `Alt+P` or `renga split --role claude` from inside renga.
 
-The MCP subprocess needs `CCMUX_PANE_ID` in its env; that variable propagates PTY → shell → `claude` → `ccmux mcp-peer` automatically when Claude Code is spawned inside ccmux.
+The MCP subprocess needs `RENGA_PANE_ID` in its env; that variable propagates PTY → shell → `claude` → `renga mcp-peer` automatically when Claude Code is spawned inside renga.
 
 ### Peer messages don't render as `<channel>` tags
 
-You launched Claude Code without `--dangerously-load-development-channels server:ccmux-peers`. Use `Alt+P` instead of typing `claude` directly — the flag is pre-filled for you.
+You launched Claude Code without `--dangerously-load-development-channels server:renga-peers`. Use `Alt+P` instead of typing `claude` directly — the flag is pre-filled for you.
 
-### `ccmux mcp install` fails
+### `renga mcp install` fails
 
 - The `claude` CLI is not on PATH → install Claude Code first.
-- Another `ccmux-peers` entry exists → pass `--force` to overwrite, or `ccmux mcp uninstall` and re-run.
+- Another `renga-peers` entry exists → pass `--force` to overwrite, or `renga mcp uninstall` and re-run.
 
-### Peers stopped connecting after a ccmux upgrade
+### Peers stopped connecting after a renga upgrade
 
 The registered command path is stale. Refresh it:
 
 ```bash
-ccmux mcp install --force
+renga mcp install --force
 ```
 
 ## Out of scope for v1

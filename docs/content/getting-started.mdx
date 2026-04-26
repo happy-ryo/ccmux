@@ -14,10 +14,10 @@
 ### npm 経由（推奨）
 
 ```bash
-npm install -g ccmux-fork
+npm install -g renga-fork
 ```
 
-Node.js が必要です。インストール後、どこからでも `ccmux` コマンドで起動できます。
+Node.js が必要です。インストール後、どこからでも `renga` コマンドで起動できます。
 
 ### バイナリをダウンロード
 
@@ -25,10 +25,10 @@ Node.js が必要です。インストール後、どこからでも `ccmux` コ
 
 | プラットフォーム | ファイル |
 |-----------------|---------|
-| Windows (x64) | `ccmux-windows-x64.exe` |
-| macOS (Apple Silicon) | `ccmux-macos-arm64` |
-| macOS (Intel) | `ccmux-macos-x64` |
-| Linux (x64) | `ccmux-linux-x64` |
+| Windows (x64) | `renga-windows-x64.exe` |
+| macOS (Apple Silicon) | `renga-macos-arm64` |
+| macOS (Intel) | `renga-macos-x64` |
+| Linux (x64) | `renga-linux-x64` |
 
 import { Callout } from 'nextra/components'
 
@@ -37,23 +37,23 @@ import { Callout } from 'nextra/components'
 </Callout>
 
 <Callout type="info">
-  **macOS / Linux の場合:** ダウンロード後に実行権限を付与してください: `chmod +x ccmux-*`
+  **macOS / Linux の場合:** ダウンロード後に実行権限を付与してください: `chmod +x renga-*`
 </Callout>
 
 ### ソースからビルド
 
 ```bash
 git clone https://github.com/happy-ryo/ccmux.git
-cd ccmux
+cd renga
 cargo build --release
 ```
 
-バイナリは `target/release/ccmux`（Windows は `ccmux.exe`）に生成されます。
+バイナリは `target/release/renga`（Windows は `renga.exe`）に生成されます。
 
 ## 初回起動
 
 ```bash
-ccmux
+renga
 ```
 
 シェルが起動したターミナルペイン、左にファイルツリーサイドバー、下にステータスバーが表示されます。
@@ -78,11 +78,11 @@ ccmux
 
 ### 5. 終了
 
-`Ctrl+Q` で ccmux を終了。全シェルがクリーンに終了します。
+`Ctrl+Q` で renga を終了。全シェルがクリーンに終了します。
 
 ## シェルの自動検出
 
-ccmux は自動的にシェルを検出します：
+renga は自動的にシェルを検出します：
 
 | プラットフォーム | 優先順位 |
 |-----------------|----------|

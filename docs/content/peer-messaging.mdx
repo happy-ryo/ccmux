@@ -2,61 +2,61 @@
 
 import { Callout } from 'nextra/components'
 
-同じ ccmux タブに並べた Claude Code のペインが、お互いに MCP の channel 機能を使って直接メッセージを送り合える機能です。片方の Claude Code にちょっとした調査を頼んだり、失敗したテストの続きをもう片方に引き継いだりを、ユーザーが手でコピペしなくても進められるようになります。
+同じ renga タブに並べた Claude Code のペインが、お互いに MCP の channel 機能を使って直接メッセージを送り合える機能です。片方の Claude Code にちょっとした調査を頼んだり、失敗したテストの続きをもう片方に引き継いだりを、ユーザーが手でコピペしなくても進められるようになります。
 
 <Callout type="info">
-  受信側の Claude Code には `<channel source="ccmux-peers">...</channel>` タグでメッセージが入ります。**これがあることでユーザー入力と区別されます**。単に polling で取ってくるだけだと普通のツール結果と見分けが付かず、割り込みとしても機能しません。
+  受信側の Claude Code には `<channel source="renga-peers">...</channel>` タグでメッセージが入ります。**これがあることでユーザー入力と区別されます**。単に polling で取ってくるだけだと普通のツール結果と見分けが付かず、割り込みとしても機能しません。
 </Callout>
 
-## スコープは「ccmux タブ」単位
+## スコープは「renga タブ」単位
 
-[`claude-peers-mcp`](https://github.com/happy-ryo/claude-peers-mcp) は `cwd` / `git_root` / `PID` の組み合わせからペアを推測しますが、ccmux-peers は **「ユーザーがこのタブに並べて置いた」という物理配置** そのものをスコープの境界にします。推測に頼らないので、同じディレクトリを複数案件で開いていても混ざりませんし、同じリポジトリを別の場所で再オープンしても重複しません。ccmux がペインのライフサイクルを把握している以上、古くなったペアを掃除する仕組みも追加で要りません。
+[`claude-peers-mcp`](https://github.com/happy-ryo/claude-peers-mcp) は `cwd` / `git_root` / `PID` の組み合わせからペアを推測しますが、renga-peers は **「ユーザーがこのタブに並べて置いた」という物理配置** そのものをスコープの境界にします。推測に頼らないので、同じディレクトリを複数案件で開いていても混ざりませんし、同じリポジトリを別の場所で再オープンしても重複しません。renga がペインのライフサイクルを把握している以上、古くなったペアを掃除する仕組みも追加で要りません。
 
-チャンネル名は `server:ccmux-peers` と `server:claude-peers` で分かれているので、同じ Claude Code に両方インストールしていても衝突しません。ccmux 内ではタブ単位、外では cwd / repo 単位、と使い分けられます。
+チャンネル名は `server:renga-peers` と `server:claude-peers` で分かれているので、同じ Claude Code に両方インストールしていても衝突しません。renga 内ではタブ単位、外では cwd / repo 単位、と使い分けられます。
 
 ## セットアップ (1 回だけ)
 
 ```bash
-ccmux mcp install
+renga mcp install
 ```
 
-いま走っている `ccmux` バイナリを `ccmux-peers` という名前で Claude Code のユーザー設定に登録します。内部では `claude mcp add-json` を呼んでいるだけなので、Claude Code 側の設定ファイルの書式が将来変わっても ccmux 側は追従する必要がありません。
+いま走っている `renga` バイナリを `renga-peers` という名前で Claude Code のユーザー設定に登録します。内部では `claude mcp add-json` を呼んでいるだけなので、Claude Code 側の設定ファイルの書式が将来変わっても renga 側は追従する必要がありません。
 
-同じ登録を何度実行しても安全 (既に登録があれば内容を表示して止まる) で、ccmux をアップグレードしてバイナリのパスが変わったときだけ `--force` を付けて上書きしてください。
+同じ登録を何度実行しても安全 (既に登録があれば内容を表示して止まる) で、renga をアップグレードしてバイナリのパスが変わったときだけ `--force` を付けて上書きしてください。
 
 ```bash
-ccmux mcp uninstall  # 解除
-ccmux mcp status     # 今どう登録されているか確認
+renga mcp uninstall  # 解除
+renga mcp status     # 今どう登録されているか確認
 ```
 
 <Callout type="warning">
-  `claude` コマンドが PATH にない環境では `ccmux mcp install` は失敗します。先に Claude Code をインストールしておいてください。
+  `claude` コマンドが PATH にない環境では `renga mcp install` は失敗します。先に Claude Code をインストールしておいてください。
 </Callout>
 
 ## Claude Code をメッセージング対応で起動する
 
-メッセージングは MCP の experimental channel 機能に乗っているので、Claude Code を起動するたびに `--dangerously-load-development-channels server:ccmux-peers` というフラグを付ける必要があります。現状これを省略する環境変数は Claude Code 側に用意されていないので、毎回手で打たなくて済むように ccmux 側から 2 つの経路を用意しています。
+メッセージングは MCP の experimental channel 機能に乗っているので、Claude Code を起動するたびに `--dangerously-load-development-channels server:renga-peers` というフラグを付ける必要があります。現状これを省略する環境変数は Claude Code 側に用意されていないので、毎回手で打たなくて済むように renga 側から 2 つの経路を用意しています。
 
 ### `Alt+P` — どのペインからでも
 
 フォーカス中のペインで `Alt+P` を押すと、
 
 ```
-claude --dangerously-load-development-channels server:ccmux-peers
+claude --dangerously-load-development-channels server:renga-peers
 ```
 
 が入力行に挿入されます (末尾にスペース、**Enter は押されない**)。そのまま Enter で起動してもよいし、引数を書き足してから Enter でも構いません。シェル (bash / zsh / fish / pwsh / cmd.exe) の種類を問わず同じ動きをします。これは shell の hook ではなく **ペインの PTY にバイトを直接書き込んでいる**からです。
 
-### `ccmux split --role claude` — 新しいペインで自動起動
+### `renga split --role claude` — 新しいペインで自動起動
 
 ペインを分割した瞬間から、その新しいペインで自動的にフラグ付きの Claude Code が立ち上がります。
 
 ```bash
-ccmux split --direction vertical --role claude
-# 新しいペインで `claude --dangerously-load-development-channels server:ccmux-peers` が走る
+renga split --direction vertical --role claude
+# 新しいペインで `claude --dangerously-load-development-channels server:renga-peers` が走る
 ```
 
-`ccmux new-tab --role claude` も同じ扱い (新しいタブを開いてそこで起動)。`--command "..."` を明示的に渡したときはそちらが優先されるので、別のコマンドを走らせたいときはそれで上書きできます。
+`renga new-tab --role claude` も同じ扱い (新しいタブを開いてそこで起動)。`--command "..."` を明示的に渡したときはそちらが優先されるので、別のコマンドを走らせたいときはそれで上書きできます。
 
 ## 提供ツール
 
@@ -64,7 +64,7 @@ Claude Code から見える MCP ツールは次の 4 つです。
 
 | ツール | 役割 |
 |---|---|
-| `list_peers(scope?)` | 同じ ccmux タブにいる他のペインを返します。自分自身は除外。`scope` は claude-peers-mcp との互換のため受け取りますが、ccmux では常にタブ単位なので中身は見ません。 |
+| `list_peers(scope?)` | 同じ renga タブにいる他のペインを返します。自分自身は除外。`scope` は claude-peers-mcp との互換のため受け取りますが、renga では常にタブ単位なので中身は見ません。 |
 | `send_message(to_id, message)` | 同じタブにいる相手にメッセージを送ります。数字の id でも、ペインに付けた名前 (stable name) でも指定可能。別タブ宛や存在しない id 宛は「成功として返すが何も配送しない」挙動にしているので、送信側から他タブのペインを id 探索で列挙する攻撃は成立しません。 |
 | `check_messages` | 受信箱を手動で取り出すフォールバック。通常は channel で push されてくるので出番は少ないですが、取りこぼしを疑うときに使えます。 |
 | `set_summary(text)` | v1 では受け取るだけで保存しません。`list_peers` ではペイン名と役割 (role) を summary の代わりに返しているので実質不要になっています。本格的な実装は v2 の検討事項。 |
@@ -93,7 +93,7 @@ Claude A の会話で：
 Claude B の次のターンのコンテキストには、
 
 ```xml
-<channel source="ccmux-peers" from_id="1" from_name="leader">
+<channel source="renga-peers" from_id="1" from_name="leader">
 src/app.rs の handle_split を読んで要約して
 </channel>
 ```
@@ -102,43 +102,43 @@ src/app.rs の handle_split を読んで要約して
 
 ## 配送の仕様
 
-- **メモリ上、タブが生きている間だけ**: ccmux プロセスが終われば全ペインの受信箱も消えます。永続化はあえて外しています (`claude-peers-mcp` が必要としている SQLite GC や stale entry の掃除が不要になるため)。
+- **メモリ上、タブが生きている間だけ**: renga プロセスが終われば全ペインの受信箱も消えます。永続化はあえて外しています (`claude-peers-mcp` が必要としている SQLite GC や stale entry の掃除が不要になるため)。
 - **キューは上限付き**: ペインあたり 256 件までで、溢れると古いものから捨てられ、`EventsDropped` というメタイベントが subscriber に通知されます。既存の IPC EventBus を使い回しているので、ここに新しい仕組みを足してはいません。
 - **投げっぱなし**: `send_message` には相関 id や到達確認がありません。返事が欲しければ Claude が自分で `send_message(to_id=from_id, ...)` を呼びます。
 - **別タブ宛は黙って捨てる**: 別タブのペインを宛先にした送信は成功レスポンスで返りますが、実際には何も配送されません。存在しない相手 / 閉じたペイン / 別タブのペインを、送信側から区別できないようにするための仕様です。
 
 ## うまく動かないとき
 
-### `list_peers` が "ccmux not reachable from this Claude Code instance" を返す
+### `list_peers` が "renga not reachable from this Claude Code instance" を返す
 
-Claude Code が ccmux の外で起動されたか、ccmux ペインの環境変数を引き継げていない状態です。ccmux のペイン内で `Alt+P` または `ccmux split --role claude` から起動し直してください。
+Claude Code が renga の外で起動されたか、renga ペインの環境変数を引き継げていない状態です。renga のペイン内で `Alt+P` または `renga split --role claude` から起動し直してください。
 
-具体的には `CCMUX_PANE_ID` という環境変数が MCP サブプロセスまで届いている必要があります。ccmux 経由でペインを作って中で `claude` を起動すれば、この変数は PTY → シェル → claude → mcp-peer と自動的に伝わります。
+具体的には `RENGA_PANE_ID` という環境変数が MCP サブプロセスまで届いている必要があります。renga 経由でペインを作って中で `claude` を起動すれば、この変数は PTY → シェル → claude → mcp-peer と自動的に伝わります。
 
 ### 相手に送ったメッセージが `<channel>` タグとして表示されない
 
-起動時のフラグ `--dangerously-load-development-channels server:ccmux-peers` を付け忘れています。`claude` と打ち直す代わりに `Alt+P` を使うと、フラグ付きのコマンドが入力行に挿入されるので事故りにくくなります。
+起動時のフラグ `--dangerously-load-development-channels server:renga-peers` を付け忘れています。`claude` と打ち直す代わりに `Alt+P` を使うと、フラグ付きのコマンドが入力行に挿入されるので事故りにくくなります。
 
-### `ccmux mcp install` が失敗する
+### `renga mcp install` が失敗する
 
 - `claude` コマンドが PATH にない → 先に Claude Code をインストールしてください。
-- すでに別のバージョンが登録されている → `--force` で上書きするか、`ccmux mcp uninstall` してから再度 install してください。
+- すでに別のバージョンが登録されている → `--force` で上書きするか、`renga mcp uninstall` してから再度 install してください。
 
-### ccmux をアップグレードしたら繋がらなくなった
+### renga をアップグレードしたら繋がらなくなった
 
 登録されているバイナリのパスが古いです。
 
 ```bash
-ccmux mcp install --force
+renga mcp install --force
 ```
 
-これで今の `ccmux` のフルパスに更新されます。
+これで今の `renga` のフルパスに更新されます。
 
 ## v1 では見送ったもの
 
 - **タブをまたいだブロードキャスト** — `broadcast_tab` 的なツールはまだありません。タブの境界を意味のあるものとして残すため (物理配置 = 明示的な意図 の原則を守るため) 意図的に見送っていて、v1.1 以降の検討候補です。
 - **履歴の永続化** — タブの寿命と同期する形で十分なので、SQLite などは入れていません。
-- **Claude 以外のペイン間通信** — 現状は MCP サブプロセス経由の配送しかサポートしません。ccmux 外部の IPC クライアントや普通のシェルペインは相手として登場しません。
+- **Claude 以外のペイン間通信** — 現状は MCP サブプロセス経由の配送しかサポートしません。renga 外部の IPC クライアントや普通のシェルペインは相手として登場しません。
 - **添付ファイル / 構造化リクエスト・レスポンス** — body はテキストのみで、相関 id もありません。必要になれば v1.1 で追加します。
 - **`set_summary` の本格実装** — 現状 stub です。ペイン名と役割で十分機能しているので v2 送りにしています。
 

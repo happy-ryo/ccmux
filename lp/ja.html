@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ccmux-fork — ccmux のフォーク</title>
+    <title>renga-fork — renga のフォーク</title>
     <meta
       name="description"
-      content="Shin-sibainu/ccmux のフォーク。独自機能を先行開発し、npm では ccmux-fork として配布中。"
+      content="Shin-sibainu/ccmux のフォーク。独自機能を先行開発し、npm では renga-fork として配布中。"
     />
     <link rel="alternate" hreflang="en" href="./index.html" />
     <link rel="alternate" hreflang="ja" href="./ja.html" />
@@ -163,11 +163,11 @@
         <span class="sep">·</span>
         <a href="./ja.html" aria-current="page">日本語</a>
       </nav>
-      <h1>ccmux-fork</h1>
+      <h1>renga-fork</h1>
       <p class="tagline">
         <a href="https://github.com/Shin-sibainu/ccmux">Shin-sibainu/ccmux</a>
         のフォーク。独自機能を先行して追加し、npm では
-        <code>ccmux-fork</code> の名前で配布しています。
+        <code>renga-fork</code> の名前で配布しています。
       </p>
 
       <figure class="hero">
@@ -190,19 +190,19 @@
         を見てください。
       </p>
 
-      <pre><code>$ npm install -g ccmux-fork</code></pre>
+      <pre><code>$ npm install -g renga-fork</code></pre>
 
       <p>
-        上流の <code>ccmux-cli</code> から移行する場合:
+        上流の <code>renga-cli</code> から移行する場合:
       </p>
-      <pre><code>$ npm uninstall -g ccmux-cli
-$ npm install -g ccmux-fork</code></pre>
+      <pre><code>$ npm uninstall -g renga-cli
+$ npm install -g renga-fork</code></pre>
 
       <h2>macOS の設定: Option をメタキーにする</h2>
       <p style="color: var(--muted); font-size: 0.9rem; margin-top: -4px;">
         macOS のターミナルは既定で <code>Option+&lt;キー&gt;</code> を
         Unicode 入力 (<code>å</code>、<code>∫</code>、<code>π</code>
-        など) に割り当てているため、ccmux の <code>Alt+T</code> /
+        など) に割り当てているため、renga の <code>Alt+T</code> /
         <code>Alt+P</code> / <code>Alt+R</code> / <code>Alt+S</code> /
         <code>Alt+1..9</code> / <code>Alt+Left/Right</code>
         ショートカットが発火しません。Option をメタキー扱いに切り替え
@@ -277,7 +277,7 @@ $ npm install -g ccmux-fork</code></pre>
             <td>
               同じタブに並べた Claude Code 同士のメッセージング
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                <code>ccmux mcp install</code> で MCP サーバを登録すると、同じタブにいる Claude Code 同士が <code>list_peers</code> で相手を見つけて <code>send_message</code> でメッセージを送り合えるようになる。届いたメッセージは受信側に <code>&lt;channel source="ccmux-peers"&gt;</code> タグで入るので、ユーザー入力とは区別して扱える。
+                <code>renga mcp install</code> で MCP サーバを登録すると、同じタブにいる Claude Code 同士が <code>list_peers</code> で相手を見つけて <code>send_message</code> でメッセージを送り合えるようになる。届いたメッセージは受信側に <code>&lt;channel source="renga-peers"&gt;</code> タグで入るので、ユーザー入力とは区別して扱える。
                 <code>Alt+P</code> で起動コマンドを入力行に挿入。
               </span>
             </td>
@@ -288,7 +288,7 @@ $ npm install -g ccmux-fork</code></pre>
             <td>
               Claude Code から MCP 経由でペインを操作
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                同じ <code>ccmux mcp install</code> で <code>list_panes</code> / <code>spawn_pane</code> / <code>close_pane</code> / <code>focus_pane</code> / <code>new_tab</code> が使えるようになり、Claude が会話から離れずにペイン分割・相方 Claude の起動・フォーカス移動まで自分でできる。<code>command="claude"</code> を渡せば <code>Alt+P</code> と同じメッセージング対応の起動コマンドに自動書き換えするので、新しく立ち上げた Claude も peer ネットワークに最初から繋がる。
+                同じ <code>renga mcp install</code> で <code>list_panes</code> / <code>spawn_pane</code> / <code>close_pane</code> / <code>focus_pane</code> / <code>new_tab</code> が使えるようになり、Claude が会話から離れずにペイン分割・相方 Claude の起動・フォーカス移動まで自分でできる。<code>command="claude"</code> を渡せば <code>Alt+P</code> と同じメッセージング対応の起動コマンドに自動書き換えするので、新しく立ち上げた Claude も peer ネットワークに最初から繋がる。
               </span>
             </td>
             <td class="mark">—</td>
@@ -319,7 +319,7 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
-              ペインのライフサイクルイベント (<code>ccmux events --timeout / --count</code>)
+              ペインのライフサイクルイベント (<code>renga events --timeout / --count</code>)
               <br /><span style="color: var(--muted); font-size: 0.85em;">
                 <code>PaneStarted</code> / <code>PaneExited</code> を JSON Lines で購読できる。
                 heartbeat で half-close を検知、エラーコードは安定
@@ -332,8 +332,8 @@ $ npm install -g ccmux-fork</code></pre>
             <td>
               画面のスナップショット取得とレイアウト情報
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                <code>ccmux inspect</code> で 1 行ずつ JSON 化したペイン画面が取れる。
-                <code>ccmux list</code> は各ペインの画面矩形も返すので、
+                <code>renga inspect</code> で 1 行ずつ JSON 化したペイン画面が取れる。
+                <code>renga list</code> は各ペインの画面矩形も返すので、
                 外部ツールから座標ベースでマッチさせられる
               </span>
             </td>
@@ -354,7 +354,7 @@ $ npm install -g ccmux-fork</code></pre>
           </tr>
           <tr>
             <td>
-              <code>ccmux close</code> サブコマンド
+              <code>renga close</code> サブコマンド
               <br /><span style="color: var(--muted); font-size: 0.85em;">
                 スクリプトからペインを終了できる。最後のタブの最後のペインは拒否するので、
                 誤ってセッションごと吹き飛ばす心配なし
@@ -410,7 +410,7 @@ $ npm install -g ccmux-fork</code></pre>
     </main>
     <footer>
       MIT ライセンス。Anthropic の公式製品ではありません。Claude および Claude Code は
-      Anthropic, PBC の商標です。オリジナルの ccmux © Shin-sibainu。
+      Anthropic, PBC の商標です。オリジナルの renga © Shin-sibainu。
     </footer>
   </body>
 </html>

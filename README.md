@@ -1,4 +1,4 @@
-# ccmux (fork)
+# renga (fork)
 
 *Read this in other languages: [日本語](./README.ja.md)*
 
@@ -6,15 +6,15 @@ Claude Code Multiplexer — manage multiple Claude Code instances in TUI split p
 
 A lightweight terminal multiplexer built specifically for running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions side-by-side.
 
-> **This is a fork** of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) that develops independent features while periodically syncing upstream. Installs as the separate npm package `ccmux-fork`. See [`BRANCHING.md`](./BRANCHING.md) for the fork policy.
+> **This is a fork** of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) that develops independent features while periodically syncing upstream. Installs as the separate npm package `renga-fork`. See [`BRANCHING.md`](./BRANCHING.md) for the fork policy.
 
-![ccmux screenshot](screenshot.png)
+![renga screenshot](screenshot.png)
 
 ## Features
 
 - **Multi-pane terminal** — Split vertically/horizontally, run independent PTY shells
 - **Tab workspaces** — Multiple project tabs with click-to-switch
-- **Peer messaging between Claude Code panes** — Same-tab Claude Code instances can talk to each other via an MCP channel; peer messages arrive as `<channel source="ccmux-peers">` tags distinct from user input ([see below](#peer-messaging-between-claude-code-panes))
+- **Peer messaging between Claude Code panes** — Same-tab Claude Code instances can talk to each other via an MCP channel; peer messages arrive as `<channel source="renga-peers">` tags distinct from user input ([see below](#peer-messaging-between-claude-code-panes))
 - **File tree sidebar** — Browse project files with icons, expand/collapse directories
 - **Syntax-highlighted preview** — View file contents with language-aware coloring
 - **Claude Code detection** — Pane border turns orange when Claude Code is running
@@ -30,19 +30,19 @@ A lightweight terminal multiplexer built specifically for running multiple [Clau
 ### Via npm (recommended)
 
 ```bash
-npm install -g ccmux-fork
+npm install -g renga-fork
 ```
 
 **Updating to the latest release:**
 
 ```bash
-npm update -g ccmux-fork
-npm install -g ccmux-fork@latest
+npm update -g renga-fork
+npm install -g renga-fork@latest
 ```
 
-`npm update -g` works when your npm is recent and its cache hasn't pinned a previous resolution; if it appears to no-op, use the `@latest` form to force-pull the newest version. Verify with `ccmux --version` against the [latest release](https://github.com/happy-ryo/ccmux/releases/latest).
+`npm update -g` works when your npm is recent and its cache hasn't pinned a previous resolution; if it appears to no-op, use the `@latest` form to force-pull the newest version. Verify with `renga --version` against the [latest release](https://github.com/happy-ryo/ccmux/releases/latest).
 
-> Previously installed the upstream `ccmux-cli`? Migrate with: `npm uninstall -g ccmux-cli && npm install -g ccmux-fork`
+> Previously installed the upstream `renga-cli`? Migrate with: `npm uninstall -g renga-cli && npm install -g renga-fork`
 
 ### Download binary
 
@@ -50,22 +50,22 @@ Download the latest binary from [Releases](https://github.com/happy-ryo/ccmux/re
 
 | Platform | File |
 |----------|------|
-| Windows (x64) | `ccmux-windows-x64.exe` |
-| macOS (Apple Silicon) | `ccmux-macos-arm64` |
-| macOS (Intel) | `ccmux-macos-x64` |
-| Linux (x64) | `ccmux-linux-x64` |
+| Windows (x64) | `renga-windows-x64.exe` |
+| macOS (Apple Silicon) | `renga-macos-arm64` |
+| macOS (Intel) | `renga-macos-x64` |
+| Linux (x64) | `renga-linux-x64` |
 
 > **Windows:** Microsoft Defender SmartScreen may show a warning because the binary is not code-signed. Click "More info" → "Run anyway" to proceed. This is normal for unsigned open-source software.
 
-> **macOS/Linux:** After downloading, make the binary executable: `chmod +x ccmux-*`
+> **macOS/Linux:** After downloading, make the binary executable: `chmod +x renga-*`
 
 ### From source
 
 ```bash
 git clone https://github.com/happy-ryo/ccmux.git
-cd ccmux
+cd renga
 cargo build --release
-# Binary at target/release/ccmux (or ccmux.exe on Windows)
+# Binary at target/release/renga (or renga.exe on Windows)
 ```
 
 Requires [Rust](https://rustup.rs/) toolchain.
@@ -81,7 +81,7 @@ This wires up a pre-commit hook that runs `cargo fmt --all -- --check` so a form
 ## Usage
 
 ```bash
-ccmux
+renga
 ```
 
 Launch from any directory. The file tree shows the current working directory.
@@ -98,11 +98,11 @@ Launch from any directory. The file tree shows the current working directory.
 
 Optional. Place a TOML file at:
 
-- **Linux**: `$XDG_CONFIG_HOME/ccmux/config.toml` (default `~/.config/ccmux/config.toml`)
-- **macOS**: `~/Library/Application Support/ccmux/config.toml`
-- **Windows**: `%APPDATA%\ccmux\config.toml`
+- **Linux**: `$XDG_CONFIG_HOME/renga/config.toml` (default `~/.config/renga/config.toml`)
+- **macOS**: `~/Library/Application Support/renga/config.toml`
+- **Windows**: `%APPDATA%\renga\config.toml`
 
-Missing or malformed files fall back to defaults with a stderr warning; ccmux never fails to start because of a config issue. Unknown sections and keys are ignored for forward-compat.
+Missing or malformed files fall back to defaults with a stderr warning; renga never fails to start because of a config issue. Unknown sections and keys are ignored for forward-compat.
 
 ### `[ime]` — IME composition overlay
 
@@ -140,10 +140,10 @@ overlay_catchup_ms = 0             # pure freeze, no periodic catch-up
 **What you get:**
 
 1. **Overlay on demand.** Press `Ctrl+;` on a focused Claude pane — a centered multi-line composition box appears. The host-terminal IME candidate window anchors to the caret inside the box, so long JP words stop "jumping" around the screen mid-conversion (Issue #25).
-2. **Pane flicker stops.** While the overlay is open, ccmux freezes the pane underneath — Claude's thinking spinner and streaming tokens no longer force repaints that would flicker past your IME candidates. You can focus entirely on composing.
-3. **Progress stays visible.** Every 3 seconds, ccmux unfreezes for a single frame so you can see Claude's streamed output advance. Tune the interval with `--ime-overlay-catchup-ms`: `0` for pure freeze, `5000` if even 3 s feels busy.
+2. **Pane flicker stops.** While the overlay is open, renga freezes the pane underneath — Claude's thinking spinner and streaming tokens no longer force repaints that would flicker past your IME candidates. You can focus entirely on composing.
+3. **Progress stays visible.** Every 3 seconds, renga unfreezes for a single frame so you can see Claude's streamed output advance. Tune the interval with `--ime-overlay-catchup-ms`: `0` for pure freeze, `5000` if even 3 s feels busy.
 4. **Multi-line drafts first-class.** `Enter` inserts a newline. Press `Alt+Enter` (macOS `Option+Return`) to send the whole buffer, or `Ctrl+Enter` on Windows Terminal / wezterm / VS Code. Full keymap is in the next subsection.
-5. **Escape hatch.** `Esc` on the overlay closes it so you can use ccmux's pane-management shortcuts (`Ctrl+D` split, `Ctrl+Left/Right` focus cycle, etc.).
+5. **Escape hatch.** `Esc` on the overlay closes it so you can use renga's pane-management shortcuts (`Ctrl+D` split, `Ctrl+Left/Right` focus cycle, etc.).
 
 ### IME overlay keybindings
 
@@ -162,7 +162,7 @@ The overlay opens as a centered multi-line composition box. Host-terminal IME ca
 
 ### `[ui]` — UI language
 
-Controls the language used for status bar hints and preview panel error messages. ccmux started out JP-only because the fork's primary users are Japanese speakers, but everything now flips automatically based on the OS locale.
+Controls the language used for status bar hints and preview panel error messages. renga started out JP-only because the fork's primary users are Japanese speakers, but everything now flips automatically based on the OS locale.
 
 ```toml
 [ui]
@@ -179,24 +179,24 @@ The `--lang auto\|ja\|en` CLI flag overrides the config file for a single run. V
 
 ## Peer messaging between Claude Code panes
 
-Let two or more Claude Code instances running in the same ccmux tab exchange structured messages — so one Claude can ask its sibling to research something, hand off a test failure, or coordinate without the user relaying every message manually. Peer messages land in the receiver's context as `<channel source="ccmux-peers">` tags, cleanly distinguishable from user input.
+Let two or more Claude Code instances running in the same renga tab exchange structured messages — so one Claude can ask its sibling to research something, hand off a test failure, or coordinate without the user relaying every message manually. Peer messages land in the receiver's context as `<channel source="renga-peers">` tags, cleanly distinguishable from user input.
 
-> **Why this is different from [`claude-peers-mcp`](https://github.com/happy-ryo/claude-peers-mcp)** — both offer the same tool surface, but `claude-peers-mcp` infers peer scope from `cwd` / `git_root` / `PID` (heuristic, can collide). ccmux-peers uses the **ccmux tab** as the authoritative scope — panes the user literally put in the same tab. The two can coexist in the same Claude install; channel names don't collide (`server:ccmux-peers` vs `server:claude-peers`).
+> **Why this is different from [`claude-peers-mcp`](https://github.com/happy-ryo/claude-peers-mcp)** — both offer the same tool surface, but `claude-peers-mcp` infers peer scope from `cwd` / `git_root` / `PID` (heuristic, can collide). renga-peers uses the **renga tab** as the authoritative scope — panes the user literally put in the same tab. The two can coexist in the same Claude install; channel names don't collide (`server:renga-peers` vs `server:claude-peers`).
 
 ### Setup — one-time
 
 ```bash
-ccmux mcp install
+renga mcp install
 ```
 
-Registers the running `ccmux` binary as the `ccmux-peers` MCP server in Claude Code's user config. Re-running is idempotent; pass `--force` to overwrite after a ccmux upgrade. `ccmux mcp uninstall` and `ccmux mcp status` are the inverse and introspection commands.
+Registers the running `renga` binary as the `renga-peers` MCP server in Claude Code's user config. Re-running is idempotent; pass `--force` to overwrite after a renga upgrade. `renga mcp uninstall` and `renga mcp status` are the inverse and introspection commands.
 
 ### Usage — launch Claude Code with the peer channel
 
-Peer messages ride the MCP experimental channel protocol, so Claude Code needs the `--dangerously-load-development-channels server:ccmux-peers` flag at startup. ccmux gives you two shortcuts so you don't have to type it by hand:
+Peer messages ride the MCP experimental channel protocol, so Claude Code needs the `--dangerously-load-development-channels server:renga-peers` flag at startup. renga gives you two shortcuts so you don't have to type it by hand:
 
-- **`Alt+P`** — Inserts `claude --dangerously-load-development-channels server:ccmux-peers ` into the focused pane (trailing space, *no* Enter). Review, optionally tack on args, press Enter to run. Works in any pane, any shell.
-- **`ccmux split --role claude`** / **`ccmux new-tab --role claude`** — Creates a new pane and auto-launches Claude Code with the flag already applied. Explicit `--command` wins if you pass one, so the flag path stays an escape hatch you can override.
+- **`Alt+P`** — Inserts `claude --dangerously-load-development-channels server:renga-peers ` into the focused pane (trailing space, *no* Enter). Review, optionally tack on args, press Enter to run. Works in any pane, any shell.
+- **`renga split --role claude`** / **`renga new-tab --role claude`** — Creates a new pane and auto-launches Claude Code with the flag already applied. Explicit `--command` wins if you pass one, so the flag path stays an escape hatch you can override.
 
 ### Two-pane workflow
 
@@ -219,7 +219,7 @@ In Claude A's chat:
 > call send_message with to_id=2 and message="can you read src/app.rs:handle_split and summarise?"
 ```
 
-Claude B sees a `<channel source="ccmux-peers">can you read src/app.rs...</channel>` tag in its next turn, recognises it as a peer request (not user input, thanks to the tag source), does the work, and replies back the same way.
+Claude B sees a `<channel source="renga-peers">can you read src/app.rs...</channel>` tag in its next turn, recognises it as a peer request (not user input, thanks to the tag source), does the work, and replies back the same way.
 
 **Tool surface:**
 
@@ -230,33 +230,33 @@ _Peer messaging:_
 | `list_peers` | Lists other panes in the caller's tab. Caller is excluded. |
 | `send_message(to_id, message)` | Delivers to a same-tab peer by numeric id or stable name. Silent no-op for targets outside the tab — callers cannot enumerate other tabs. |
 | `check_messages` | Manual inbox drain. Channel push is the primary delivery path; this is a fallback for when you want to re-check. |
-| `set_summary` | v1 stub. ccmux uses pane name / role as the summary substitute. |
+| `set_summary` | v1 stub. renga uses pane name / role as the summary substitute. |
 
 _Pane control (same tab, except `new_tab`):_
 
 | Tool | Effect |
 |---|---|
 | `list_panes` | Lists every pane in the caller's tab with id, optional name/role, focus flag, and terminal geometry. |
-| `spawn_pane(direction, …)` | Splits a target pane. Optional `command`, `name`, `role`, `cwd`. A bare `command="claude"` (or `claude <args>`) is auto-upgraded to the `Alt+P` peer-enabled launch line so the new pane joins the ccmux-peers network without the caller having to remember `--dangerously-load-development-channels`. |
-| `spawn_claude_pane(direction, …)` | Higher-level convenience for launching Claude. Takes structured `permission_mode` / `model` / `args[]` fields instead of a free-form command string, always enables the peer channel, and keeps launch policy in ccmux. Prefer this over `spawn_pane(command="claude ...")` when the target process is Claude Code — orchestrator prompts don't have to synthesize shell-quoted command strings. Reserved flags (`--dangerously-load-development-channels` / `--permission-mode` / `--model`) inside `args[]` are rejected with `invalid-params`. |
+| `spawn_pane(direction, …)` | Splits a target pane. Optional `command`, `name`, `role`, `cwd`. A bare `command="claude"` (or `claude <args>`) is auto-upgraded to the `Alt+P` peer-enabled launch line so the new pane joins the renga-peers network without the caller having to remember `--dangerously-load-development-channels`. |
+| `spawn_claude_pane(direction, …)` | Higher-level convenience for launching Claude. Takes structured `permission_mode` / `model` / `args[]` fields instead of a free-form command string, always enables the peer channel, and keeps launch policy in renga. Prefer this over `spawn_pane(command="claude ...")` when the target process is Claude Code — orchestrator prompts don't have to synthesize shell-quoted command strings. Reserved flags (`--dangerously-load-development-channels` / `--permission-mode` / `--model`) inside `args[]` are rejected with `invalid-params`. |
 | `close_pane(target)` | Closes a pane. Refuses with `last_pane` when it's the only pane of the only tab. |
 | `focus_pane(target)` | Moves keyboard focus inside the same tab. Use sparingly — yanking focus out from under the user is disruptive. |
 | `new_tab(…)` | Opens a brand-new tab with a fresh pane and switches focus to it. Accepts the same `cwd` option as `spawn_pane`. Same `claude` auto-upgrade. |
-| `set_pane_identity(target, name?, role?)` | Rename or (re)assign the stable `name` / `role` of an existing pane. Three-state fields: omit a key to keep, `null` to clear, a string to set. Use this to recover when a session was launched without the intended layout (e.g. secretary pane booted without `id = "secretary"` so peers can't address it by name). Rejects all-digit names (would collide with numeric ids) and same-tab name collisions. Also exposed as `ccmux rename [--id \| --name \| --focused] [--to-name \| --clear-name] [--to-role \| --clear-role]`. |
+| `set_pane_identity(target, name?, role?)` | Rename or (re)assign the stable `name` / `role` of an existing pane. Three-state fields: omit a key to keep, `null` to clear, a string to set. Use this to recover when a session was launched without the intended layout (e.g. secretary pane booted without `id = "secretary"` so peers can't address it by name). Rejects all-digit names (would collide with numeric ids) and same-tab name collisions. Also exposed as `renga rename [--id \| --name \| --focused] [--to-name \| --clear-name] [--to-role \| --clear-role]`. |
 
-> The same `claude` auto-upgrade also applies to panes declared in a layout TOML (`ccmux --layout <name>`): a bare `command = "claude"` in the toml is rewritten to the peer-enabled launch line when the pane starts, so layouts join the ccmux-peers network without each entry having to repeat `--dangerously-load-development-channels server:ccmux-peers`.
+> The same `claude` auto-upgrade also applies to panes declared in a layout TOML (`renga --layout <name>`): a bare `command = "claude"` in the toml is rewritten to the peer-enabled launch line when the pane starts, so layouts join the renga-peers network without each entry having to repeat `--dangerously-load-development-channels server:renga-peers`.
 
-> **Pane `cwd`** — `spawn_pane` / `new_tab` / `ccmux split --cwd` / `ccmux new-tab --cwd` / layout TOML `cwd = "..."` all accept a working directory for the new pane. Absolute paths are used as-is; relative paths resolve against the caller pane's cwd (MCP), the shell cwd (CLI), or the ccmux process cwd (layout TOML). Invalid paths fail with error code `cwd_invalid` **before** any layout mutation. Prefer this over embedding `cd <dir> && ...` inside `command` — the `claude` auto-upgrade only fires when `command` starts with `claude`.
+> **Pane `cwd`** — `spawn_pane` / `new_tab` / `renga split --cwd` / `renga new-tab --cwd` / layout TOML `cwd = "..."` all accept a working directory for the new pane. Absolute paths are used as-is; relative paths resolve against the caller pane's cwd (MCP), the shell cwd (CLI), or the renga process cwd (layout TOML). Invalid paths fail with error code `cwd_invalid` **before** any layout mutation. Prefer this over embedding `cd <dir> && ...` inside `command` — the `claude` auto-upgrade only fires when `command` starts with `claude`.
 
 ### Troubleshooting
 
-- **`list_peers` reports "ccmux not reachable from this Claude Code instance"** — Claude Code was launched outside a ccmux pane, or without inheriting the env. Re-launch via `Alt+P` or `ccmux split --role claude` from within ccmux.
-- **Peer messages don't render as `<channel>` tags** — You probably forgot the `--dangerously-load-development-channels server:ccmux-peers` flag. Prefer `Alt+P` over typing `claude` directly.
-- **Upgrading ccmux?** — Re-run `ccmux mcp install --force` so the registered command path points at your new binary.
+- **`list_peers` reports "renga not reachable from this Claude Code instance"** — Claude Code was launched outside a renga pane, or without inheriting the env. Re-launch via `Alt+P` or `renga split --role claude` from within renga.
+- **Peer messages don't render as `<channel>` tags** — You probably forgot the `--dangerously-load-development-channels server:renga-peers` flag. Prefer `Alt+P` over typing `claude` directly.
+- **Upgrading renga?** — Re-run `renga mcp install --force` so the registered command path points at your new binary.
 
 ## Keybindings
 
-> **macOS users:** the default macOS terminal swallows `Option+<key>` before ccmux sees it, so `Alt+T`, `Alt+P`, `Alt+1..9`, `Alt+Left/Right` etc. won't fire out of the box. See [macOS: Option as Meta](#macos-option-as-meta) for the one-line fix per terminal (WezTerm / iTerm2 / Alacritty / Ghostty / Kitty / Terminal.app).
+> **macOS users:** the default macOS terminal swallows `Option+<key>` before renga sees it, so `Alt+T`, `Alt+P`, `Alt+1..9`, `Alt+Left/Right` etc. won't fire out of the box. See [macOS: Option as Meta](#macos-option-as-meta) for the one-line fix per terminal (WezTerm / iTerm2 / Alacritty / Ghostty / Kitty / Terminal.app).
 
 ### Pane mode (default)
 
@@ -279,7 +279,7 @@ _Pane control (same tab, except `new_tab`):_
 
 ### macOS: Option as Meta
 
-By default macOS terminals bind `Option+<key>` to Unicode input (`å`, `∫`, `π`, …), so ccmux's `Alt+T` / `Alt+P` / `Alt+R` / `Alt+S` / `Alt+1..9` / `Alt+Left/Right` shortcuts never reach the app. Flip Option to act as a Meta key — it's a one-line change in every modern terminal. If you're on plain **Terminal.app**, consider switching to one of the terminals below first; they all handle IME, ligatures, and the image preview panel better than Terminal.app anyway.
+By default macOS terminals bind `Option+<key>` to Unicode input (`å`, `∫`, `π`, …), so renga's `Alt+T` / `Alt+P` / `Alt+R` / `Alt+S` / `Alt+1..9` / `Alt+Left/Right` shortcuts never reach the app. Flip Option to act as a Meta key — it's a one-line change in every modern terminal. If you're on plain **Terminal.app**, consider switching to one of the terminals below first; they all handle IME, ligatures, and the image preview panel better than Terminal.app anyway.
 
 | Terminal | Setting |
 |---|---|
@@ -327,9 +327,9 @@ By default macOS terminals bind `Option+<key>` to Unicode input (`å`, `∫`, `�
 | Click `+` | New tab |
 | Drag border | Resize panels |
 | Scroll wheel | Scroll file tree / preview / terminal history. In panes running a TUI that subscribed to mouse reporting (Claude Code `/tui fullscreen`, vim, lazygit, less, …) the wheel is forwarded to the app instead. |
-| Click / drag inside a pane | Normally selects text for copy. When the pane is running a mouse-reporting TUI, the click is forwarded to the app so buttons, carets, etc. work. Hold `Shift` to force ccmux-side text selection (same escape hatch as tmux / alacritty). |
+| Click / drag inside a pane | Normally selects text for copy. When the pane is running a mouse-reporting TUI, the click is forwarded to the app so buttons, carets, etc. work. Hold `Shift` to force renga-side text selection (same escape hatch as tmux / alacritty). |
 
-Both wheel and click forwarding can be disabled globally with `CCMUX_DISABLE_MOUSE_FORWARD=1` — useful for nested ccmux or terminals whose mouse-protocol encoding confuses the inner app.
+Both wheel and click forwarding can be disabled globally with `RENGA_DISABLE_MOUSE_FORWARD=1` — useful for nested renga or terminals whose mouse-protocol encoding confuses the inner app.
 
 ## Architecture
 
