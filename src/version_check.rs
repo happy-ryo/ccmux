@@ -45,7 +45,7 @@ pub fn spawn_check(info: VersionInfo) {
 }
 
 fn fetch_latest() -> Result<String, Box<dyn std::error::Error>> {
-    let response = ureq::get("https://registry.npmjs.org/renga-fork/latest")
+    let response = ureq::get("https://registry.npmjs.org/@suisya-systems%2frenga/latest")
         .timeout(Duration::from_secs(5))
         .call()?;
     let json: serde_json::Value = response.into_json()?;

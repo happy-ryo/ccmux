@@ -1,19 +1,25 @@
-# renga-fork
+# @suisya-systems/renga
 
 Claude Code Multiplexer (fork) — manage multiple Claude Code instances in TUI split panes.
 
-> This is a fork of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) published as `renga-fork`. It develops independent features while periodically syncing upstream.
+> This is a fork of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) published as `@suisya-systems/renga` (previously `renga-fork`). It develops independent features while periodically syncing upstream.
 
 ## Install
 
 ```bash
-npm install -g renga-fork
+npm install -g @suisya-systems/renga
+```
+
+Migrating from previous `renga-fork`:
+
+```bash
+npm uninstall -g renga-fork && npm install -g @suisya-systems/renga
 ```
 
 Migrating from the upstream `renga-cli`:
 
 ```bash
-npm uninstall -g renga-cli && npm install -g renga-fork
+npm uninstall -g renga-cli && npm install -g @suisya-systems/renga
 ```
 
 ## Usage

@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>renga-fork — renga のフォーク</title>
+    <title>renga — ccmux のフォーク</title>
     <meta
       name="description"
-      content="Shin-sibainu/ccmux のフォーク。独自機能を先行開発し、npm では renga-fork として配布中。"
+      content="Shin-sibainu/ccmux のフォーク。独自機能を先行開発し、npm では @suisya-systems/renga として配布中。"
     />
     <link rel="alternate" hreflang="en" href="./index.html" />
     <link rel="alternate" hreflang="ja" href="./ja.html" />
@@ -163,11 +163,11 @@
         <span class="sep">·</span>
         <a href="./ja.html" aria-current="page">日本語</a>
       </nav>
-      <h1>renga-fork</h1>
+      <h1>renga</h1>
       <p class="tagline">
         <a href="https://github.com/Shin-sibainu/ccmux">Shin-sibainu/ccmux</a>
         のフォーク。独自機能を先行して追加し、npm では
-        <code>renga-fork</code> の名前で配布しています。
+        <code>@suisya-systems/renga</code> の名前で配布しています (旧 <code>renga-fork</code>)。
       </p>
 
       <figure class="hero">
@@ -190,13 +190,19 @@
         を見てください。
       </p>
 
-      <pre><code>$ npm install -g renga-fork</code></pre>
+      <pre><code>$ npm install -g @suisya-systems/renga</code></pre>
+
+      <p>
+        旧 <code>renga-fork</code> から移行する場合:
+      </p>
+      <pre><code>$ npm uninstall -g renga-fork
+$ npm install -g @suisya-systems/renga</code></pre>
 
       <p>
         上流の <code>renga-cli</code> から移行する場合:
       </p>
       <pre><code>$ npm uninstall -g renga-cli
-$ npm install -g renga-fork</code></pre>
+$ npm install -g @suisya-systems/renga</code></pre>
 
       <h2>macOS の設定: Option をメタキーにする</h2>
       <p style="color: var(--muted); font-size: 0.9rem; margin-top: -4px;">

@@ -4,7 +4,7 @@
 
 ![Centered multi-line IME composition overlay with the host IME candidate window anchored right under the caret; the Claude panes behind it are frozen](/ime-overlay.png)
 
-> This is a fork ([happy-ryo/ccmux](https://github.com/happy-ryo/ccmux)) of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux). It periodically syncs upstream while developing independent features, and is distributed on npm as `renga-fork`. See [`BRANCHING.md`](https://github.com/happy-ryo/ccmux/blob/main/BRANCHING.md) for the fork policy.
+> This is a fork ([happy-ryo/ccmux](https://github.com/happy-ryo/ccmux)) of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux). It periodically syncs upstream while developing independent features, and is distributed on npm as `@suisya-systems/renga` (previously `renga-fork`). See [`BRANCHING.md`](https://github.com/happy-ryo/ccmux/blob/main/BRANCHING.md) for the fork policy.
 
 ![renga screenshot](/screenshot.png)
 
@@ -15,8 +15,8 @@ renga is a lightweight terminal multiplexer focused on running multiple [Claude 
 ## Highlights
 
 - Run multiple Claude Code sessions side-by-side in split panes
-- **Centered multi-line IME composition overlay** — `Alt+Enter` sends, `Enter` inserts a newline, the host IME candidate window anchors to the caret (renga-fork exclusive)
-- **Pane freeze + periodic catch-up** (`--ime-freeze-panes` + `--ime-overlay-catchup-ms`) silences caret flicker during IME composition (renga-fork exclusive)
+- **Centered multi-line IME composition overlay** — `Alt+Enter` sends, `Enter` inserts a newline, the host IME candidate window anchors to the caret (renga fork exclusive)
+- **Pane freeze + periodic catch-up** (`--ime-freeze-panes` + `--ime-overlay-catchup-ms`) silences caret flicker during IME composition (renga fork exclusive)
 - File tree with syntax-highlighted preview
 - Independent workspaces per tab
 - Single binary (~2 MB), no runtime dependencies
@@ -25,7 +25,7 @@ renga is a lightweight terminal multiplexer focused on running multiple [Claude 
 ## Quick Start
 
 ```bash
-npm install -g renga-fork
+npm install -g @suisya-systems/renga
 renga
 ```
 
