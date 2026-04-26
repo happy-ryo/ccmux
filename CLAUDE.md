@@ -52,15 +52,15 @@ cargo run            # Run the app
 - **手動で `npm publish` や `gh release create` しないこと** — バージョン衝突の原因になる
 
 ## Fork & Branching (Divergence Policy)
-renga は `Shin-sibainu/ccmux` から派生したが、**現在は独立した本流として開発している**。定期的な上流 sync / 週次マージは行わず、上流に有用な変更があれば必要に応じて単発で cherry-pick する程度。詳細は `BRANCHING.md` (正本) を参照。
+renga was forked from `Shin-sibainu/ccmux` but is now developed as an **independent main line**. There is no periodic / weekly upstream sync; useful upstream changes are pulled in only as ad-hoc, per-commit cherry-picks when explicitly requested. `BRANCHING.md` is the source of truth — see it for the full policy.
 
-要点だけ:
-- `main` = renga 本流 (default / リリース対象)。上流とは独立に進化
-- `master` = `upstream/master` を必要なときだけ FF 追従するスナップショット用 (記録 / cherry-pick ベース)。独自 commit は乗せない
-- 上流からの取り込みは「ユーザーが指定した個別 commit を cherry-pick」する ad-hoc 運用のみ。包括的 sync は行わない
-- `.claude/skills/upstream-sync/` Skill は上記 ad-hoc cherry-pick / 逆 PR 手順の補助。包括 sync 系の依頼では発動させない
+Key points:
+- `main` — renga's mainline (default branch, release target). Evolves independently of upstream.
+- `master` — snapshot mirror of `upstream/master`, FF-updated only when needed as a base for cherry-picks. Never carries renga-specific commits.
+- Upstream changes enter renga only via cherry-pick of specific commits the user has named. No blanket sync.
+- `.claude/skills/upstream-sync/` skill assists with those ad-hoc cherry-pick and reverse-PR procedures. It must NOT fire on generic "sync the fork" / "merge in upstream" requests — push back to the user instead.
 
-**上流への逆 PR はユーザーからの明示的な指示がない限り提案・実行しない。** フォークで実装した機能について「汎用性があるので上流還元候補」といったラベルを umbrella Issue に残すのは OK だが、タスクの次候補として「upstream PR を出す」を勝手に積まない。上流の受け入れタイミングに依存して renga の進捗が止まるのを避けるため、独自開発に集中する方針。
+**Do not propose or open reverse PRs against upstream unless the user explicitly asks for one.** It is fine to label individual features as "potentially generalizable upstream" on an umbrella issue, but do not queue "open an upstream PR" as a follow-up task on your own — renga's progress should not be gated on upstream's review cadence.
 
 ## Intentional `ccmux` References (post-rename)
 Issue #102 renamed the project from `ccmux` to `renga`. The following residual references to `ccmux` are intentional and should NOT be swept:
