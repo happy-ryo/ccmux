@@ -46,7 +46,7 @@ cargo run            # Run the app
 ### タグ命名
 - 通常は **`vX.Y.Z` (plain semver)** を使う。これで GitHub Release が stable、npm dist-tag が `latest` になる。
 - 先行公開したい場合だけ `vX.Y.Z-rc.N` / `-beta.N` / `-alpha.N` 等を使う。workflow が `ref_name` に `-` を含むかで自動的に prerelease + npm `next` に振り分ける。
-- 過去に `vX.Y.Z-fork.N` suffix で全リリースを prerelease 扱いしていたが、フォーク識別子はパッケージ名 (現在 `@suisya-systems/renga`、旧 `renga-fork`、さらに旧 `ccmux-fork`) とリポジトリ名で既に確保されており、実運用中のバージョンを "pre" として出す意味がなかったため v0.5.7-fork.3 以降廃止。
+- 過去に `vX.Y.Z-fork.N` suffix で全リリースを prerelease 扱いしていたが、フォーク識別子はパッケージ名 (現在 `@suisya-systems/renga`、旧 `ccmux-fork`) とリポジトリ名で既に確保されており、実運用中のバージョンを "pre" として出す意味がなかったため v0.5.7-fork.3 以降廃止。
 
 ### やってはいけない
 - **手動で `npm publish` や `gh release create` しないこと** — バージョン衝突の原因になる

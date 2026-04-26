@@ -6,7 +6,7 @@ Claude Code Multiplexer — manage multiple Claude Code instances in TUI split p
 
 A lightweight terminal multiplexer built specifically for running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions side-by-side.
 
-> **This is a fork** of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) that develops independent features while periodically syncing upstream. Installs as the separate npm package `@suisya-systems/renga` (previously `renga-fork`). See [`BRANCHING.md`](./BRANCHING.md) for the fork policy.
+> **This is a fork** of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) that develops independent features while periodically syncing upstream. Installs as the separate npm package `@suisya-systems/renga` (previously `ccmux-fork`). See [`BRANCHING.md`](./BRANCHING.md) for the fork policy.
 
 ![renga screenshot](screenshot.png)
 
@@ -42,7 +42,7 @@ npm install -g @suisya-systems/renga@latest
 
 `npm update -g` works when your npm is recent and its cache hasn't pinned a previous resolution; if it appears to no-op, use the `@latest` form to force-pull the newest version. Verify with `renga --version` against the [latest release](https://github.com/happy-ryo/ccmux/releases/latest).
 
-> Previously installed `renga-fork`? Migrate with: `npm uninstall -g renga-fork && npm install -g @suisya-systems/renga`
+> Previously installed `ccmux-fork`? Migrate with: `npm uninstall -g ccmux-fork && npm install -g @suisya-systems/renga`
 >
 > Previously installed the upstream `renga-cli`? Migrate with: `npm uninstall -g renga-cli && npm install -g @suisya-systems/renga`
 
