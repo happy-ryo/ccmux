@@ -13,3 +13,7 @@ image copy 2.png
 /npm/bin/renga
 /npm/bin/renga.exe
 .claude/scheduled_tasks.lock
+
+# Claude Code local settings (user-specific, contains absolute paths)
+.claude/settings.local.json
+**/.claude/settings.local.json
