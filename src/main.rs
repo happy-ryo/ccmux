@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     // Phase 3: subcommands (`renga list`, `renga send`, …) are IPC
     // clients and MUST be runnable from inside a renga pane — that's
     // the whole point. Dispatch them before the nested-TUI guard kicks
-    // in, so the `CCMUX=1` env var set by the parent doesn't block
+    // in, so the `RENGA=1` env var set by the parent doesn't block
     // legitimate client invocations.
     //
     // `mcp-peer` and `mcp {install,uninstall,status}` are exceptions:
@@ -55,7 +55,7 @@ fn main() -> Result<()> {
     // No subcommand: we're about to launch another TUI. Refuse if we're
     // already inside a renga pane, since nesting vt100 parsers in
     // vt100 parsers produces unreadable output and confuses the mouse.
-    if std::env::var("CCMUX").is_ok() {
+    if std::env::var("RENGA").is_ok() {
         eprintln!("renga: already running inside a renga pane (nested instance not allowed).");
         eprintln!(
             "       Open a new tab with Alt+T (or Ctrl+T) or split with Ctrl+D / Ctrl+E instead."
@@ -106,7 +106,7 @@ fn main() -> Result<()> {
     // Phase 3: start the IPC server BEFORE spawning child PTYs so the
     // first `RENGA_SOCKET` value children see is the real one. Children
     // inherit env from this process (via portable-pty's CommandBuilder),
-    // and we publish `CCMUX` as a "you're inside renga" flag here too.
+    // and we publish `RENGA` as a "you're inside renga" flag here too.
     let our_pid = std::process::id();
     // Endpoint resolution can fail on Unix if we can't create the
     // owner-only socket directory (read-only FS, permission-constrained
@@ -123,7 +123,7 @@ fn main() -> Result<()> {
     if let Some(ep) = &ipc_endpoint {
         std::env::set_var(ipc::endpoint::ENV_SOCKET, ep.as_str());
     }
-    std::env::set_var("CCMUX", "1");
+    std::env::set_var("RENGA", "1");
 
     // Session token derived from the process's start nanoseconds so a
     // client connecting through a stale socket file whose PID got

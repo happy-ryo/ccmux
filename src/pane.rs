@@ -98,7 +98,7 @@ impl Pane {
             cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         cmd.cwd(&work_dir);
         cmd.env("TERM", "xterm-256color");
-        cmd.env("CCMUX", "1"); // marker to detect nested renga
+        cmd.env("RENGA", "1"); // marker to detect nested renga
                                // Per-pane identity for the MCP peer subprocess (see #97). The
                                // subprocess is spawned by Claude Code, which inherits env
                                // from this PTY, so reading `RENGA_PANE_ID` at startup is how
