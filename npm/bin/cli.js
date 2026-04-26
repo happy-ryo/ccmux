@@ -9,7 +9,7 @@ const binaryName = isWindows ? 'renga.exe' : 'renga';
 const binaryPath = path.join(__dirname, binaryName);
 
 if (!fs.existsSync(binaryPath)) {
-  console.error('renga binary not found. Try reinstalling: npm install -g renga-fork');
+  console.error('renga binary not found. Try reinstalling: npm install -g @suisya-systems/renga');
   process.exit(1);
 }
 

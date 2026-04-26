@@ -74,9 +74,9 @@ gh pr create --repo Shin-sibainu/ccmux --base master
 
 ## リリース・npm パッケージ
 
-- **Git tag**: 普通の semver (`vX.Y.Z`)。v0.5.7-fork.1 〜 v0.5.7-fork.3 では `-fork.N` 接尾辞で prerelease 扱いしていたが、フォークは npm パッケージ名 (`renga-fork`、旧 `ccmux-fork`) と GitHub リポジトリ名で既にアイデンティティが確保されており、suffix は誤った "pre" 信号をユーザーに送るだけだった (v0.5.7-fork.3 リリース後に見直し)。今後は通常の semver で切る。
+- **Git tag**: 普通の semver (`vX.Y.Z`)。v0.5.7-fork.1 〜 v0.5.7-fork.3 では `-fork.N` 接尾辞で prerelease 扱いしていたが、フォークは npm パッケージ名 (当時 `renga-fork`、旧 `ccmux-fork`、現在 `@suisya-systems/renga`) と GitHub リポジトリ名で既にアイデンティティが確保されており、suffix は誤った "pre" 信号をユーザーに送るだけだった (v0.5.7-fork.3 リリース後に見直し)。今後は通常の semver で切る。
 - **Prerelease が必要な場合** (大規模変更の先行公開など): `vX.Y.Z-rc.N` / `-beta.N` 等を使う。`contains(github.ref_name, '-')` で workflow が自動的に prerelease 扱い + npm dist-tag `next` に振り分ける (`.github/workflows/release.yml`)
-- **npm パッケージ名**: 上流と衝突しないよう `renga-fork` を使用 (Issue #102 で `ccmux-fork` から rename)
+- **npm パッケージ名**: 現在は `@suisya-systems/renga` (scoped)。`ccmux-fork` → `renga-fork` (Issue #102) → `@suisya-systems/renga` と変遷。`renga` (unscoped) は他者が先行 publish 済みのため scope 付きで確保した
 - 上流 (`Shin-sibainu/ccmux`) は `0.5.x` 系を別途リリースしているが、こちらの fork はそれとは独立に semver を進める。バージョン番号の同期は取らない
 
 ## ブランチ保護

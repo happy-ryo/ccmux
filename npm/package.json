@@ -1,5 +1,5 @@
 {
-  "name": "renga-fork",
+  "name": "@suisya-systems/renga",
   "version": "0.18.1",
   "description": "Claude Code Multiplexer (fork, formerly ccmux-fork) — manage multiple Claude Code instances in TUI split panes",
   "bin": {

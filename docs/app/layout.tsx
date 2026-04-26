@@ -7,18 +7,18 @@ import './globals.css'
 const siteUrl = 'https://happy-ryo.github.io/ccmux/docs'
 
 export const metadata = {
-  title: 'renga-fork — Claude Code Multiplexer (fork)',
+  title: 'renga — Claude Code Multiplexer (fork)',
   description: 'Fork of ccmux (renamed to renga) with independent development. Manage multiple Claude Code instances in TUI split panes.',
   openGraph: {
-    title: 'renga-fork — Claude Code Multiplexer (fork)',
+    title: 'renga — Claude Code Multiplexer (fork)',
     description: 'Fork of ccmux (renamed to renga) with independent development. Rust-powered terminal multiplexer with tabs, file tree, and syntax-highlighted preview.',
     url: siteUrl,
-    siteName: 'renga-fork',
+    siteName: 'renga',
     type: 'website',
   },
   twitter: {
     card: 'summary',
-    title: 'renga-fork — Claude Code Multiplexer (fork)',
+    title: 'renga — Claude Code Multiplexer (fork)',
     description: 'Fork of ccmux (renamed to renga) with independent development.',
   },
 }
@@ -44,7 +44,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           }
           pageMap={await getPageMap()}
           docsRepositoryBase="https://github.com/happy-ryo/ccmux/tree/main/docs"
-          footer={<Footer>MIT License · <a href="https://github.com/happy-ryo/ccmux" target="_blank" rel="noopener" style={{color: '#d97757'}}>renga-fork</a>, a fork of <a href="https://github.com/Shin-sibainu/ccmux" target="_blank" rel="noopener" style={{color: '#d97757'}}>ccmux</a></Footer>}
+          footer={<Footer>MIT License · <a href="https://github.com/happy-ryo/ccmux" target="_blank" rel="noopener" style={{color: '#d97757'}}>renga</a>, a fork of <a href="https://github.com/Shin-sibainu/ccmux" target="_blank" rel="noopener" style={{color: '#d97757'}}>ccmux</a></Footer>}
         >
           {children}
         </Layout>
