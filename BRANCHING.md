@@ -1,6 +1,6 @@
 # Branching & Upstream Sync Strategy
 
-このリポジトリ (`happy-ryo/ccmux`) は [`Shin-sibainu/ccmux`](https://github.com/Shin-sibainu/ccmux) のフォークです。
+このリポジトリ (`suisya-systems/renga`) は [`Shin-sibainu/ccmux`](https://github.com/Shin-sibainu/ccmux) のフォークです。
 上流の変更を取り込みつつ、独自の機能を先行して開発する方針を取っています。
 
 ## ブランチ構成

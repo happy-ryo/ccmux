@@ -40,7 +40,7 @@ npm update -g @suisya-systems/renga
 npm install -g @suisya-systems/renga@latest
 ```
 
-`npm update -g` works when your npm is recent and its cache hasn't pinned a previous resolution; if it appears to no-op, use the `@latest` form to force-pull the newest version. Verify with `renga --version` against the [latest release](https://github.com/happy-ryo/ccmux/releases/latest).
+`npm update -g` works when your npm is recent and its cache hasn't pinned a previous resolution; if it appears to no-op, use the `@latest` form to force-pull the newest version. Verify with `renga --version` against the [latest release](https://github.com/suisya-systems/renga/releases/latest).
 
 > Previously installed `ccmux-fork`? Migrate with: `npm uninstall -g ccmux-fork && npm install -g @suisya-systems/renga`
 >
@@ -48,7 +48,7 @@ npm install -g @suisya-systems/renga@latest
 
 ### Download binary
 
-Download the latest binary from [Releases](https://github.com/happy-ryo/ccmux/releases):
+Download the latest binary from [Releases](https://github.com/suisya-systems/renga/releases):
 
 | Platform | File |
 |----------|------|
@@ -64,7 +64,7 @@ Download the latest binary from [Releases](https://github.com/happy-ryo/ccmux/re
 ### From source
 
 ```bash
-git clone https://github.com/happy-ryo/ccmux.git
+git clone https://github.com/suisya-systems/renga.git
 cd renga
 cargo build --release
 # Binary at target/release/renga (or renga.exe on Windows)

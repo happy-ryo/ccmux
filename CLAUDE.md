@@ -59,10 +59,8 @@ cargo run            # Run the app
 ## Intentional `ccmux` References (post-rename)
 Issue #102 renamed the project from `ccmux` to `renga`. The following residual references to `ccmux` are intentional and should NOT be swept:
 
-- **GitHub repo URLs** (`happy-ryo/ccmux`, `Shin-sibainu/ccmux`) — repo transfer is tracked separately as Issue #103. All `https://github.com/...ccmux...` URLs stay until then.
 - **Upstream attribution** — the project is a fork of upstream `Shin-sibainu/ccmux`. Mentions of upstream by its name in `BRANCHING.md`, `README*`, `lp/*.html`, and `docs/content/` are preserved.
 - **Version-history comments in `Cargo.toml`** — pre-rename release notes describe past versions accurately; rewriting them would falsify history.
-- **`docs/next.config.mjs basePath`** — `'/ccmux/docs'` maps to the GitHub Pages path served from the repo, which is still `ccmux` until #103.
 - **`.claude/` agent and skill files** — worker tooling, not user-facing product surface; outside the rename scope.
 - **`.github/workflows/release.yml` historical mention** — none deliberately retained; if any remain they should be flagged.
 

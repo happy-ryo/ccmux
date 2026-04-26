@@ -41,7 +41,7 @@ renga /path/to/project   # Launch in specified directory
 
 ## Links
 
-- [GitHub (this fork)](https://github.com/happy-ryo/ccmux)
+- [GitHub (this fork)](https://github.com/suisya-systems/renga)
 - [Upstream](https://github.com/Shin-sibainu/ccmux)
 
 ## License
