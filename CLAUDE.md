@@ -51,10 +51,16 @@ cargo run            # Run the app
 ### やってはいけない
 - **手動で `npm publish` や `gh release create` しないこと** — バージョン衝突の原因になる
 
-## Fork & Branching
-このリポジトリは `Shin-sibainu/ccmux` のフォーク。ブランチ運用 (main = 独自本流 / master = 上流ミラー) と上流同期手順は `BRANCHING.md` を参照。上流取り込みや逆 PR の作業時は `.claude/skills/upstream-sync/` Skill が自動発動する。
+## Fork & Branching (Divergence Policy)
+renga は `Shin-sibainu/ccmux` から派生したが、**現在は独立した本流として開発している**。定期的な上流 sync / 週次マージは行わず、上流に有用な変更があれば必要に応じて単発で cherry-pick する程度。詳細は `BRANCHING.md` (正本) を参照。
 
-**上流への逆 PR はユーザーからの明示的な指示がない限り提案・実行しない。** フォークで実装した機能について「汎用性があるので上流還元候補」といったラベルを umbrella Issue に残すのは OK だが、タスクの次候補として「upstream PR を出す」を勝手に積まない。上流の受け入れタイミングに依存して進捗が止まるのを避けるため、フォーク内の独自開発に集中する方針。
+要点だけ:
+- `main` = renga 本流 (default / リリース対象)。上流とは独立に進化
+- `master` = `upstream/master` を必要なときだけ FF 追従するスナップショット用 (記録 / cherry-pick ベース)。独自 commit は乗せない
+- 上流からの取り込みは「ユーザーが指定した個別 commit を cherry-pick」する ad-hoc 運用のみ。包括的 sync は行わない
+- `.claude/skills/upstream-sync/` Skill は上記 ad-hoc cherry-pick / 逆 PR 手順の補助。包括 sync 系の依頼では発動させない
+
+**上流への逆 PR はユーザーからの明示的な指示がない限り提案・実行しない。** フォークで実装した機能について「汎用性があるので上流還元候補」といったラベルを umbrella Issue に残すのは OK だが、タスクの次候補として「upstream PR を出す」を勝手に積まない。上流の受け入れタイミングに依存して renga の進捗が止まるのを避けるため、独自開発に集中する方針。
 
 ## Intentional `ccmux` References (post-rename)
 Issue #102 renamed the project from `ccmux` to `renga`. The following residual references to `ccmux` are intentional and should NOT be swept:

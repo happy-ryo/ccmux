@@ -98,4 +98,4 @@ GitHub 側で以下を設定:
 ## 関連
 
 - リリース手順の詳細は `CLAUDE.md` の Release Process を参照
-- (内部) `.claude/skills/upstream-sync/` Skill は ccmux 由来の旧 fork-policy 想定で書かれており、本ドキュメントの divergence policy が正本です。Skill 自体はいずれ追随更新する予定です
+- (内部) `.claude/skills/upstream-sync/` Skill は本ドキュメントの divergence policy に追随しており、ad-hoc な cherry-pick / 逆 PR 手順の補助に用途を絞っています。本 BRANCHING.md が常に正本です
