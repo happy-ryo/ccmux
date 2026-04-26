@@ -90,7 +90,10 @@ name = "renga"
 # Claude launches: structured permission_mode / model / args[] fields
 # replace free-form command string synthesis, with the peer channel
 # enabled by construction. Minor bump because it's a new MCP tool.
-version = "0.18.1"
+# 0.18.2 republishes the 0.18.1 artifacts with corrected package metadata
+# (repository/homepage URLs from the renga rename + URL sweep — #136 / #154
+# follow-up). No code changes.
+version = "0.18.2"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
