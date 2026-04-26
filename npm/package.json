@@ -1,9 +1,9 @@
 {
-  "name": "ccmux-fork",
+  "name": "renga-fork",
   "version": "0.18.1",
-  "description": "Claude Code Multiplexer (fork) — manage multiple Claude Code instances in TUI split panes",
+  "description": "Claude Code Multiplexer (fork, formerly ccmux-fork) — manage multiple Claude Code instances in TUI split panes",
   "bin": {
-    "ccmux": "bin/cli.js"
+    "renga": "bin/cli.js"
   },
   "scripts": {
     "postinstall": "node scripts/install.js"

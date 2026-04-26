@@ -15,16 +15,16 @@ jobs:
         include:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            artifact: ccmux-windows-x64.exe
+            artifact: renga-windows-x64.exe
           - target: x86_64-apple-darwin
             os: macos-latest
-            artifact: ccmux-macos-x64
+            artifact: renga-macos-x64
           - target: aarch64-apple-darwin
             os: macos-latest
-            artifact: ccmux-macos-arm64
+            artifact: renga-macos-arm64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact: ccmux-linux-x64
+            artifact: renga-linux-x64
 
     runs-on: ${{ matrix.os }}
 
@@ -41,11 +41,11 @@ jobs:
 
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
-        run: cp target/${{ matrix.target }}/release/ccmux ${{ matrix.artifact }}
+        run: cp target/${{ matrix.target }}/release/renga ${{ matrix.artifact }}
 
       - name: Rename binary (Windows)
         if: runner.os == 'Windows'
-        run: cp target/${{ matrix.target }}/release/ccmux.exe ${{ matrix.artifact }}
+        run: cp target/${{ matrix.target }}/release/renga.exe ${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -68,10 +68,10 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          sha256sum ccmux-windows-x64.exe/ccmux-windows-x64.exe \
-                    ccmux-macos-x64/ccmux-macos-x64 \
-                    ccmux-macos-arm64/ccmux-macos-arm64 \
-                    ccmux-linux-x64/ccmux-linux-x64 \
+          sha256sum renga-windows-x64.exe/renga-windows-x64.exe \
+                    renga-macos-x64/renga-macos-x64 \
+                    renga-macos-arm64/renga-macos-arm64 \
+                    renga-linux-x64/renga-linux-x64 \
             | sed 's|[^ ]*/||' > ../checksums.txt
 
       - name: Create Release
@@ -80,10 +80,10 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
-            artifacts/ccmux-windows-x64.exe/ccmux-windows-x64.exe
-            artifacts/ccmux-macos-x64/ccmux-macos-x64
-            artifacts/ccmux-macos-arm64/ccmux-macos-arm64
-            artifacts/ccmux-linux-x64/ccmux-linux-x64
+            artifacts/renga-windows-x64.exe/renga-windows-x64.exe
+            artifacts/renga-macos-x64/renga-macos-x64
+            artifacts/renga-macos-arm64/renga-macos-arm64
+            artifacts/renga-linux-x64/renga-linux-x64
             checksums.txt
 
   publish-npm:

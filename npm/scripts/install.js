@@ -17,10 +17,10 @@ function getPlatformBinary() {
   const platform = process.platform;
   const arch = process.arch;
 
-  if (platform === 'win32' && arch === 'x64') return 'ccmux-windows-x64.exe';
-  if (platform === 'darwin' && arch === 'arm64') return 'ccmux-macos-arm64';
-  if (platform === 'darwin' && arch === 'x64') return 'ccmux-macos-x64';
-  if (platform === 'linux' && arch === 'x64') return 'ccmux-linux-x64';
+  if (platform === 'win32' && arch === 'x64') return 'renga-windows-x64.exe';
+  if (platform === 'darwin' && arch === 'arm64') return 'renga-macos-arm64';
+  if (platform === 'darwin' && arch === 'x64') return 'renga-macos-x64';
+  if (platform === 'linux' && arch === 'x64') return 'renga-linux-x64';
 
   console.error(`Unsupported platform: ${platform}-${arch}`);
   process.exit(1);
@@ -50,7 +50,7 @@ function download(url, dest, redirects = 0, baseUrl) {
       reject(err);
       return;
     }
-    https.get(requestUrl, { headers: { 'User-Agent': 'ccmux-installer' } }, (res) => {
+    https.get(requestUrl, { headers: { 'User-Agent': 'renga-installer' } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         download(res.headers.location, dest, redirects + 1, requestUrl).then(resolve, reject);
         return;
@@ -83,7 +83,7 @@ function fetchText(url, redirects = 0, baseUrl) {
       reject(err);
       return;
     }
-    https.get(requestUrl, { headers: { 'User-Agent': 'ccmux-installer' } }, (res) => {
+    https.get(requestUrl, { headers: { 'User-Agent': 'renga-installer' } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         fetchText(res.headers.location, redirects + 1, requestUrl).then(resolve, reject);
         return;
@@ -210,10 +210,10 @@ async function main() {
   const url = `${baseUrl}/${binaryName}`;
   const binDir = path.join(__dirname, '..', 'bin');
   const isWindows = process.platform === 'win32';
-  const dest = path.join(binDir, isWindows ? 'ccmux.exe' : 'ccmux');
+  const dest = path.join(binDir, isWindows ? 'renga.exe' : 'renga');
   const tempDest = `${dest}.tmp`;
 
-  console.log(`Downloading ccmux v${VERSION} for ${process.platform}-${process.arch}...`);
+  console.log(`Downloading renga v${VERSION} for ${process.platform}-${process.arch}...`);
 
   try {
     fs.mkdirSync(binDir, { recursive: true });
@@ -245,15 +245,15 @@ async function main() {
     const DIM = '\x1b[38;2;110;118;129m';
     const RESET = '\x1b[0m';
     console.log('');
-    console.log(`${BLUE} ██████╗ ██████╗███╗   ███╗██╗   ██╗██╗  ██╗${RESET}`);
-    console.log(`${BLUE}██╔════╝██╔════╝████╗ ████║██║   ██║╚██╗██╔╝${RESET}`);
-    console.log(`${BLUE}██║     ██║     ██╔████╔██║██║   ██║ ╚███╔╝${RESET}`);
-    console.log(`${BLUE}██║     ██║     ██║╚██╔╝██║██║   ██║ ██╔██╗${RESET}`);
-    console.log(`${BLUE}╚██████╗╚██████╗██║ ╚═╝ ██║╚██████╔╝██╔╝ ██╗${RESET}`);
-    console.log(`${BLUE} ╚═════╝ ╚═════╝╚═╝     ╚═╝ ╚═════╝╚═╝  ╚═╝${RESET}`);
+    console.log(`${BLUE}██████╗ ███████╗███╗   ██╗ ██████╗  █████╗ ${RESET}`);
+    console.log(`${BLUE}██╔══██╗██╔════╝████╗  ██║██╔════╝ ██╔══██╗${RESET}`);
+    console.log(`${BLUE}██████╔╝█████╗  ██╔██╗ ██║██║  ███╗███████║${RESET}`);
+    console.log(`${BLUE}██╔══██╗██╔══╝  ██║╚██╗██║██║   ██║██╔══██║${RESET}`);
+    console.log(`${BLUE}██║  ██║███████╗██║ ╚████║╚██████╔╝██║  ██║${RESET}`);
+    console.log(`${BLUE}╚═╝  ╚═╝╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝${RESET}`);
     console.log('');
     console.log(`${DIM}  Claude Code Multiplexer v${VERSION}${RESET}`);
-    console.log(`${DIM}  Run 'ccmux' to start.${RESET}`);
+    console.log(`${DIM}  Run 'renga' to start.${RESET}`);
     console.log('');
   } catch (err) {
     cleanupFile(tempDest);
@@ -264,7 +264,7 @@ async function main() {
     // (install + restore detail). Print it verbatim, and add the
     // binary URL as the default download context for the manual
     // fallback path.
-    console.error(`Failed to install ccmux: ${err.message}`);
+    console.error(`Failed to install renga: ${err.message}`);
     console.error(`Binary URL: ${url}`);
     console.error(`Checksums URL: ${baseUrl}/checksums.txt`);
     console.error('You can download manually from: https://github.com/happy-ryo/ccmux/releases');
