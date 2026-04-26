@@ -1,8 +1,8 @@
 # @suisya-systems/renga
 
-Claude Code Multiplexer (fork) — manage multiple Claude Code instances in TUI split panes.
+A terminal multiplexer purpose-built for running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions side-by-side — Claude-aware pane detection, peer messaging between Claude panes via a built-in MCP channel, and an IME-aware composition overlay for JP/CJK input.
 
-> This is a fork of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) published as `@suisya-systems/renga` (previously `ccmux-fork`). It develops independent features while periodically syncing upstream.
+For people running 2+ Claude Code instances in parallel (orchestrator + workers, side-by-side comparisons, etc.). If you only ever run one Claude at a time, the value over a plain terminal is small.
 
 ## Install
 
@@ -41,9 +41,13 @@ renga /path/to/project   # Launch in specified directory
 
 ## Links
 
-- [GitHub (this fork)](https://github.com/suisya-systems/renga)
-- [Upstream](https://github.com/Shin-sibainu/ccmux)
+- [GitHub](https://github.com/suisya-systems/renga)
+- [Full README (with peer messaging, IME overlay, keybindings, configuration)](https://github.com/suisya-systems/renga#readme)
+
+## History
+
+renga was originally derived from [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) and has since evolved independently — peer messaging, IME overlay, layout TOML, and the bilingual UX layer are renga-specific. See [`BRANCHING.md`](https://github.com/suisya-systems/renga/blob/main/BRANCHING.md) for the divergence policy.
 
 ## License
 
-MIT
+MIT — upstream `Shin-sibainu/ccmux` copyright is retained per the license terms.

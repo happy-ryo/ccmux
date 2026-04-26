@@ -1,14 +1,18 @@
-# renga (fork)
+# renga
 
 *Read this in other languages: [日本語](./README.ja.md)*
 
-Claude Code Multiplexer — manage multiple Claude Code instances in TUI split panes.
-
-A lightweight terminal multiplexer built specifically for running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions side-by-side.
-
-> **This is a fork** of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) that develops independent features while periodically syncing upstream. Installs as the separate npm package `@suisya-systems/renga` (previously `ccmux-fork`). See [`BRANCHING.md`](./BRANCHING.md) for the fork policy.
+**A terminal multiplexer purpose-built for running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions side-by-side.**
 
 ![renga screenshot](screenshot.png)
+
+## Why renga
+
+Running more than one Claude Code agent at once gets unwieldy fast: tmux works but treats every pane as just a shell, and generic terminal apps have no concept of "this pane is Claude, that one is a peer it can hand work to." renga is a small, single-binary TUI that knows about Claude Code specifically — it detects which panes are running Claude, lets those panes message each other through a built-in MCP channel (so two Claude agents can collaborate without you copy-pasting between them), and ships an IME-aware composition overlay so Japanese / CJK input doesn't fight Claude's streaming output.
+
+It's aimed at developers who routinely run **two or more Claude Code instances in parallel** — orchestrating sub-agents, comparing approaches across panes, or coordinating a "secretary + workers" layout — and who want a lightweight TUI rather than a full IDE plugin or a tmux config full of shell glue.
+
+If you only ever run one Claude Code at a time, renga's value over your current terminal is small. If you run several, the pane-aware peer messaging and Claude-specific UX are the point.
 
 ## Features
 
@@ -164,7 +168,7 @@ The overlay opens as a centered multi-line composition box. Host-terminal IME ca
 
 ### `[ui]` — UI language
 
-Controls the language used for status bar hints and preview panel error messages. renga started out JP-only because the fork's primary users are Japanese speakers, but everything now flips automatically based on the OS locale.
+Controls the language used for status bar hints and preview panel error messages. renga started out JP-only because its primary users are Japanese speakers, but everything now flips automatically based on the OS locale.
 
 ```toml
 [ui]
@@ -363,6 +367,12 @@ src/
 
 New to Claude Code? Check out [Claude Code Academy](https://claude-code-academy.dev) for tutorials and guides.
 
+## History & Acknowledgments
+
+renga was originally derived from [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) in early 2026 and has since evolved independently — the peer-messaging MCP channel, Claude-aware pane detection, the IME composition overlay, layout TOMLs, and the bilingual UX layer are all renga-specific work. The two projects no longer track version-for-version; renga ships its own semver line on its own cadence (see [`BRANCHING.md`](./BRANCHING.md) for the divergence policy).
+
+Many thanks to [Shin-sibainu](https://github.com/Shin-sibainu) for the original ccmux foundation, which gave renga its starting point for the ratatui pane tree, vt100-based terminal emulation, and the cross-platform PTY layer. The full upstream commit history is preserved in the repo's git log, and the `Shin-sibainu` MIT copyright is retained in [`LICENSE`](./LICENSE) per the license terms.
+
 ## License
 
-MIT
+MIT — see [`LICENSE`](./LICENSE). Copyright is retained for the original `Shin-sibainu/ccmux` author per the upstream license; renga's additional contributions are released under the same MIT terms.
