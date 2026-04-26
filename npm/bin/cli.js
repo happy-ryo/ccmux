@@ -5,11 +5,11 @@ const path = require('path');
 const fs = require('fs');
 
 const isWindows = process.platform === 'win32';
-const binaryName = isWindows ? 'ccmux.exe' : 'ccmux';
+const binaryName = isWindows ? 'renga.exe' : 'renga';
 const binaryPath = path.join(__dirname, binaryName);
 
 if (!fs.existsSync(binaryPath)) {
-  console.error('ccmux binary not found. Try reinstalling: npm install -g ccmux-fork');
+  console.error('renga binary not found. Try reinstalling: npm install -g renga-fork');
   process.exit(1);
 }
 

@@ -108,7 +108,7 @@ impl IpcServer {
         let endpoint_for_log = endpoint.as_str().to_string();
         let (done_tx, done_rx) = mpsc::channel();
         thread::Builder::new()
-            .name("ccmux-ipc-accept".into())
+            .name("renga-ipc-accept".into())
             .spawn(move || {
                 accept_loop(
                     listener,
@@ -185,7 +185,7 @@ fn accept_loop(
                 if stop.load(Ordering::Acquire) {
                     return;
                 }
-                eprintln!("ccmux IPC: accept failed on {endpoint_for_log}: {e}");
+                eprintln!("renga IPC: accept failed on {endpoint_for_log}: {e}");
                 continue;
             }
         };
@@ -194,10 +194,10 @@ fn accept_loop(
         let token = session_token.clone();
         let bus = event_bus.clone();
         if let Err(e) = thread::Builder::new()
-            .name("ccmux-ipc-worker".into())
+            .name("renga-ipc-worker".into())
             .spawn(move || {
                 if let Err(e) = handle_connection(conn, tx, &token, bus) {
-                    eprintln!("ccmux IPC: connection error: {e}");
+                    eprintln!("renga IPC: connection error: {e}");
                 }
             })
         {
@@ -206,7 +206,7 @@ fn accept_loop(
             // client sees EOF and can retry. We deliberately don't fall
             // back to inline handling because that would block the
             // accept loop behind a slow request.
-            eprintln!("ccmux IPC: worker spawn failed, dropping connection: {e}");
+            eprintln!("renga IPC: worker spawn failed, dropping connection: {e}");
         }
     }
 }
@@ -1000,9 +1000,9 @@ mod tests {
         use std::path::PathBuf;
 
         // Bind on a unique temp path so the test doesn't race with a
-        // real ccmux instance or other tests.
+        // real renga instance or other tests.
         let dir = std::env::temp_dir().join(format!(
-            "ccmux-test-{}-{}",
+            "renga-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1010,7 +1010,7 @@ mod tests {
                 .unwrap_or(0)
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let sock_path: PathBuf = dir.join("ccmux-test.sock");
+        let sock_path: PathBuf = dir.join("renga-test.sock");
         let endpoint = EndpointName::socket(sock_path.clone());
 
         let (tx, _rx) = mpsc::channel::<AppCommand>();

@@ -216,7 +216,7 @@ impl OverlayState {
 /// a newline into the composition buffer. Cancels with Esc or
 /// Ctrl+C. Arrow keys navigate, Backspace deletes, other printable
 /// characters are inserted; Ctrl/Alt-modified chars are swallowed so
-/// ccmux chords can't leak mid-composition. On commit, forwards the
+/// renga chords can't leak mid-composition. On commit, forwards the
 /// buffer to the original target pane via the existing
 /// bracketed-paste path.
 pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
@@ -328,9 +328,9 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
             {
-                // Don't leak ccmux chord keys (Ctrl+D, Alt+T …)
+                // Don't leak renga chord keys (Ctrl+D, Alt+T …)
                 // into the buffer, but also don't let them
-                // trigger ccmux's layout commands mid-composition
+                // trigger renga's layout commands mid-composition
                 // — the overlay is modal.
                 return Ok(true);
             }

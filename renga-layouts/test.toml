@@ -1,5 +1,5 @@
 # Test layout — quick 2-pane sanity check
-# Usage: from this ccmux directory, run: cargo run -- --layout test
+# Usage: from this renga directory, run: cargo run -- --layout test
 
 version = 1
 name = "test"

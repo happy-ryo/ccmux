@@ -1,21 +1,21 @@
 # IPC (External Control)
 
-ccmux exposes a **local-only IPC** so external processes can drive a running instance. Scripts, agents, or another Claude Code session can manipulate panes, snapshot their screens, and subscribe to lifecycle events.
+renga exposes a **local-only IPC** so external processes can drive a running instance. Scripts, agents, or another Claude Code session can manipulate panes, snapshot their screens, and subscribe to lifecycle events.
 
 import { Callout } from 'nextra/components'
 
 <Callout type="info">
-  The endpoint is a Unix socket (macOS / Linux) or a Named Pipe (Windows). Access control lives at the **OS socket permission layer** — only processes running as the same user can reach it (see "Security model" below). `CCMUX_SOCKET` / `CCMUX_TOKEN` environment variables are how clients **locate** the endpoint; any process spawned inside a ccmux pane (`claude`, a shell, a script) inherits them and can call ccmux subcommands transparently.
+  The endpoint is a Unix socket (macOS / Linux) or a Named Pipe (Windows). Access control lives at the **OS socket permission layer** — only processes running as the same user can reach it (see "Security model" below). `RENGA_SOCKET` / `RENGA_TOKEN` environment variables are how clients **locate** the endpoint; any process spawned inside a renga pane (`claude`, a shell, a script) inherits them and can call renga subcommands transparently.
 </Callout>
 
 ## Basic subcommands
 
-### `ccmux list`
+### `renga list`
 
 List every pane in the active tab:
 
 ```bash
-$ ccmux list
+$ renga list
 [
   { "id": 1, "name": "secretary", "role": "leader", "focused": true,
     "x": 0, "y": 0, "width": 80, "height": 24 },
@@ -32,52 +32,52 @@ right after startup) all four fields are `0`, so treat zeros as
 "not yet placed" rather than "zero-sized pane". Clients that don't
 know about these fields can safely ignore them.
 
-### `ccmux send`
+### `renga send`
 
 Write text to the target pane's PTY. Add `--enter` to append a newline so the shell executes the line.
 
 ```bash
-ccmux send --name worker-foo --enter "git status"
-ccmux send --id 2 "Hello"
-ccmux send --focused $'\x1b'  # send Esc
+renga send --name worker-foo --enter "git status"
+renga send --id 2 "Hello"
+renga send --focused $'\x1b'  # send Esc
 ```
 
 Target selector: `--name <NAME>` / `--id <N>` / `--focused`. When omitted the focused pane is used.
 
-### `ccmux focus`
+### `renga focus`
 
 Move keyboard focus.
 
 ```bash
-ccmux focus --name secretary
+renga focus --name secretary
 ```
 
-### `ccmux split`
+### `renga split`
 
 Split a pane. You can seed the new pane with a startup command, a stable name (`--id`), or a free-form role (`--role`).
 
 ```bash
-ccmux split --direction vertical --command "claude" --id worker-a --role worker
+renga split --direction vertical --command "claude" --id worker-a --role worker
 ```
 
 Target the pane to split with `--target-name <NAME>` / `--target-id <N>` / `--target-focused`. When omitted, the focused pane is split. `--direction vertical | horizontal` is required.
 
-### `ccmux new-tab`
+### `renga new-tab`
 
 Open a new tab with a fresh single pane.
 
 ```bash
-ccmux new-tab --command "claude --permission-mode plan" --id worker-plan --role worker --label "plan-session"
+renga new-tab --command "claude --permission-mode plan" --id worker-plan --role worker --label "plan-session"
 ```
 
 ## Lifecycle monitoring
 
-### `ccmux events`
+### `renga events`
 
 Subscribe to pane lifecycle events as JSON Lines.
 
 ```bash
-ccmux events --timeout 5s --count 10
+renga events --timeout 5s --count 10
 ```
 
 | Flag | Meaning |
@@ -97,7 +97,7 @@ If neither flag is set the stream runs until the server closes the connection �
 ```
 
 - `pane_started` / `pane_exited`: pane lifecycle transitions.
-- `events_dropped`: number of events the server had to drop for this subscriber (slow consumer signal; reconcile with `ccmux list` if you see these).
+- `events_dropped`: number of events the server had to drop for this subscriber (slow consumer signal; reconcile with `renga list` if you see these).
 - `heartbeat`: emitted every 30 s as a keep-alive. Consumers can safely ignore it.
 
 #### Typical one-liner
@@ -105,16 +105,16 @@ If neither flag is set the stream runs until the server closes the connection �
 Watch worker pane exits only:
 
 ```bash
-ccmux events --timeout 5s \
+renga events --timeout 5s \
   | jq -c 'select(.type == "pane_exited" and .role == "worker")'
 ```
 
-### `ccmux inspect`
+### `renga inspect`
 
 Snapshot the visible screen of a pane. Useful for agents that need to detect approval prompts, error banners, mode indicators, etc. without a human in the loop.
 
 ```bash
-ccmux inspect --name worker-foo --lines 10 --cursor
+renga inspect --name worker-foo --lines 10 --cursor
 ```
 
 | Flag | Meaning |
@@ -144,24 +144,24 @@ Blank rows are preserved with `text: ""` so callers can index lines positionally
 
 ## Error codes
 
-IPC failures surface as `Error: [<code>] <message>` on stderr (ccmux 0.5.7+). The code is a stable wire ABI; prefer matching on the code over substring-matching the message.
+IPC failures surface as `Error: [<code>] <message>` on stderr (renga 0.5.7+). The code is a stable wire ABI; prefer matching on the code over substring-matching the message.
 
 | Code | Meaning |
 |---|---|
-| `shutting_down` | ccmux is shutting down. Clients should stop their loops. |
+| `shutting_down` | renga is shutting down. Clients should stop their loops. |
 | `app_timeout` | The UI thread failed to reply in time. Usually transient; retry. |
 | `parse` | JSON parse failure (protocol bug). |
 | `protocol` | Protocol violation (e.g. duplicate hello). |
 | `internal` | Server-side invariant broken (parser lock poison, serialization error). |
 | `pane_not_found` | The target pane (id / name / Focused) does not exist. |
 | `pane_vanished` | Resolved on lookup but disappeared before the action — treat like `pane_not_found`. |
-| `split_refused` | `ccmux split` refused: MAX_PANES reached or pane already at minimum size. |
+| `split_refused` | `renga split` refused: MAX_PANES reached or pane already at minimum size. |
 | `io_error` | PTY write / spawn / OS-level failure. |
 
 Shell-side dispatch example:
 
 ```bash
-out=$(ccmux send --name worker-foo --enter "ping" 2>&1)
+out=$(renga send --name worker-foo --enter "ping" 2>&1)
 case "$out" in
   *"[pane_not_found]"*|*"[pane_vanished]"*)
     echo "worker closed" ;;
@@ -172,14 +172,14 @@ case "$out" in
 esac
 ```
 
-Treat **unknown** codes as non-fatal — new codes may be added in future ccmux releases, and clients should never crash on them.
+Treat **unknown** codes as non-fatal — new codes may be added in future renga releases, and clients should never crash on them.
 
 ## Subscriber teardown
 
-`ccmux events` subscribers are released promptly when the client half-closes the connection. The server emits a heartbeat every 30 seconds, so the next write into a dead socket fails and unsubscribes the slot — even on quiet workspaces that otherwise go minutes without an event.
+`renga events` subscribers are released promptly when the client half-closes the connection. The server emits a heartbeat every 30 seconds, so the next write into a dead socket fails and unsubscribes the slot — even on quiet workspaces that otherwise go minutes without an event.
 
 ## Security model
 
-This is a **same-user** local IPC, not a secrecy boundary. Any process running as the same OS user can read `CCMUX_TOKEN` from `/proc/<pid>/environ`. OS-level user isolation is the trust boundary.
+This is a **same-user** local IPC, not a secrecy boundary. Any process running as the same OS user can read `RENGA_TOKEN` from `/proc/<pid>/environ`. OS-level user isolation is the trust boundary.
 
-`CCMUX_TOKEN` exists specifically to detect PID reuse — so a stale `CCMUX_SOCKET` path inherited by a child shell can't misroute commands to a different ccmux instance that happened to get the same PID.
+`RENGA_TOKEN` exists specifically to detect PID reuse — so a stale `RENGA_SOCKET` path inherited by a child shell can't misroute commands to a different renga instance that happened to get the same PID.

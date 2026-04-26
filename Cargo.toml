@@ -1,5 +1,5 @@
 [package]
-name = "ccmux"
+name = "renga"
 # Fork keeps its own version line. 0.7.0 jumps past upstream 0.6.0 so
 # users can tell fork and upstream apart at a glance, and reflects the
 # breaking change in `mode = "always"` removal (#90) plus the shipped

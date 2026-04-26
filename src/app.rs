@@ -469,7 +469,7 @@ impl Workspace {
     ) -> Result<Self> {
         // Spawn the initial pane's PTY in the workspace's cwd so
         // `new_tab_with_cwd(...)` actually takes effect. Without this
-        // the shell would inherit the ccmux process cwd regardless of
+        // the shell would inherit the renga process cwd regardless of
         // what the workspace was constructed with.
         let pane = Pane::new_with_cwd(pane_id, rows, cols, event_tx, Some(cwd.clone()))?;
         let mut panes = HashMap::new();
@@ -1026,7 +1026,7 @@ impl App {
             self.dismiss_macos_tip();
         }
 
-        // Emergency escape hatch: Ctrl+Q must always quit ccmux, even
+        // Emergency escape hatch: Ctrl+Q must always quit renga, even
         // while the IME composition overlay is holding input. Checked
         // before overlay routing so the user can never get trapped in
         // a wedged composition mode.
@@ -1189,7 +1189,7 @@ impl App {
         // the focused pane (trailing space, no Enter). The user reviews,
         // optionally edits, then presses Enter to actually run — a
         // conscious action, which is why we deliberately don't gate
-        // this on "is ccmux-peers installed": pressing Alt+P already
+        // this on "is renga-peers installed": pressing Alt+P already
         // means the user wants peer mode, and a missing MCP entry will
         // surface itself when Claude starts.
         //
@@ -1749,7 +1749,7 @@ impl App {
                 cwd: _,
             } => {
                 // Register the leaf's id as a human-friendly name so IPC
-                // clients (and external tools like `ccmux-send`) can
+                // clients (and external tools like `renga-send`) can
                 // target this pane later without tracking numeric ids.
                 if !id.is_empty() {
                     self.ws_mut().pane_names.insert(id.clone(), target_pane_id);
@@ -1762,7 +1762,7 @@ impl App {
                         // Mirror MCP `spawn_pane` / `new_tab` behavior:
                         // a bare `claude` invocation is upgraded to the
                         // peer-enabled launch line so panes declared in
-                        // layout toml join the ccmux-peers network
+                        // layout toml join the renga-peers network
                         // without the author having to repeat
                         // `--dangerously-load-development-channels`.
                         let upgraded = crate::mcp_peer::upgrade_claude_command(cmd);
@@ -1911,7 +1911,7 @@ impl App {
         } else {
             // Background tab: no geometry change to the visible layout,
             // but the tab strip and pane-count indicators still need a
-            // repaint, and `ccmux list` must reflect the new state on
+            // repaint, and `renga list` must reflect the new state on
             // the very next tick.
             self.dirty = true;
         }
@@ -2133,7 +2133,7 @@ impl App {
         // has wandered off it, so the app sees a coherent press →
         // drag* → release sequence. Skipping this early-return would
         // let a drag land in a neighbouring pane or get picked up by
-        // ccmux's border-drag handler instead.
+        // renga's border-drag handler instead.
         if let Some(DragTarget::PaneMouseReport(ws_idx, pane_id, rect, btn)) = self.dragging.clone()
         {
             match mouse.kind {
@@ -2313,9 +2313,9 @@ impl App {
                         // Try forwarding the click to the pane's PTY
                         // when a TUI in there subscribed to mouse
                         // reporting. `Shift+click` is reserved for
-                        // ccmux-side text selection (same escape
+                        // renga-side text selection (same escape
                         // hatch as tmux / alacritty), and
-                        // CCMUX_DISABLE_MOUSE_FORWARD=1 disables
+                        // RENGA_DISABLE_MOUSE_FORWARD=1 disables
                         // forwarding entirely — mirrors the wheel
                         // handler's opt-out (Issue #52 / PR #53).
                         if !mouse.modifiers.contains(KeyModifiers::SHIFT)
@@ -2348,10 +2348,10 @@ impl App {
                 }
             }
             MouseEventKind::Down(btn @ (MouseButton::Middle | MouseButton::Right)) => {
-                // Middle / right clicks don't drive any ccmux-side
+                // Middle / right clicks don't drive any renga-side
                 // shortcut today, so the only reason to see them here
                 // is to forward to a TUI that asked for full mouse
-                // reporting. Shift-held stays ccmux-native for
+                // reporting. Shift-held stays renga-native for
                 // symmetry with the left-button path (callers who
                 // want a plain paste/context-menu still get one).
                 let col = mouse.column;
@@ -2638,9 +2638,9 @@ impl App {
     /// (Claude Code `/tui fullscreen`, vim, less, …). See Issue #52
     /// and `Pane::wheel_forward_bytes` for the decision table.
     ///
-    /// `CCMUX_DISABLE_MOUSE_FORWARD=1` forces the legacy behavior
+    /// `RENGA_DISABLE_MOUSE_FORWARD=1` forces the legacy behavior
     /// everywhere (vt100 scrollback only), as an escape hatch for
-    /// nested ccmux or terminals with mismatched mouse-protocol
+    /// nested renga or terminals with mismatched mouse-protocol
     /// encoding.
     fn handle_wheel(&mut self, col: u16, row: u16, scroll_down: bool) {
         if let Some(rect) = self.ws().last_file_tree_rect {
@@ -2718,7 +2718,7 @@ impl App {
 
     /// Try to forward a button press inside `pane_id`'s rect to the
     /// PTY as an xterm mouse report. Returns `true` when the press was
-    /// forwarded (and the caller should skip ccmux-side handling for
+    /// forwarded (and the caller should skip renga-side handling for
     /// this pane); `false` when the pane has mouse reporting off and
     /// the caller should fall through to its existing behavior
     /// (scrollbar, focus, etc.).
@@ -3538,7 +3538,7 @@ impl App {
     }
 }
 
-/// Flag-preloaded launch command for `ccmux split --role claude` and
+/// Flag-preloaded launch command for `renga split --role claude` and
 /// Alt+P. Also consumed by `crate::mcp_peer` so `spawn_pane` /
 /// `new_tab` upgrade a bare `claude` invocation to the peer-enabled
 /// form, mirroring what Alt+P types into the focused pane.
@@ -3548,7 +3548,7 @@ impl App {
 /// `--dangerously-load-development-channels` spelling uniformly across
 /// bash / zsh / pwsh.
 pub(crate) const CLAUDE_PEER_LAUNCH_CMD: &str =
-    "claude --dangerously-load-development-channels server:ccmux-peers";
+    "claude --dangerously-load-development-channels server:renga-peers";
 
 /// If `role == "claude"` and the caller did not specify an explicit
 /// `--command`, return the claude launch line with the peer-channel
@@ -3790,13 +3790,13 @@ pub fn key_event_to_bytes_pub(key: &KeyEvent) -> Option<Vec<u8>> {
     key_event_to_bytes(key)
 }
 
-/// True when the user set `CCMUX_DISABLE_MOUSE_FORWARD=1` (or any non-
+/// True when the user set `RENGA_DISABLE_MOUSE_FORWARD=1` (or any non-
 /// empty non-`"0"` value) to opt out of PTY-side mouse handling. Used
 /// by both wheel and click forwarding as a joint escape hatch for
-/// nested ccmux sessions or terminals with a mismatched mouse-
+/// nested renga sessions or terminals with a mismatched mouse-
 /// protocol encoding.
 fn mouse_forward_disabled() -> bool {
-    std::env::var("CCMUX_DISABLE_MOUSE_FORWARD")
+    std::env::var("RENGA_DISABLE_MOUSE_FORWARD")
         .map(|v| !v.is_empty() && v != "0")
         .unwrap_or(false)
 }
@@ -3995,28 +3995,28 @@ mod tests {
         static LOCK: Mutex<()> = Mutex::new(());
         let _guard = LOCK.lock().unwrap();
 
-        std::env::remove_var("CCMUX_DISABLE_MOUSE_FORWARD");
+        std::env::remove_var("RENGA_DISABLE_MOUSE_FORWARD");
         assert!(!mouse_forward_disabled(), "unset → false");
 
-        std::env::set_var("CCMUX_DISABLE_MOUSE_FORWARD", "1");
+        std::env::set_var("RENGA_DISABLE_MOUSE_FORWARD", "1");
         assert!(mouse_forward_disabled(), "\"1\" → true");
 
-        std::env::set_var("CCMUX_DISABLE_MOUSE_FORWARD", "0");
+        std::env::set_var("RENGA_DISABLE_MOUSE_FORWARD", "0");
         assert!(
             !mouse_forward_disabled(),
             "\"0\" must be treated as opt-in-off, matching the wheel-handler convention"
         );
 
-        std::env::set_var("CCMUX_DISABLE_MOUSE_FORWARD", "");
+        std::env::set_var("RENGA_DISABLE_MOUSE_FORWARD", "");
         assert!(!mouse_forward_disabled(), "empty string → false");
 
-        std::env::set_var("CCMUX_DISABLE_MOUSE_FORWARD", "yes");
+        std::env::set_var("RENGA_DISABLE_MOUSE_FORWARD", "yes");
         assert!(
             mouse_forward_disabled(),
             "any non-empty non-\"0\" value → true (permissive)"
         );
 
-        std::env::remove_var("CCMUX_DISABLE_MOUSE_FORWARD");
+        std::env::remove_var("RENGA_DISABLE_MOUSE_FORWARD");
     }
 
     #[test]
@@ -4743,7 +4743,7 @@ mod tests {
     fn handle_close_in_background_tab_marks_dirty_and_updates_list() {
         // Cover the Codex review bug: closing a pane that lives in a
         // non-active workspace must still schedule a render and make
-        // the pane disappear from subsequent `ccmux list` snapshots on
+        // the pane disappear from subsequent `renga list` snapshots on
         // the freshly-touched tab. Prior to the fix the dirty flag
         // stayed low because `mark_layout_change` was gated on the
         // active tab.
@@ -4800,7 +4800,7 @@ mod tests {
     #[test]
     fn close_releases_pane_name_for_reuse() {
         // After close, the stable name must be available again so a
-        // subsequent `ccmux split --id same-name` doesn't collide with
+        // subsequent `renga split --id same-name` doesn't collide with
         // a dangling entry.
         let cfg = crate::layout_config::LayoutConfig {
             version: 1,
@@ -5015,14 +5015,14 @@ mod tests {
 
     #[test]
     fn default_command_for_role_returns_claude_launch_for_claude_role() {
-        // Strategy C from #97: `ccmux split --role claude` must pre-fill
+        // Strategy C from #97: `renga split --role claude` must pre-fill
         // the peer-channel flag so the user doesn't need to know the
         // incantation. `default_command_for_role` is the single seam
         // mapping role names to preloaded commands — regress this and
         // new Claude panes silently skip the channel activation.
         let cmd = default_command_for_role(Some("claude")).expect("claude role preloads cmd");
         assert!(
-            cmd.contains("--dangerously-load-development-channels server:ccmux-peers"),
+            cmd.contains("--dangerously-load-development-channels server:renga-peers"),
             "launch cmd must carry the peer channel flag, got: {cmd}"
         );
         assert!(
@@ -5042,7 +5042,7 @@ mod tests {
     fn apply_layout_auto_upgrades_bare_claude_command() {
         // Issue #126: layout toml's `command = "claude"` should receive
         // the same peer-enabled launch-line upgrade as MCP spawn_pane /
-        // Alt+P, so layout-declared panes join the ccmux-peers network.
+        // Alt+P, so layout-declared panes join the renga-peers network.
         let cfg = crate::layout_config::LayoutConfig {
             version: 1,
             name: "upgrade-test".into(),
@@ -5064,7 +5064,7 @@ mod tests {
             .expect("startup command queued");
         let queued_str = std::str::from_utf8(queued).expect("utf8");
         assert!(
-            queued_str.contains("--dangerously-load-development-channels server:ccmux-peers"),
+            queued_str.contains("--dangerously-load-development-channels server:renga-peers"),
             "layout `claude` should be upgraded to peer-enabled form; got: {queued_str:?}"
         );
         app.shutdown();
@@ -5626,7 +5626,7 @@ mod tests {
                 None,
                 Some("should-not-land".into()),
                 None,
-                Some("/this/path/definitely/does/not/exist/ccmux-test".into()),
+                Some("/this/path/definitely/does/not/exist/renga-test".into()),
             )
             .expect_err("invalid cwd must be refused");
         assert_eq!(err.code, Some(ipc::err_code::CWD_INVALID));
@@ -5653,7 +5653,7 @@ mod tests {
                 Some("should-not-land".into()),
                 None,
                 None,
-                Some("/this/path/definitely/does/not/exist/ccmux-test".into()),
+                Some("/this/path/definitely/does/not/exist/renga-test".into()),
             )
             .expect_err("invalid cwd must be refused");
         assert_eq!(err.code, Some(ipc::err_code::CWD_INVALID));
@@ -5670,7 +5670,7 @@ mod tests {
         // Plant a subdir under the target pane's cwd and split with a
         // relative cwd pointing at it. The resolved pane cwd must
         // equal the canonicalized subdir.
-        let tmp = std::env::temp_dir().join("ccmux-cwd-test-target");
+        let tmp = std::env::temp_dir().join("renga-cwd-test-target");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).expect("mkdir tmp");
         let sub = tmp.join("child");
@@ -5747,7 +5747,7 @@ mod tests {
     #[test]
     fn resolve_optional_cwd_rejects_nonexistent_path() {
         let base = std::env::temp_dir();
-        let err = resolve_optional_cwd(Some("/definitely/not/a/real/path/ccmux-xyz-zzz"), &base)
+        let err = resolve_optional_cwd(Some("/definitely/not/a/real/path/renga-xyz-zzz"), &base)
             .expect_err("missing path must fail");
         assert_eq!(err.code, Some(ipc::err_code::CWD_INVALID));
     }
@@ -5799,7 +5799,7 @@ mod tests {
     fn relayout_panes_caches_rect_origin_accounting_for_sidebar() {
         // Before #80, relayout_panes() used Rect::new(0, tab_h, ...)
         // because only width/height mattered for PTY sizing. Now that
-        // `ccmux list` also exposes x/y from the same cache, the
+        // `renga list` also exposes x/y from the same cache, the
         // origin must match ui::render_main_area's chunk order (tree
         // on the left, preview on the swapped side) — otherwise a
         // List call between a layout change and the next draw would

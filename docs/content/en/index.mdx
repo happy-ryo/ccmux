@@ -1,22 +1,22 @@
-# ccmux
+# renga
 
 **Claude Code Multiplexer** — a Rust TUI tool for managing multiple Claude Code instances in split panes.
 
 ![Centered multi-line IME composition overlay with the host IME candidate window anchored right under the caret; the Claude panes behind it are frozen](/ime-overlay.png)
 
-> This is a fork ([happy-ryo/ccmux](https://github.com/happy-ryo/ccmux)) of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux). It periodically syncs upstream while developing independent features, and is distributed on npm as `ccmux-fork`. See [`BRANCHING.md`](https://github.com/happy-ryo/ccmux/blob/main/BRANCHING.md) for the fork policy.
+> This is a fork ([happy-ryo/ccmux](https://github.com/happy-ryo/ccmux)) of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux). It periodically syncs upstream while developing independent features, and is distributed on npm as `renga-fork`. See [`BRANCHING.md`](https://github.com/happy-ryo/ccmux/blob/main/BRANCHING.md) for the fork policy.
 
-![ccmux screenshot](/screenshot.png)
+![renga screenshot](/screenshot.png)
 
 ## Overview
 
-ccmux is a lightweight terminal multiplexer focused on running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions in parallel. It's a thin layer on top of PTYs with a vt100 emulator, offering split panes, tabs, and a file tree. Think of it as tmux shaped around the Claude Code workflow.
+renga is a lightweight terminal multiplexer focused on running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions in parallel. It's a thin layer on top of PTYs with a vt100 emulator, offering split panes, tabs, and a file tree. Think of it as tmux shaped around the Claude Code workflow.
 
 ## Highlights
 
 - Run multiple Claude Code sessions side-by-side in split panes
-- **Centered multi-line IME composition overlay** — `Alt+Enter` sends, `Enter` inserts a newline, the host IME candidate window anchors to the caret (ccmux-fork exclusive)
-- **Pane freeze + periodic catch-up** (`--ime-freeze-panes` + `--ime-overlay-catchup-ms`) silences caret flicker during IME composition (ccmux-fork exclusive)
+- **Centered multi-line IME composition overlay** — `Alt+Enter` sends, `Enter` inserts a newline, the host IME candidate window anchors to the caret (renga-fork exclusive)
+- **Pane freeze + periodic catch-up** (`--ime-freeze-panes` + `--ime-overlay-catchup-ms`) silences caret flicker during IME composition (renga-fork exclusive)
 - File tree with syntax-highlighted preview
 - Independent workspaces per tab
 - Single binary (~2 MB), no runtime dependencies
@@ -25,8 +25,8 @@ ccmux is a lightweight terminal multiplexer focused on running multiple [Claude 
 ## Quick Start
 
 ```bash
-npm install -g ccmux-fork
-ccmux
+npm install -g renga-fork
+renga
 ```
 
 Once running, type `claude` in the terminal pane to start Claude Code.

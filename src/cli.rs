@@ -2,10 +2,10 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "ccmux", version, about = "Claude Code Multiplexer")]
+#[command(name = "renga", version, about = "Claude Code Multiplexer")]
 pub struct Cli {
-    /// Subcommands talk to an already-running ccmux instance over IPC.
-    /// When absent, ccmux launches as a TUI (using the flags below).
+    /// Subcommands talk to an already-running renga instance over IPC.
+    /// When absent, renga launches as a TUI (using the flags below).
     #[command(subcommand)]
     pub command: Option<IpcCommand>,
 
@@ -17,7 +17,7 @@ pub struct Cli {
     pub exec: Option<String>,
 
     /// Load a multi-pane layout by name from
-    /// `./ccmux-layouts/<NAME>.toml` or `~/.config/ccmux/layouts/<NAME>.toml`
+    /// `./renga-layouts/<NAME>.toml` or `~/.config/renga/layouts/<NAME>.toml`
     #[arg(long, value_name = "NAME", conflicts_with = "exec")]
     pub layout: Option<String>,
 
@@ -86,7 +86,7 @@ pub struct Cli {
     /// Suppress the first-launch macOS Option-as-Meta banner for this
     /// run without touching the dismissal marker. Use when automated
     /// sessions shouldn't count as a user dismissal. Also settable via
-    /// `CCMUX_NO_MACOS_TIP=1` env var. No-op on non-macOS hosts.
+    /// `RENGA_NO_MACOS_TIP=1` env var. No-op on non-macOS hosts.
     #[arg(long, conflicts_with = "show_macos_tip")]
     pub no_macos_tip: bool,
 
@@ -99,7 +99,7 @@ pub struct Cli {
     pub show_macos_tip: bool,
 }
 
-/// Subcommands dispatched to a running ccmux instance via its IPC
+/// Subcommands dispatched to a running renga instance via its IPC
 /// endpoint. These always exit without starting the TUI.
 #[derive(Subcommand, Debug, Clone)]
 pub enum IpcCommand {
@@ -110,7 +110,7 @@ pub enum IpcCommand {
         /// Pane name (defined in the layout or via `split --id NAME`).
         #[arg(long, conflicts_with_all = ["id", "focused"])]
         name: Option<String>,
-        /// Numeric pane id as shown by `ccmux list`.
+        /// Numeric pane id as shown by `renga list`.
         #[arg(long, conflicts_with_all = ["name", "focused"])]
         id: Option<usize>,
         /// Target the currently focused pane.
@@ -157,7 +157,7 @@ pub enum IpcCommand {
         role: Option<String>,
         /// Working directory for the new pane. Relative paths are
         /// resolved against the caller's shell cwd and sent as an
-        /// absolute path to the ccmux server.
+        /// absolute path to the renga server.
         #[arg(long)]
         cwd: Option<String>,
     },
@@ -185,7 +185,7 @@ pub enum IpcCommand {
         role: Option<String>,
         /// Working directory for the new pane. Relative paths are
         /// resolved against the caller's shell cwd and sent as an
-        /// absolute path to the ccmux server. When omitted, the new
+        /// absolute path to the renga server. When omitted, the new
         /// pane inherits the target pane's cwd.
         #[arg(long)]
         cwd: Option<String>,
@@ -210,7 +210,7 @@ pub enum IpcCommand {
         cursor: bool,
     },
     /// Subscribe to pane lifecycle events. Streams one JSON object per
-    /// line to stdout until the ccmux server closes the connection or
+    /// line to stdout until the renga server closes the connection or
     /// one of `--timeout` / `--count` stops the drain. Pipeable into
     /// `while read -r line` for reactive shell scripts.
     Events {
@@ -259,15 +259,15 @@ pub enum IpcCommand {
     /// a true IPC subcommand — it doesn't dispatch a request and
     /// expect a reply. `main` intercepts this variant and hands off to
     /// [`crate::mcp_peer::run`], which performs MCP handshakes over
-    /// stdio while using the ccmux IPC as its peer-messaging backend.
+    /// stdio while using the renga IPC as its peer-messaging backend.
     ///
     /// This subcommand is meant to be registered in
-    /// `~/.claude/mcp_servers.json` (done explicitly via `ccmux mcp
+    /// `~/.claude/mcp_servers.json` (done explicitly via `renga mcp
     /// install`, not auto-installed — see #97's scope decision). Claude
-    /// Code spawns it, inherits `CCMUX_PANE_ID` / `CCMUX_SOCKET` from
+    /// Code spawns it, inherits `RENGA_PANE_ID` / `RENGA_SOCKET` from
     /// the pane PTY, and never blocks on its own subcommand dispatch.
     McpPeer,
-    /// Manage the `ccmux-peers` MCP server registration in Claude
+    /// Manage the `renga-peers` MCP server registration in Claude
     /// Code. Thin wrapper around `claude mcp add-json / remove / list`
     /// so users get a zero-argument one-liner instead of having to
     /// know the exact JSON payload. Requires the `claude` CLI on PATH.
@@ -277,28 +277,28 @@ pub enum IpcCommand {
     },
 }
 
-/// Sub-subcommands of `ccmux mcp`. Kept as a separate enum so clap
-/// renders `ccmux mcp install` / `ccmux mcp status` as nested in
+/// Sub-subcommands of `renga mcp`. Kept as a separate enum so clap
+/// renders `renga mcp install` / `renga mcp status` as nested in
 /// `--help` output, which is the documentation affordance a first-time
 /// user expects.
 #[derive(Subcommand, Debug, Clone)]
 pub enum McpAction {
-    /// Register ccmux-peers in Claude Code's user-scope MCP config.
+    /// Register renga-peers in Claude Code's user-scope MCP config.
     /// Idempotent — re-running overwrites the existing entry only when
     /// `--force` is passed, otherwise prints the current entry and
     /// bails so accidental re-runs don't silently repoint.
     Install {
-        /// Overwrite any existing ccmux-peers entry without prompting.
-        /// Needed when upgrading ccmux and the command path changed.
+        /// Overwrite any existing renga-peers entry without prompting.
+        /// Needed when upgrading renga and the command path changed.
         #[arg(long)]
         force: bool,
     },
-    /// Remove ccmux-peers from Claude Code's user-scope MCP config.
+    /// Remove renga-peers from Claude Code's user-scope MCP config.
     /// No-op if the entry is not present.
     Uninstall,
-    /// Show whether ccmux-peers is currently registered, and if so
+    /// Show whether renga-peers is currently registered, and if so
     /// what command it points at. Prints `claude mcp list` output
-    /// filtered to the ccmux-peers line for easy eyeballing.
+    /// filtered to the renga-peers line for easy eyeballing.
     Status,
 }
 
@@ -446,7 +446,7 @@ impl IpcCommand {
 }
 
 /// Resolve a `--cwd` CLI argument against the caller's shell cwd and
-/// hand the ccmux server an absolute path. Server-side validation
+/// hand the renga server an absolute path. Server-side validation
 /// (existence / directory check) still runs, so typos still produce a
 /// `cwd_invalid` error — this helper is purely about matching user
 /// intuition when they type a relative path at their shell.
@@ -475,35 +475,35 @@ mod tests {
 
     #[test]
     fn parses_no_args() {
-        let cli = Cli::try_parse_from(["ccmux"]).unwrap();
+        let cli = Cli::try_parse_from(["renga"]).unwrap();
         assert_eq!(cli.dir, None);
         assert!(cli.command.is_none());
     }
 
     #[test]
     fn parses_directory_only() {
-        let cli = Cli::try_parse_from(["ccmux", "/path"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "/path"]).unwrap();
         assert_eq!(cli.dir, Some(PathBuf::from("/path")));
         assert!(cli.command.is_none());
     }
 
     #[test]
     fn parses_exec_flag() {
-        let cli = Cli::try_parse_from(["ccmux", "--exec", "claude /company"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "--exec", "claude /company"]).unwrap();
         assert_eq!(cli.dir, None);
         assert_eq!(cli.exec.as_deref(), Some("claude /company"));
     }
 
     #[test]
     fn parses_dir_and_exec() {
-        let cli = Cli::try_parse_from(["ccmux", ".", "--exec", "cce"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", ".", "--exec", "cce"]).unwrap();
         assert_eq!(cli.dir, Some(PathBuf::from(".")));
         assert_eq!(cli.exec.as_deref(), Some("cce"));
     }
 
     #[test]
     fn rejects_empty_exec() {
-        let result = Cli::try_parse_from(["ccmux", "--exec", ""]);
+        let result = Cli::try_parse_from(["renga", "--exec", ""]);
         assert!(
             result.is_ok(),
             "clap is permissive; validation happens later"
@@ -518,14 +518,14 @@ mod tests {
 
     #[test]
     fn parses_layout_flag() {
-        let cli = Cli::try_parse_from(["ccmux", "--layout", "cc-campany"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "--layout", "cc-campany"]).unwrap();
         assert_eq!(cli.layout.as_deref(), Some("cc-campany"));
         assert_eq!(cli.exec, None);
     }
 
     #[test]
     fn rejects_exec_and_layout_together() {
-        let result = Cli::try_parse_from(["ccmux", "--exec", "x", "--layout", "y"]);
+        let result = Cli::try_parse_from(["renga", "--exec", "x", "--layout", "y"]);
         assert!(
             result.is_err(),
             "exec and layout must be mutually exclusive"
@@ -536,14 +536,14 @@ mod tests {
 
     #[test]
     fn parses_list_subcommand() {
-        let cli = Cli::try_parse_from(["ccmux", "list"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "list"]).unwrap();
         assert!(matches!(cli.command, Some(IpcCommand::List)));
     }
 
     #[test]
     fn parses_send_subcommand_with_name() {
         let cli = Cli::try_parse_from([
-            "ccmux",
+            "renga",
             "send",
             "--name",
             "engineering",
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn parses_close_subcommand_with_name() {
-        let cli = Cli::try_parse_from(["ccmux", "close", "--name", "worker-foo"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "close", "--name", "worker-foo"]).unwrap();
         match cli.command {
             Some(IpcCommand::Close { name, id }) => {
                 assert_eq!(name.as_deref(), Some("worker-foo"));
@@ -582,7 +582,7 @@ mod tests {
 
     #[test]
     fn close_to_request_translates_id() {
-        let cli = Cli::try_parse_from(["ccmux", "close", "--id", "5"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "close", "--id", "5"]).unwrap();
         let req = cli.command.unwrap().to_request().unwrap();
         match req {
             crate::ipc::Request::Close { target } => {
@@ -594,13 +594,13 @@ mod tests {
 
     #[test]
     fn close_rejects_name_and_id_together() {
-        let result = Cli::try_parse_from(["ccmux", "close", "--name", "a", "--id", "1"]);
+        let result = Cli::try_parse_from(["renga", "close", "--name", "a", "--id", "1"]);
         assert!(result.is_err(), "name and id must be mutually exclusive");
     }
 
     #[test]
     fn parses_focus_subcommand_with_id() {
-        let cli = Cli::try_parse_from(["ccmux", "focus", "--id", "2"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "focus", "--id", "2"]).unwrap();
         match cli.command {
             Some(IpcCommand::Focus { id, name }) => {
                 assert_eq!(id, Some(2));
@@ -613,7 +613,7 @@ mod tests {
     #[test]
     fn parses_split_subcommand() {
         let cli = Cli::try_parse_from([
-            "ccmux",
+            "renga",
             "split",
             "--direction",
             "horizontal",
@@ -640,19 +640,19 @@ mod tests {
 
     #[test]
     fn rejects_send_with_two_targets() {
-        let result = Cli::try_parse_from(["ccmux", "send", "--name", "a", "--id", "1", "text"]);
+        let result = Cli::try_parse_from(["renga", "send", "--name", "a", "--id", "1", "text"]);
         assert!(result.is_err(), "name and id are mutually exclusive");
     }
 
     #[test]
     fn split_rejects_bad_direction() {
-        let result = Cli::try_parse_from(["ccmux", "split", "--direction", "diagonal"]);
+        let result = Cli::try_parse_from(["renga", "split", "--direction", "diagonal"]);
         assert!(result.is_err(), "direction must be vertical or horizontal");
     }
 
     #[test]
     fn send_to_request_uses_focused_when_no_target() {
-        let cli = Cli::try_parse_from(["ccmux", "send", "hi"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "send", "hi"]).unwrap();
         let cmd = cli.command.unwrap();
         let req = cmd.to_request().unwrap();
         match req {
@@ -667,7 +667,7 @@ mod tests {
     #[test]
     fn parses_new_tab_subcommand() {
         let cli = Cli::try_parse_from([
-            "ccmux",
+            "renga",
             "new-tab",
             "--command",
             "cce",
@@ -697,7 +697,7 @@ mod tests {
 
     #[test]
     fn new_tab_to_request_preserves_fields() {
-        let cli = Cli::try_parse_from(["ccmux", "new-tab", "--command", "ccr", "--id", "research"])
+        let cli = Cli::try_parse_from(["renga", "new-tab", "--command", "ccr", "--id", "research"])
             .unwrap();
         let req = cli.command.unwrap().to_request().unwrap();
         match req {
@@ -720,7 +720,7 @@ mod tests {
 
     #[test]
     fn split_to_request_translates_direction() {
-        let cli = Cli::try_parse_from(["ccmux", "split", "--direction", "vertical", "--id", "foo"])
+        let cli = Cli::try_parse_from(["renga", "split", "--direction", "vertical", "--id", "foo"])
             .unwrap();
         let req = cli.command.unwrap().to_request().unwrap();
         match req {
@@ -735,7 +735,7 @@ mod tests {
     #[test]
     fn parses_split_with_role() {
         let cli = Cli::try_parse_from([
-            "ccmux",
+            "renga",
             "split",
             "--direction",
             "horizontal",
@@ -753,7 +753,7 @@ mod tests {
 
     #[test]
     fn parses_new_tab_with_role() {
-        let cli = Cli::try_parse_from(["ccmux", "new-tab", "--role", "leader"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "new-tab", "--role", "leader"]).unwrap();
         match cli.command {
             Some(IpcCommand::NewTab { role, .. }) => {
                 assert_eq!(role.as_deref(), Some("leader"));
@@ -765,7 +765,7 @@ mod tests {
     #[test]
     fn split_to_request_carries_role() {
         let cli = Cli::try_parse_from([
-            "ccmux",
+            "renga",
             "split",
             "--direction",
             "vertical",
@@ -784,7 +784,7 @@ mod tests {
 
     #[test]
     fn new_tab_to_request_carries_role() {
-        let cli = Cli::try_parse_from(["ccmux", "new-tab", "--role", "leader"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "new-tab", "--role", "leader"]).unwrap();
         let req = cli.command.unwrap().to_request().unwrap();
         match req {
             crate::ipc::Request::NewTab { role, .. } => {
@@ -796,7 +796,7 @@ mod tests {
 
     #[test]
     fn parses_events_without_limits() {
-        let cli = Cli::try_parse_from(["ccmux", "events"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "events"]).unwrap();
         match cli.command {
             Some(IpcCommand::Events { timeout, count }) => {
                 assert!(timeout.is_none());
@@ -809,7 +809,7 @@ mod tests {
     #[test]
     fn parses_events_with_timeout_and_count() {
         let cli =
-            Cli::try_parse_from(["ccmux", "events", "--timeout", "2s", "--count", "5"]).unwrap();
+            Cli::try_parse_from(["renga", "events", "--timeout", "2s", "--count", "5"]).unwrap();
         match cli.command {
             Some(IpcCommand::Events { timeout, count }) => {
                 assert_eq!(count, Some(5));
@@ -822,7 +822,7 @@ mod tests {
 
     #[test]
     fn parses_events_with_millisecond_timeout() {
-        let cli = Cli::try_parse_from(["ccmux", "events", "--timeout", "500ms"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "events", "--timeout", "500ms"]).unwrap();
         match cli.command {
             Some(IpcCommand::Events { timeout, .. }) => {
                 let d: std::time::Duration = timeout.expect("timeout").into();
@@ -834,14 +834,14 @@ mod tests {
 
     #[test]
     fn events_to_request_is_subscribe() {
-        let cli = Cli::try_parse_from(["ccmux", "events", "--count", "3"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "events", "--count", "3"]).unwrap();
         let req = cli.command.unwrap().to_request().unwrap();
         assert!(matches!(req, crate::ipc::Request::Subscribe));
     }
 
     #[test]
     fn parses_inspect_focused_default() {
-        let cli = Cli::try_parse_from(["ccmux", "inspect"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "inspect"]).unwrap();
         match cli.command {
             Some(IpcCommand::Inspect {
                 name,
@@ -863,7 +863,7 @@ mod tests {
     #[test]
     fn parses_inspect_with_name_lines_cursor() {
         let cli = Cli::try_parse_from([
-            "ccmux",
+            "renga",
             "inspect",
             "--name",
             "worker-foo",
@@ -890,7 +890,7 @@ mod tests {
     #[test]
     fn inspect_to_request_preserves_fields() {
         let cli =
-            Cli::try_parse_from(["ccmux", "inspect", "--id", "7", "--lines", "2", "--cursor"])
+            Cli::try_parse_from(["renga", "inspect", "--id", "7", "--lines", "2", "--cursor"])
                 .unwrap();
         let req = cli.command.unwrap().to_request().unwrap();
         match req {
@@ -909,25 +909,25 @@ mod tests {
 
     #[test]
     fn parses_ime_mode_off() {
-        let cli = Cli::try_parse_from(["ccmux", "--ime", "off"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "--ime", "off"]).unwrap();
         assert_eq!(cli.ime, Some(crate::config::ImeMode::Off));
     }
 
     #[test]
     fn parses_ime_mode_hotkey() {
-        let cli = Cli::try_parse_from(["ccmux", "--ime", "hotkey"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "--ime", "hotkey"]).unwrap();
         assert_eq!(cli.ime, Some(crate::config::ImeMode::Hotkey));
     }
 
     #[test]
     fn rejects_ime_mode_always() {
         // `always` was removed — clap must reject the value.
-        assert!(Cli::try_parse_from(["ccmux", "--ime", "always"]).is_err());
+        assert!(Cli::try_parse_from(["renga", "--ime", "always"]).is_err());
     }
 
     #[test]
     fn rejects_unknown_ime_mode() {
-        let err = Cli::try_parse_from(["ccmux", "--ime", "banana"]).unwrap_err();
+        let err = Cli::try_parse_from(["renga", "--ime", "banana"]).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("banana") || msg.contains("invalid value") || msg.contains("possible"),
@@ -937,53 +937,53 @@ mod tests {
 
     #[test]
     fn ime_flag_is_optional() {
-        let cli = Cli::try_parse_from(["ccmux"]).unwrap();
+        let cli = Cli::try_parse_from(["renga"]).unwrap();
         assert_eq!(cli.ime, None);
     }
 
     #[test]
     fn ime_freeze_panes_defaults_to_none() {
-        let cli = Cli::try_parse_from(["ccmux"]).unwrap();
+        let cli = Cli::try_parse_from(["renga"]).unwrap();
         assert_eq!(cli.ime_freeze_panes, None);
     }
 
     #[test]
     fn ime_freeze_panes_bare_flag_means_true() {
-        let cli = Cli::try_parse_from(["ccmux", "--ime-freeze-panes"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "--ime-freeze-panes"]).unwrap();
         assert_eq!(cli.ime_freeze_panes, Some(true));
     }
 
     #[test]
     fn ime_freeze_panes_explicit_false_overrides_config() {
-        let cli = Cli::try_parse_from(["ccmux", "--ime-freeze-panes=false"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "--ime-freeze-panes=false"]).unwrap();
         assert_eq!(cli.ime_freeze_panes, Some(false));
     }
 
     #[test]
     fn ime_overlay_catchup_ms_defaults_to_none() {
-        let cli = Cli::try_parse_from(["ccmux"]).unwrap();
+        let cli = Cli::try_parse_from(["renga"]).unwrap();
         assert_eq!(cli.ime_overlay_catchup_ms, None);
     }
 
     #[test]
     fn parses_ime_overlay_catchup_ms_override() {
-        let cli = Cli::try_parse_from(["ccmux", "--ime-overlay-catchup-ms", "3000"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "--ime-overlay-catchup-ms", "3000"]).unwrap();
         assert_eq!(cli.ime_overlay_catchup_ms, Some(3000));
     }
 
     #[test]
     fn lang_defaults_to_none() {
-        let cli = Cli::try_parse_from(["ccmux"]).unwrap();
+        let cli = Cli::try_parse_from(["renga"]).unwrap();
         assert_eq!(cli.lang, None);
     }
 
     #[test]
     fn parses_lang_auto_ja_en() {
-        let cli = Cli::try_parse_from(["ccmux", "--lang", "auto"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "--lang", "auto"]).unwrap();
         assert_eq!(cli.lang, Some(crate::i18n::UiLang::Auto));
-        let cli = Cli::try_parse_from(["ccmux", "--lang", "ja"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "--lang", "ja"]).unwrap();
         assert_eq!(cli.lang, Some(crate::i18n::UiLang::Ja));
-        let cli = Cli::try_parse_from(["ccmux", "--lang", "en"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "--lang", "en"]).unwrap();
         assert_eq!(cli.lang, Some(crate::i18n::UiLang::En));
     }
 
@@ -992,21 +992,21 @@ mod tests {
         // `ignore_case = true` on the clap attr — a user typing
         // `--lang JA` shouldn't hit a parse error that would kill
         // startup.
-        let cli = Cli::try_parse_from(["ccmux", "--lang", "JA"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "--lang", "JA"]).unwrap();
         assert_eq!(cli.lang, Some(crate::i18n::UiLang::Ja));
-        let cli = Cli::try_parse_from(["ccmux", "--lang", "En"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "--lang", "En"]).unwrap();
         assert_eq!(cli.lang, Some(crate::i18n::UiLang::En));
     }
 
     #[test]
     fn rejects_unknown_lang() {
-        assert!(Cli::try_parse_from(["ccmux", "--lang", "zh"]).is_err());
-        assert!(Cli::try_parse_from(["ccmux", "--lang", "banana"]).is_err());
+        assert!(Cli::try_parse_from(["renga", "--lang", "zh"]).is_err());
+        assert!(Cli::try_parse_from(["renga", "--lang", "banana"]).is_err());
     }
 
     #[test]
     fn min_pane_size_defaults_to_20_and_5() {
-        let cli = Cli::try_parse_from(["ccmux"]).unwrap();
+        let cli = Cli::try_parse_from(["renga"]).unwrap();
         assert_eq!(cli.min_pane_width, 20);
         assert_eq!(cli.min_pane_height, 5);
     }
@@ -1016,13 +1016,13 @@ mod tests {
         // Non-zero override is stored verbatim; the runtime clamp of
         // `0 → 1` lives in `App::set_min_pane_size`, not in clap, so
         // this parses without error.
-        let cli = Cli::try_parse_from(["ccmux", "--min-pane-width", "0", "--min-pane-height", "3"])
+        let cli = Cli::try_parse_from(["renga", "--min-pane-width", "0", "--min-pane-height", "3"])
             .unwrap();
         assert_eq!(cli.min_pane_width, 0);
         assert_eq!(cli.min_pane_height, 3);
 
         let cli2 =
-            Cli::try_parse_from(["ccmux", "--min-pane-width", "12", "--min-pane-height", "4"])
+            Cli::try_parse_from(["renga", "--min-pane-width", "12", "--min-pane-height", "4"])
                 .unwrap();
         assert_eq!(cli2.min_pane_width, 12);
         assert_eq!(cli2.min_pane_height, 4);
@@ -1030,28 +1030,28 @@ mod tests {
 
     #[test]
     fn macos_tip_flags_default_to_false() {
-        let cli = Cli::try_parse_from(["ccmux"]).unwrap();
+        let cli = Cli::try_parse_from(["renga"]).unwrap();
         assert!(!cli.no_macos_tip);
         assert!(!cli.show_macos_tip);
     }
 
     #[test]
     fn parses_no_macos_tip_flag() {
-        let cli = Cli::try_parse_from(["ccmux", "--no-macos-tip"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "--no-macos-tip"]).unwrap();
         assert!(cli.no_macos_tip);
         assert!(!cli.show_macos_tip);
     }
 
     #[test]
     fn parses_show_macos_tip_flag() {
-        let cli = Cli::try_parse_from(["ccmux", "--show-macos-tip"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "--show-macos-tip"]).unwrap();
         assert!(cli.show_macos_tip);
         assert!(!cli.no_macos_tip);
     }
 
     #[test]
     fn macos_tip_flags_are_mutually_exclusive() {
-        let err = Cli::try_parse_from(["ccmux", "--show-macos-tip", "--no-macos-tip"]);
+        let err = Cli::try_parse_from(["renga", "--show-macos-tip", "--no-macos-tip"]);
         assert!(err.is_err(), "flags should conflict");
     }
 
@@ -1062,7 +1062,7 @@ mod tests {
         // no-op. Runtime short-circuit behavior is enforced by the
         // early-return in `main.rs::run_ipc_client` and is not covered
         // by this parse-level test.
-        let cli = Cli::try_parse_from(["ccmux", "events", "--count", "0"]).unwrap();
+        let cli = Cli::try_parse_from(["renga", "events", "--count", "0"]).unwrap();
         match cli.command {
             Some(IpcCommand::Events { count, .. }) => {
                 assert_eq!(count, Some(0));

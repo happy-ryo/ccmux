@@ -1,34 +1,34 @@
-//! `ccmux mcp-peer` — the stdio MCP server Claude Code spawns per pane.
+//! `renga mcp-peer` — the stdio MCP server Claude Code spawns per pane.
 //!
 //! Stage 3 of issue #97: the real implementation that replaces
-//! `src/bin/ccmux-mcp-peer-spike.rs`. Where the spike looped messages
-//! back to the same Claude, this module routes them through ccmux's
+//! `src/bin/renga-mcp-peer-spike.rs`. Where the spike looped messages
+//! back to the same Claude, this module routes them through renga's
 //! existing IPC server so a message sent from pane A shows up in pane
-//! B's context as a `<channel source="ccmux-peers">` tag — provided
-//! both panes live in the same ccmux tab.
+//! B's context as a `<channel source="renga-peers">` tag — provided
+//! both panes live in the same renga tab.
 //!
 //! # Lifecycle
 //!
-//! 1. Claude Code spawns `ccmux mcp-peer` as a stdio subprocess. The
-//!    PTY env published by ccmux (`CCMUX_PANE_ID`, `CCMUX_SOCKET`,
-//!    `CCMUX_TOKEN`) is inherited all the way down.
+//! 1. Claude Code spawns `renga mcp-peer` as a stdio subprocess. The
+//!    PTY env published by renga (`RENGA_PANE_ID`, `RENGA_SOCKET`,
+//!    `RENGA_TOKEN`) is inherited all the way down.
 //! 2. [`run`] negotiates the MCP `initialize` handshake, declares the
 //!    `claude/channel` experimental capability, and spawns a background
-//!    thread that subscribes to ccmux's event bus.
+//!    thread that subscribes to renga's event bus.
 //! 3. Inbound `Request::PeerSend` deliveries land on the event bus as
 //!    [`crate::ipc::Event::PeerInbox`]. The background thread filters
-//!    on `target_pane == our CCMUX_PANE_ID` and pushes a
+//!    on `target_pane == our RENGA_PANE_ID` and pushes a
 //!    `notifications/claude/channel` frame to stdout — the only thing
 //!    that makes peer messages show up as a channel tag instead of an
 //!    ordinary tool result.
 //!
-//! # Outside-ccmux fallback
+//! # Outside-renga fallback
 //!
-//! If `CCMUX_PANE_ID` is absent (Claude was launched from a terminal
-//! ccmux didn't spawn), the module still handshakes and advertises the
+//! If `RENGA_PANE_ID` is absent (Claude was launched from a terminal
+//! renga didn't spawn), the module still handshakes and advertises the
 //! tools — they just return empty/no-op results. This keeps the stdio
 //! MCP installed globally in `~/.claude/mcp_servers.json` from erroring
-//! out every time Claude starts outside ccmux.
+//! out every time Claude starts outside renga.
 
 pub mod install;
 
@@ -45,15 +45,15 @@ use crate::app::CLAUDE_PEER_LAUNCH_CMD;
 use crate::ipc::endpoint::{endpoint_from_env, EndpointName, ENV_SOCKET};
 use crate::ipc::{self, client, Direction, PaneInfo, PaneRef, PeerInfo, Request, Response};
 
-const SERVER_NAME: &str = "ccmux-peers";
+const SERVER_NAME: &str = "renga-peers";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
-const ENV_PANE_ID: &str = "CCMUX_PANE_ID";
+const ENV_PANE_ID: &str = "RENGA_PANE_ID";
 
 fn log_stderr(msg: &str) {
-    eprintln!("[ccmux-mcp-peer] {msg}");
+    eprintln!("[renga-mcp-peer] {msg}");
 }
 
-/// Entry point called by `ccmux mcp-peer`. Blocks on stdin until EOF
+/// Entry point called by `renga mcp-peer`. Blocks on stdin until EOF
 /// or an unrecoverable error.
 pub fn run() -> Result<()> {
     log_stderr(&format!("starting {SERVER_NAME} v{SERVER_VERSION}"));
@@ -74,7 +74,7 @@ pub fn run() -> Result<()> {
 
 /// Runtime context shared between the main stdio loop and the inbox
 /// subscriber thread. Cloneable because both halves read the same
-/// `(pane_id, endpoint)` pair to contact the ccmux server and the
+/// `(pane_id, endpoint)` pair to contact the renga server and the
 /// same [`EventSink`] for `poll_events` buffering.
 #[derive(Clone)]
 struct PeerCtx {
@@ -138,14 +138,14 @@ fn new_event_sink() -> EventSink {
 
 #[derive(Clone)]
 enum Mode {
-    /// Running inside a ccmux pane with a reachable IPC endpoint.
+    /// Running inside a renga pane with a reachable IPC endpoint.
     Connected {
         pane_id: usize,
         endpoint: EndpointName,
     },
-    /// Missing `CCMUX_PANE_ID` or `CCMUX_SOCKET`. Tools still respond
+    /// Missing `RENGA_PANE_ID` or `RENGA_SOCKET`. Tools still respond
     /// but with empty/no-op payloads so `claude` launched outside
-    /// ccmux doesn't log MCP errors on startup.
+    /// renga doesn't log MCP errors on startup.
     Detached { reason: String },
 }
 
@@ -168,7 +168,7 @@ impl PeerCtx {
                 return PeerCtx {
                     mode: Mode::Detached {
                         reason: format!(
-                            "{ENV_PANE_ID} not set — Claude Code was not launched by ccmux"
+                            "{ENV_PANE_ID} not set — Claude Code was not launched by renga"
                         ),
                     },
                     events,
@@ -223,7 +223,7 @@ fn tool_text_result(text: &str) -> Value {
 // ── channel notification (the whole point of #97) ─────────────
 
 /// Build the `notifications/claude/channel` push that makes a peer
-/// message show up as `<channel source="ccmux-peers">...</channel>`
+/// message show up as `<channel source="renga-peers">...</channel>`
 /// in the receiver's context. The `source=` attribute is derived by
 /// Claude Code from our `serverInfo.name`, not from this payload, so
 /// `params.meta` here only carries sender metadata.
@@ -255,20 +255,20 @@ fn now_ts_string() -> String {
 // ── MCP method handlers ───────────────────────────────────────
 
 fn instructions_blob() -> String {
-    "You are connected to the ccmux-peers network. Other Claude Code instances \
-running in the same ccmux tab can see you and send you messages.\n\n\
-IMPORTANT: When you receive a <channel source=\"ccmux-peers\" ...> message, RESPOND IMMEDIATELY. \
+    "You are connected to the renga-peers network. Other Claude Code instances \
+running in the same renga tab can see you and send you messages.\n\n\
+IMPORTANT: When you receive a <channel source=\"renga-peers\" ...> message, RESPOND IMMEDIATELY. \
 Do not wait until your current task is finished. Pause what you are doing, reply to the sender \
 using send_message, then resume your work. Treat incoming peer messages like a coworker tapping \
 you on the shoulder — answer right away, even if you're in the middle of something.\n\n\
 Read the from_id and from_name attributes to understand who sent the message. Reply by \
 calling send_message with their from_id.\n\n\
 Peer messaging tools:\n\
-- list_peers: Discover other Claude Code instances in the same ccmux tab.\n\
+- list_peers: Discover other Claude Code instances in the same renga tab.\n\
 - send_message: Send a message to another instance by peer ID or name.\n\
 - set_summary: (stub in v1) Set a 1-2 sentence summary of what you're working on.\n\
 - check_messages: Manually drain your inbox (fallback; channel push is the primary path).\n\n\
-Pane control tools (all scoped to the current ccmux tab, except new_tab which is the one \
+Pane control tools (all scoped to the current renga tab, except new_tab which is the one \
 cross-tab tool):\n\
 - list_panes: Inspect all panes in the current tab, including geometry and the focus flag.\n\
 - spawn_pane: Split an existing pane to create a new one. Optionally runs a startup command, \
@@ -278,7 +278,7 @@ inside `command` so the claude auto-upgrade keeps working.\n\
 - spawn_claude_pane: Higher-level convenience when the target process is Claude Code. Takes \
 structured `permission_mode` / `model` / `args[]` fields instead of a free-form command \
 string, and always enables the peer channel. Prefer this over `spawn_pane(command=\"claude ...\")` \
-for orchestrator flows — keeps Claude launch policy in ccmux instead of in every prompt.\n\
+for orchestrator flows — keeps Claude launch policy in renga instead of in every prompt.\n\
 - close_pane: Close a pane by id or name. Refuses when it's the last pane of the last tab.\n\
 - focus_pane: Move keyboard focus to another pane in the same tab.\n\
 - new_tab: Open a brand-new tab with a fresh pane and switch focus to it. Unlike the other \
@@ -301,10 +301,10 @@ not extend the long-poll: a non-matching event still returns early with events=[
 and an advanced cursor, so the caller should re-poll for the next window.\n\n\
 Launching Claude Code: prefer spawn_claude_pane for Claude launches — it takes structured \
 `permission_mode` / `model` / `args[]` fields, always enables the peer channel, and keeps \
-launch policy in ccmux so orchestrator prompts never have to synthesize shell-quoted command \
+launch policy in renga so orchestrator prompts never have to synthesize shell-quoted command \
 strings. For arbitrary shell commands (non-Claude), use spawn_pane / new_tab. When those \
 are asked to run a bare `claude` invocation the MCP still auto-upgrades it to the \
-peer-enabled form (`claude --dangerously-load-development-channels server:ccmux-peers`), but \
+peer-enabled form (`claude --dangerously-load-development-channels server:renga-peers`), but \
 spawn_claude_pane is the recommended API for agent harnesses.\n\n\
 IMPORTANT about pane control: these tools affect the user's live layout. Use them with \
 restraint — don't close or focus panes you don't own unless the user asked you to. When in \
@@ -316,21 +316,21 @@ fn tools_spec() -> Value {
     json!([
         {
             "name": "list_peers",
-            "description": "List other Claude Code / shell panes in the same ccmux tab. Each peer includes id, name (if assigned), role, and cwd.",
+            "description": "List other Claude Code / shell panes in the same renga tab. Each peer includes id, name (if assigned), role, and cwd.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "scope": {
                         "type": "string",
                         "enum": ["machine", "directory", "repo"],
-                        "description": "Accepted for wire-compat with claude-peers-mcp. ccmux always treats scope as the current tab; this parameter is ignored."
+                        "description": "Accepted for wire-compat with claude-peers-mcp. renga always treats scope as the current tab; this parameter is ignored."
                     }
                 }
             }
         },
         {
             "name": "send_message",
-            "description": "Send a message to another pane in the same ccmux tab. The recipient Claude Code instance sees it as a <channel source=\"ccmux-peers\"> tag, distinct from user input.",
+            "description": "Send a message to another pane in the same renga tab. The recipient Claude Code instance sees it as a <channel source=\"renga-peers\"> tag, distinct from user input.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -342,7 +342,7 @@ fn tools_spec() -> Value {
         },
         {
             "name": "set_summary",
-            "description": "Stub in v1 — accepted and dropped. ccmux uses pane name/role as the summary substitute. Kept on the tool list so the same claude-peers-mcp skill / prompt works here.",
+            "description": "Stub in v1 — accepted and dropped. renga uses pane name/role as the summary substitute. Kept on the tool list so the same claude-peers-mcp skill / prompt works here.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "summary": { "type": "string" } },
@@ -356,12 +356,12 @@ fn tools_spec() -> Value {
         },
         {
             "name": "list_panes",
-            "description": "List every pane in the current ccmux tab, with stable id, optional name, role, focused flag, and terminal geometry. Complements list_peers (which only returns other panes and hides geometry).",
+            "description": "List every pane in the current renga tab, with stable id, optional name, role, focused flag, and terminal geometry. Complements list_peers (which only returns other panes and hides geometry).",
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
             "name": "spawn_pane",
-            "description": "Split a pane to create a new one in the same ccmux tab. Returns the new pane's numeric id so you can address it from later tool calls. Refuses if the target is already at minimum size or the tab has hit its pane cap.",
+            "description": "Split a pane to create a new one in the same renga tab. Returns the new pane's numeric id so you can address it from later tool calls. Refuses if the target is already at minimum size or the tab has hit its pane cap.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -376,7 +376,7 @@ fn tools_spec() -> Value {
                     },
                     "command": {
                         "type": "string",
-                        "description": "Optional shell command to run in the new pane once the shell is ready (e.g. 'claude', 'cargo test'). A bare `claude` (or `claude <args>`) is auto-upgraded to the Alt+P form so the new instance joins the ccmux-peers network — you don't need to pass the --dangerously-load-development-channels flag yourself. If you pass that flag explicitly, it is left alone."
+                        "description": "Optional shell command to run in the new pane once the shell is ready (e.g. 'claude', 'cargo test'). A bare `claude` (or `claude <args>`) is auto-upgraded to the Alt+P form so the new instance joins the renga-peers network — you don't need to pass the --dangerously-load-development-channels flag yourself. If you pass that flag explicitly, it is left alone."
                     },
                     "name": {
                         "type": "string",
@@ -396,7 +396,7 @@ fn tools_spec() -> Value {
         },
         {
             "name": "spawn_claude_pane",
-            "description": "Higher-level convenience over `spawn_pane`: splits a pane and launches Claude Code with the ccmux-peers channel enabled by construction, so the orchestrating caller never has to synthesize the `--dangerously-load-development-channels server:ccmux-peers` flag. Structured fields (`permission_mode`, `model`) are rendered into the final command exactly once; extra `args[]` are appended after them. ccmux applies POSIX-style shell quoting for values that contain whitespace or shell metacharacters, targeting bash / zsh / Git Bash — values containing single quotes may not round-trip cleanly on PowerShell-fallback Windows hosts, so prefer alphanumerics + `_-./:@+%=` in structured values. Conflicting overrides inside `args[]` (--dangerously-load-development-channels / --permission-mode / --model) are rejected with `invalid-params` — use the structured fields instead. Pane creation semantics (split refusal, cwd validation, name / role attachment) match `spawn_pane`.",
+            "description": "Higher-level convenience over `spawn_pane`: splits a pane and launches Claude Code with the renga-peers channel enabled by construction, so the orchestrating caller never has to synthesize the `--dangerously-load-development-channels server:renga-peers` flag. Structured fields (`permission_mode`, `model`) are rendered into the final command exactly once; extra `args[]` are appended after them. renga applies POSIX-style shell quoting for values that contain whitespace or shell metacharacters, targeting bash / zsh / Git Bash — values containing single quotes may not round-trip cleanly on PowerShell-fallback Windows hosts, so prefer alphanumerics + `_-./:@+%=` in structured values. Conflicting overrides inside `args[]` (--dangerously-load-development-channels / --permission-mode / --model) are rejected with `invalid-params` — use the structured fields instead. Pane creation semantics (split refusal, cwd validation, name / role attachment) match `spawn_pane`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -423,7 +423,7 @@ fn tools_spec() -> Value {
                     },
                     "permission_mode": {
                         "type": "string",
-                        "description": "Rendered into the launch command as `--permission-mode <value>`. Typical values: 'default', 'acceptEdits', 'bypassPermissions', 'plan'. Not pre-validated against a fixed enum so new Claude permission modes work without a ccmux release."
+                        "description": "Rendered into the launch command as `--permission-mode <value>`. Typical values: 'default', 'acceptEdits', 'bypassPermissions', 'plan'. Not pre-validated against a fixed enum so new Claude permission modes work without a renga release."
                     },
                     "model": {
                         "type": "string",
@@ -440,7 +440,7 @@ fn tools_spec() -> Value {
         },
         {
             "name": "close_pane",
-            "description": "Close a pane in the current ccmux tab, terminating its process. Fails with code 'last_pane' when the target is the last pane of the only remaining tab.",
+            "description": "Close a pane in the current renga tab, terminating its process. Fails with code 'last_pane' when the target is the last pane of the only remaining tab.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -454,7 +454,7 @@ fn tools_spec() -> Value {
         },
         {
             "name": "focus_pane",
-            "description": "Move keyboard focus to another pane in the current ccmux tab. The focused pane is what the user's keystrokes go to, so use sparingly — yanking focus away from the user is disruptive.",
+            "description": "Move keyboard focus to another pane in the current renga tab. The focused pane is what the user's keystrokes go to, so use sparingly — yanking focus away from the user is disruptive.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -468,13 +468,13 @@ fn tools_spec() -> Value {
         },
         {
             "name": "new_tab",
-            "description": "Create a new ccmux tab with a fresh single pane. Focus switches to the new tab. Returns the new pane's numeric id.",
+            "description": "Create a new renga tab with a fresh single pane. Focus switches to the new tab. Returns the new pane's numeric id.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Optional shell command to run in the new pane once the shell is ready. A bare `claude` (or `claude <args>`) is auto-upgraded to the Alt+P peer-enabled form so the new instance joins the ccmux-peers network. If you pass --dangerously-load-development-channels explicitly, it is left alone."
+                        "description": "Optional shell command to run in the new pane once the shell is ready. A bare `claude` (or `claude <args>`) is auto-upgraded to the Alt+P peer-enabled form so the new instance joins the renga-peers network. If you pass --dangerously-load-development-channels explicitly, it is left alone."
                     },
                     "name": {
                         "type": "string",
@@ -490,14 +490,14 @@ fn tools_spec() -> Value {
                     },
                     "cwd": {
                         "type": "string",
-                        "description": "Optional working directory for the new tab's pane. Absolute paths are used as-is; relative paths are resolved against the caller pane's cwd. When omitted, the ccmux server's current cwd is used."
+                        "description": "Optional working directory for the new tab's pane. Absolute paths are used as-is; relative paths are resolved against the caller pane's cwd. When omitted, the renga server's current cwd is used."
                     }
                 }
             }
         },
         {
             "name": "inspect_pane",
-            "description": "Snapshot the visible screen of a pane in the current ccmux tab. Returns the rendered contents so you can detect interactive prompts (e.g. y/n confirmations), error banners, or mode indicators in another pane without asking its Claude. The `lines` option trims the response to the bottom N rows (blank rows preserved, useful for anchoring on a status bar). `format=\"grid\"` switches the text block to JSON with one row object per line; the full structured payload is always available in `structuredContent`.",
+            "description": "Snapshot the visible screen of a pane in the current renga tab. Returns the rendered contents so you can detect interactive prompts (e.g. y/n confirmations), error banners, or mode indicators in another pane without asking its Claude. The `lines` option trims the response to the bottom N rows (blank rows preserved, useful for anchoring on a status bar). `format=\"grid\"` switches the text block to JSON with one row object per line; the full structured payload is always available in `structuredContent`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -573,7 +573,7 @@ fn tools_spec() -> Value {
         },
         {
             "name": "poll_events",
-            "description": "Long-poll for pane lifecycle events (pane_started, pane_exited, events_dropped, and any forward-compatible variants). Returns events accumulated since the given cursor; if none are buffered, blocks up to `timeout_ms` for the next one. The first call (omit `since`) starts at \"right now\" — no historical replay, matching `ccmux events --timeout` semantics. Each response body is a JSON object with `next_since` (an opaque cursor string to pass back) and `events` (an array of event objects in ccmux's wire format).",
+            "description": "Long-poll for pane lifecycle events (pane_started, pane_exited, events_dropped, and any forward-compatible variants). Returns events accumulated since the given cursor; if none are buffered, blocks up to `timeout_ms` for the next one. The first call (omit `since`) starts at \"right now\" — no historical replay, matching `renga events --timeout` semantics. Each response body is a JSON object with `next_since` (an opaque cursor string to pass back) and `events` (an array of event objects in renga's wire format).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -627,7 +627,7 @@ fn handle_list_peers(id: &Value, ctx: &PeerCtx) -> Value {
             return ok_response(
                 id,
                 tool_text_result(&format!(
-                    "(no peers — ccmux not reachable from this Claude Code instance: {reason})"
+                    "(no peers — renga not reachable from this Claude Code instance: {reason})"
                 )),
             );
         }
@@ -640,10 +640,10 @@ fn handle_list_peers(id: &Value, ctx: &PeerCtx) -> Value {
         Ok(Response::Err { message, code }) => err_response(
             id,
             -32603,
-            &format!("ccmux refused list_peers: {}", fmt_code(&message, &code)),
+            &format!("renga refused list_peers: {}", fmt_code(&message, &code)),
         ),
-        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
-        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+        Ok(other) => err_response(id, -32603, &format!("unexpected renga response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("renga call failed: {e}")),
     }
 }
 
@@ -680,7 +680,7 @@ fn handle_send_message(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
             return ok_response(
                 id,
                 tool_text_result(&format!(
-                    "(message dropped — ccmux not reachable: {reason})"
+                    "(message dropped — renga not reachable: {reason})"
                 )),
             );
         }
@@ -703,10 +703,10 @@ fn handle_send_message(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
         Ok(Response::Err { message, code }) => err_response(
             id,
             -32603,
-            &format!("ccmux refused send: {}", fmt_code(&message, &code)),
+            &format!("renga refused send: {}", fmt_code(&message, &code)),
         ),
-        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
-        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+        Ok(other) => err_response(id, -32603, &format!("unexpected renga response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("renga call failed: {e}")),
     }
 }
 
@@ -728,7 +728,7 @@ fn handle_tools_call(id: &Value, params: &Value, ctx: &PeerCtx) -> Result<Value>
         "send_message" => handle_send_message(id, &args, ctx),
         "set_summary" => ok_response(
             id,
-            tool_text_result("Summary accepted (v1 stub: ccmux displays pane name / role)."),
+            tool_text_result("Summary accepted (v1 stub: renga displays pane name / role)."),
         ),
         "check_messages" => ok_response(
             id,
@@ -764,7 +764,7 @@ fn handle_tools_call(id: &Value, params: &Value, ctx: &PeerCtx) -> Result<Value>
 /// like `"-1"` and digit strings that overflow `usize` both resolve
 /// to `Name`. (Rust's `usize::from_str` accepts a leading `+`, so
 /// `"+3"` still parses as `Id(3)` — a quirk inherited from the
-/// stdlib, not a ccmux decision.) ccmux pane ids live in a small
+/// stdlib, not a renga decision.) renga pane ids live in a small
 /// fixed range (capped by `MAX_PANES`), so an overflow-sized "id"
 /// can't refer to a real pane either way — letting the server reply
 /// with `pane_not_found` on a bogus `Name` is indistinguishable from
@@ -808,8 +808,8 @@ fn opt_string(args: &Value, key: &str) -> Option<String> {
 /// Upgrade a bare `claude …` command to the peer-enabled invocation
 /// that Alt+P types into a pane. When the caller asks to spawn Claude
 /// Code without the `--dangerously-load-development-channels
-/// server:ccmux-peers` flag, the new instance can't see the peer
-/// network, which silently defeats half the reason ccmux wraps it.
+/// server:renga-peers` flag, the new instance can't see the peer
+/// network, which silently defeats half the reason renga wraps it.
 /// Injecting the flag at this seam keeps the MCP as a "launch Claude
 /// and have it join the network" affordance without making the LLM
 /// remember the exact incantation.
@@ -824,7 +824,7 @@ fn opt_string(args: &Value, key: &str) -> Option<String> {
 ///   unrelated command by accident.
 /// - Preserve the caller's trailing arguments: `"claude --resume"`
 ///   becomes `"claude --dangerously-load-development-channels
-///   server:ccmux-peers --resume"`.
+///   server:renga-peers --resume"`.
 pub(crate) fn upgrade_claude_command(cmd: &str) -> String {
     if cmd.contains("--dangerously-load-development-channels") {
         return cmd.to_string();
@@ -844,7 +844,7 @@ pub(crate) fn upgrade_claude_command(cmd: &str) -> String {
 }
 
 /// Require `Mode::Connected`, otherwise respond with a user-visible
-/// "ccmux unreachable" text result (not a JSON-RPC error, so Claude
+/// "renga unreachable" text result (not a JSON-RPC error, so Claude
 /// surfaces the explanation to the user instead of treating the tool
 /// as broken).
 fn require_connected<'a>(
@@ -857,7 +857,7 @@ fn require_connected<'a>(
         Mode::Detached { reason } => Err(ok_response(
             id,
             tool_text_result(&format!(
-                "(cannot {action} — ccmux not reachable: {reason})"
+                "(cannot {action} — renga not reachable: {reason})"
             )),
         )),
     }
@@ -876,10 +876,10 @@ fn handle_list_panes(id: &Value, ctx: &PeerCtx) -> Value {
         Ok(Response::Err { message, code }) => err_response(
             id,
             -32603,
-            &format!("ccmux refused list_panes: {}", fmt_code(&message, &code)),
+            &format!("renga refused list_panes: {}", fmt_code(&message, &code)),
         ),
-        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
-        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+        Ok(other) => err_response(id, -32603, &format!("unexpected renga response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("renga call failed: {e}")),
     }
 }
 
@@ -940,7 +940,7 @@ fn resolve_mcp_cwd(
     // Snapshot semantics: we resolve against whatever cwd the server
     // knows at this instant, which is driven by OSC 7 updates from the
     // pane's shell. If the shell has `cd`-ed but the update hasn't
-    // reached ccmux yet, the resolution uses the stale value. Callers
+    // reached renga yet, the resolution uses the stale value. Callers
     // that need strict ordering should send an absolute path instead
     // of trusting "current" cwd.
     let panes: Vec<PaneInfo> = match client::send_request(endpoint, &Request::List) {
@@ -952,7 +952,7 @@ fn resolve_mcp_cwd(
                 fmt_code(&message, &code)
             ));
         }
-        Ok(other) => return Err(format!("unexpected ccmux response: {other:?}")),
+        Ok(other) => return Err(format!("unexpected renga response: {other:?}")),
         Err(e) => return Err(format!("list panes to resolve cwd: {e}")),
     };
     let base = panes
@@ -1012,10 +1012,10 @@ fn handle_spawn_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
         Ok(Response::Err { message, code }) => err_response(
             id,
             -32603,
-            &format!("ccmux refused spawn_pane: {}", fmt_code(&message, &code)),
+            &format!("renga refused spawn_pane: {}", fmt_code(&message, &code)),
         ),
-        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
-        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+        Ok(other) => err_response(id, -32603, &format!("unexpected renga response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("renga call failed: {e}")),
     }
 }
 
@@ -1031,7 +1031,7 @@ const CLAUDE_RESERVED_FLAGS: &[&str] = &[
     "--model",
 ];
 
-/// POSIX-style shell quoting targeted at the shells `ccmux` actually
+/// POSIX-style shell quoting targeted at the shells `renga` actually
 /// runs Claude under on the agent-harness path: bash / zsh / sh on
 /// Unix, Git Bash on Windows (the default when present).
 ///
@@ -1080,7 +1080,7 @@ fn shell_quote(value: &str) -> String {
 
 /// Build the final `claude` launch command for `spawn_claude_pane`.
 /// Order (matches the issue #137 spec):
-///   1. `claude --dangerously-load-development-channels server:ccmux-peers`
+///   1. `claude --dangerously-load-development-channels server:renga-peers`
 ///   2. `--permission-mode <permission_mode>` if present
 ///   3. `--model <model>` if present
 ///   4. caller-supplied `args[]`
@@ -1222,12 +1222,12 @@ fn handle_spawn_claude_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
             id,
             -32603,
             &format!(
-                "ccmux refused spawn_claude_pane: {}",
+                "renga refused spawn_claude_pane: {}",
                 fmt_code(&message, &code)
             ),
         ),
-        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
-        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+        Ok(other) => err_response(id, -32603, &format!("unexpected renga response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("renga call failed: {e}")),
     }
 }
 
@@ -1257,10 +1257,10 @@ fn handle_close_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
         Ok(Response::Err { message, code }) => err_response(
             id,
             -32603,
-            &format!("ccmux refused close_pane: {}", fmt_code(&message, &code)),
+            &format!("renga refused close_pane: {}", fmt_code(&message, &code)),
         ),
-        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
-        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+        Ok(other) => err_response(id, -32603, &format!("unexpected renga response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("renga call failed: {e}")),
     }
 }
 
@@ -1290,10 +1290,10 @@ fn handle_focus_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
         Ok(Response::Err { message, code }) => err_response(
             id,
             -32603,
-            &format!("ccmux refused focus_pane: {}", fmt_code(&message, &code)),
+            &format!("renga refused focus_pane: {}", fmt_code(&message, &code)),
         ),
-        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
-        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+        Ok(other) => err_response(id, -32603, &format!("unexpected renga response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("renga call failed: {e}")),
     }
 }
 
@@ -1338,10 +1338,10 @@ fn handle_new_tab(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
         Ok(Response::Err { message, code }) => err_response(
             id,
             -32603,
-            &format!("ccmux refused new_tab: {}", fmt_code(&message, &code)),
+            &format!("renga refused new_tab: {}", fmt_code(&message, &code)),
         ),
-        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
-        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+        Ok(other) => err_response(id, -32603, &format!("unexpected renga response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("renga call failed: {e}")),
     }
 }
 
@@ -1422,12 +1422,12 @@ fn handle_set_pane_identity(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
             id,
             -32603,
             &format!(
-                "ccmux refused set_pane_identity: {}",
+                "renga refused set_pane_identity: {}",
                 fmt_code(&message, &code)
             ),
         ),
-        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
-        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+        Ok(other) => err_response(id, -32603, &format!("unexpected renga response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("renga call failed: {e}")),
     }
 }
 
@@ -1437,7 +1437,7 @@ fn handle_set_pane_identity(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
 /// the pane's terminal height (< 1000 under any sane desktop), but
 /// accept a generous ceiling so callers can request "everything I can
 /// possibly see" without hand-tuning. Values above this are clamped
-/// silently to match how `ccmux inspect --lines` treats oversized
+/// silently to match how `renga inspect --lines` treats oversized
 /// requests.
 const INSPECT_MAX_LINES: u64 = 10_000;
 
@@ -1532,10 +1532,10 @@ fn handle_inspect_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
         Ok(Response::Err { message, code }) => err_response(
             id,
             -32603,
-            &format!("ccmux refused inspect_pane: {}", fmt_code(&message, &code)),
+            &format!("renga refused inspect_pane: {}", fmt_code(&message, &code)),
         ),
-        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
-        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+        Ok(other) => err_response(id, -32603, &format!("unexpected renga response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("renga call failed: {e}")),
     }
 }
 
@@ -1551,14 +1551,14 @@ fn handle_inspect_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
 /// (y/n answers, Shift+Tab for Claude Code's Plan → AcceptEdits
 /// toggle, Esc, arrow keys for menus, Ctrl+<letter> for signalling).
 /// Escape sequences match xterm's default mode (no application-cursor
-/// quirks) since that is what ccmux's vt100 parser speaks.
+/// quirks) since that is what renga's vt100 parser speaks.
 fn translate_key(name: &str) -> Option<String> {
     let trimmed = name.trim();
     match trimmed {
         // Raw-mode TUIs read bytes directly from the PTY — including
         // Claude Code, which is the prime target here — so Enter must
         // be carriage return (CR, 0x0D), not line feed. This matches
-        // what ccmux's own `Request::Send { append_enter: true }`
+        // what renga's own `Request::Send { append_enter: true }`
         // writes on the send path.
         "Enter" | "Return" => return Some("\r".into()),
         "Tab" => return Some("\t".into()),
@@ -1616,7 +1616,7 @@ fn build_send_keys_payload(
     if append_enter {
         // Mirror the Enter key mapping above: raw-mode TUIs want CR,
         // not LF. Using \r here also keeps this path byte-identical
-        // to `Request::Send { append_enter: true }` in ccmux itself,
+        // to `Request::Send { append_enter: true }` in renga itself,
         // so callers don't have to reason about two Enter dialects.
         buffer.push('\r');
     }
@@ -1674,10 +1674,10 @@ fn handle_send_keys(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
         Ok(Response::Err { message, code }) => err_response(
             id,
             -32603,
-            &format!("ccmux refused send_keys: {}", fmt_code(&message, &code)),
+            &format!("renga refused send_keys: {}", fmt_code(&message, &code)),
         ),
-        Ok(other) => err_response(id, -32603, &format!("unexpected ccmux response: {other:?}")),
-        Err(e) => err_response(id, -32603, &format!("ccmux call failed: {e}")),
+        Ok(other) => err_response(id, -32603, &format!("unexpected renga response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("renga call failed: {e}")),
     }
 }
 
@@ -1902,10 +1902,10 @@ fn stdio_loop(ctx: &PeerCtx) -> Result<()> {
 
 // ── event bus subscriber (background thread) ──────────────────
 
-/// Subscribe to ccmux's event bus and push any [`ipc::Event::PeerInbox`]
+/// Subscribe to renga's event bus and push any [`ipc::Event::PeerInbox`]
 /// whose `target_pane` matches our own pane id as a
 /// `notifications/claude/channel` frame on stdout. The thread is
-/// detached — it dies naturally when the IPC stream closes (ccmux
+/// detached — it dies naturally when the IPC stream closes (renga
 /// exited) or when the subprocess is killed.
 fn spawn_inbox_subscriber(ctx: PeerCtx) {
     let Mode::Connected { pane_id, endpoint } = ctx.mode.clone() else {
@@ -1914,7 +1914,7 @@ fn spawn_inbox_subscriber(ctx: PeerCtx) {
     let endpoint_clone = endpoint.clone();
     let sink = ctx.events.clone();
     thread::Builder::new()
-        .name("ccmux-mcp-peer-inbox".into())
+        .name("renga-mcp-peer-inbox".into())
         .spawn(move || {
             let result = client::subscribe_events(&endpoint_clone, |event| {
                 // Buffer lifecycle events for `poll_events` before we
@@ -1968,10 +1968,10 @@ fn spawn_inbox_subscriber(ctx: PeerCtx) {
                         ));
                         let note = channel_notification(
                             &format!(
-                                "ccmux event bus dropped {count} event(s) before they reached this Claude Code instance. A peer message may have been lost — consider asking the sender to retry."
+                                "renga event bus dropped {count} event(s) before they reached this Claude Code instance. A peer message may have been lost — consider asking the sender to retry."
                             ),
-                            "ccmux",
-                            Some("ccmux runtime"),
+                            "renga",
+                            Some("renga runtime"),
                         );
                         if let Err(e) = write_frame(&note) {
                             log_stderr(&format!("failed to push drop notice: {e}"));
@@ -2073,7 +2073,7 @@ mod tests {
     fn upgrade_claude_command_bare_claude_becomes_peer_enabled() {
         assert_eq!(
             upgrade_claude_command("claude"),
-            "claude --dangerously-load-development-channels server:ccmux-peers"
+            "claude --dangerously-load-development-channels server:renga-peers"
         );
     }
 
@@ -2083,14 +2083,14 @@ mod tests {
         // peer-channel flag is inserted right after the `claude` token.
         let got = upgrade_claude_command("claude --resume");
         assert_eq!(
-            got, "claude --dangerously-load-development-channels server:ccmux-peers --resume",
+            got, "claude --dangerously-load-development-channels server:renga-peers --resume",
             "got {got:?}"
         );
     }
 
     #[test]
     fn upgrade_claude_command_noop_when_flag_already_present() {
-        let already = "claude --dangerously-load-development-channels server:ccmux-peers --resume";
+        let already = "claude --dangerously-load-development-channels server:renga-peers --resume";
         assert_eq!(upgrade_claude_command(already), already);
         // A non-standard channel target the user may have hand-picked
         // must also pass through untouched.
@@ -2127,7 +2127,7 @@ mod tests {
         // surprising rewrite.
         assert_eq!(
             upgrade_claude_command("  claude --resume"),
-            "  claude --dangerously-load-development-channels server:ccmux-peers --resume"
+            "  claude --dangerously-load-development-channels server:renga-peers --resume"
         );
     }
 
@@ -2299,10 +2299,10 @@ mod tests {
     fn build_claude_launch_command_always_includes_peer_channel_flag() {
         // Regression guard: any future refactor of the ordering must
         // keep the peer-channel flag at the front so Claude joins
-        // ccmux-peers even when permission_mode / model are unset.
+        // renga-peers even when permission_mode / model are unset.
         let got = build_claude_launch_command(None, None, &["--resume".to_string()]);
         assert!(
-            got.contains("--dangerously-load-development-channels server:ccmux-peers"),
+            got.contains("--dangerously-load-development-channels server:renga-peers"),
             "peer-channel flag missing: {got}"
         );
     }
@@ -2377,7 +2377,7 @@ mod tests {
     fn shell_quote_wraps_shell_metacharacters() {
         // `$`, `*`, `` ` ``, `;` etc must not be left bare — even if
         // no expansion target exists today, letting them through makes
-        // the command re-parseable and breaks the "ccmux owns quoting"
+        // the command re-parseable and breaks the "renga owns quoting"
         // contract that spawn_claude_pane documents.
         assert!(shell_quote("foo$bar").starts_with('\''));
         assert!(shell_quote("foo;bar").starts_with('\''));
@@ -2423,7 +2423,7 @@ mod tests {
     #[test]
     fn spawn_claude_pane_accepts_empty_args_array() {
         // `args: []` is a legitimate "I have no extra args" payload —
-        // the handler must not reject it, and must still call ccmux.
+        // the handler must not reject it, and must still call renga.
         // We can't reach the full IPC path without a server, so we
         // settle for: `build_claude_launch_command` handles empty
         // extra_args cleanly, mirroring what the handler forwards.
@@ -2487,7 +2487,7 @@ mod tests {
     #[test]
     fn spawn_claude_pane_rejects_reserved_flag_in_args() {
         // End-to-end: the dispatcher must catch reserved flags before
-        // touching ccmux IPC, so the rejection happens even when the
+        // touching renga IPC, so the rejection happens even when the
         // server is fully reachable.
         let ctx = connected_ctx_with(Arc::new((
             Mutex::new(EventBuffer::default()),
@@ -2574,13 +2574,13 @@ mod tests {
 
     #[test]
     fn detached_mode_surfaces_friendly_text_instead_of_error() {
-        // When CCMUX_PANE_ID/CCMUX_SOCKET are missing, pane-control
+        // When RENGA_PANE_ID/RENGA_SOCKET are missing, pane-control
         // tools must still return a Response::Ok with explanatory text
         // rather than a JSON-RPC error, so Claude can relay the reason
         // to the user instead of treating the tool as broken.
         let ctx = PeerCtx {
             mode: Mode::Detached {
-                reason: "CCMUX_PANE_ID not set".to_string(),
+                reason: "RENGA_PANE_ID not set".to_string(),
             },
             events: new_event_sink(),
         };
@@ -2598,7 +2598,7 @@ mod tests {
             .and_then(|v| v.as_str())
             .unwrap_or("");
         assert!(
-            text.contains("ccmux not reachable"),
+            text.contains("renga not reachable"),
             "missing explanation in {text:?}"
         );
     }
@@ -2606,7 +2606,7 @@ mod tests {
     #[test]
     fn close_pane_rejects_empty_target_argument() {
         // Even with a live ctx, close_pane must refuse an empty target
-        // at the tool layer without round-tripping to ccmux, so
+        // at the tool layer without round-tripping to renga, so
         // Claude gets an immediate JSON-RPC -32602 it can retry with a
         // real id.
         let ctx = PeerCtx {
@@ -2651,7 +2651,7 @@ mod tests {
 
     #[test]
     fn spawn_pane_rejects_missing_direction() {
-        // `spawn_pane` validates direction before touching ccmux, so a
+        // `spawn_pane` validates direction before touching renga, so a
         // missing or unknown value must come back as -32602 even when
         // no server is reachable.
         let ctx = PeerCtx {
@@ -2777,7 +2777,7 @@ mod tests {
 
     #[test]
     fn inspect_grid_block_falls_back_to_text_when_lines_missing() {
-        // Forward-compat: if a future ccmux server returns only `text`
+        // Forward-compat: if a future renga server returns only `text`
         // without `lines`, we still surface something useful instead of
         // an empty string that looks like "nothing to see".
         let payload = json!({ "text": "only-text" });
@@ -2827,10 +2827,10 @@ mod tests {
     #[test]
     fn handle_inspect_pane_detached_surfaces_friendly_text() {
         // Detached mode must not error; instead return the standard
-        // "ccmux not reachable" text so Claude can relay it to the user.
+        // "renga not reachable" text so Claude can relay it to the user.
         let ctx = PeerCtx {
             mode: Mode::Detached {
-                reason: "CCMUX_PANE_ID not set".into(),
+                reason: "RENGA_PANE_ID not set".into(),
             },
             events: new_event_sink(),
         };
@@ -2841,7 +2841,7 @@ mod tests {
             .and_then(|v| v.as_str())
             .unwrap_or("");
         assert!(
-            text.contains("ccmux not reachable"),
+            text.contains("renga not reachable"),
             "missing explanation in {text:?}"
         );
     }
@@ -2978,12 +2978,12 @@ mod tests {
         // EventSink, so the actual value doesn't matter.
         #[cfg(windows)]
         {
-            crate::ipc::endpoint::EndpointName::pipe("ccmux-test-endpoint")
+            crate::ipc::endpoint::EndpointName::pipe("renga-test-endpoint")
         }
         #[cfg(unix)]
         {
             crate::ipc::endpoint::EndpointName::socket(std::path::PathBuf::from(
-                "ccmux-test-endpoint",
+                "renga-test-endpoint",
             ))
         }
     }
@@ -3087,7 +3087,7 @@ mod tests {
     fn handle_send_keys_detached_surfaces_friendly_text() {
         let ctx = PeerCtx {
             mode: Mode::Detached {
-                reason: "CCMUX_PANE_ID not set".into(),
+                reason: "RENGA_PANE_ID not set".into(),
             },
             events: new_event_sink(),
         };
@@ -3102,7 +3102,7 @@ mod tests {
             .and_then(|v| v.as_str())
             .unwrap_or("");
         assert!(
-            text.contains("ccmux not reachable"),
+            text.contains("renga not reachable"),
             "expected friendly detached text, got {text:?}"
         );
     }
@@ -3354,7 +3354,7 @@ mod tests {
         // through handle_tools_call rather than falling through to
         // the unknown-tool arm. In detached mode, list_panes /
         // spawn_pane / close_pane / focus_pane / new_tab either emit
-        // the friendly "ccmux not reachable" text (result.isError =
+        // the friendly "renga not reachable" text (result.isError =
         // false) or the -32602 we already test for; none of them
         // should ever surface a -32601 "unknown tool" here.
         let ctx = PeerCtx {

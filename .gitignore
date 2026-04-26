@@ -10,6 +10,6 @@ image copy 2.png
 /lp-*.png
 
 # Platform-specific binaries fetched by npm postinstall
-/npm/bin/ccmux
-/npm/bin/ccmux.exe
+/npm/bin/renga
+/npm/bin/renga.exe
 .claude/scheduled_tasks.lock

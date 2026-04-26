@@ -533,11 +533,11 @@ mod tests {
     #[test]
     fn test_encode_cwd_japanese() {
         // Claude encodes non-ASCII chars as dashes too
-        let path = PathBuf::from("C:\\Users\\じゅぶ\\dev\\ccmux");
+        let path = PathBuf::from("C:\\Users\\じゅぶ\\dev\\renga");
         let encoded = encode_cwd_to_project_name(&path);
         // C : \ U s e r s \ じ ゅ ぶ \ d e v \ c c m u x
-        // C - - Users    - - - - dev - ccmux
-        assert_eq!(encoded, "C--Users-----dev-ccmux");
+        // C - - Users    - - - - dev - renga
+        assert_eq!(encoded, "C--Users-----dev-renga");
     }
 
     #[test]

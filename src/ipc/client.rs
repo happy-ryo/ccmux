@@ -1,4 +1,4 @@
-//! IPC client: opens a short-lived connection to the running ccmux
+//! IPC client: opens a short-lived connection to the running renga
 //! instance, performs the [`Request::Hello`] handshake, then sends
 //! exactly one [`Request`] and reads exactly one [`Response`].
 //!
@@ -30,7 +30,7 @@ pub fn send_request(endpoint: &EndpointName, request: &Request) -> Result<Respon
     let request_clone = request.clone();
     let (tx, rx) = mpsc::channel();
     thread::Builder::new()
-        .name("ccmux-ipc-client".into())
+        .name("renga-ipc-client".into())
         .spawn(move || {
             let result = (|| -> Result<Response> {
                 let name = make_connection_name(&endpoint_clone)?;
@@ -45,7 +45,7 @@ pub fn send_request(endpoint: &EndpointName, request: &Request) -> Result<Respon
     match rx.recv_timeout(RESPONSE_TIMEOUT) {
         Ok(result) => result,
         Err(mpsc::RecvTimeoutError::Timeout) => Err(anyhow!(
-            "no response from ccmux within {:?} (endpoint: {})",
+            "no response from renga within {:?} (endpoint: {})",
             RESPONSE_TIMEOUT,
             name_string
         )),
@@ -156,7 +156,7 @@ where
             continue;
         }
         // Forward-compat: skip events whose `type` tag this client
-        // doesn't know about. A future ccmux server may emit new
+        // doesn't know about. A future renga server may emit new
         // Event variants, and older subscribers should tolerate them
         // rather than abort the whole stream.
         //
@@ -219,10 +219,10 @@ fn write_request_line<W: Write>(w: &mut W, req: &Request) -> Result<()> {
 }
 
 /// Compare the server-provided session token with the expected one
-/// that the parent ccmux published to `CCMUX_TOKEN`.
+/// that the parent renga published to `RENGA_TOKEN`.
 ///
-/// A mismatch means the `CCMUX_SOCKET` path we connected through points
-/// to a ccmux instance that doesn't own the current shell — most likely
+/// A mismatch means the `RENGA_SOCKET` path we connected through points
+/// to a renga instance that doesn't own the current shell — most likely
 /// the PID got re-used and a stale socket path was inherited. Refuse
 /// rather than silently deliver the command to the wrong process.
 ///
@@ -238,13 +238,13 @@ fn verify_session_token(server_token: &str, expected: Option<&str>) -> Result<()
                 Ok(())
             } else {
                 Err(anyhow!(
-                    "session token mismatch; {ENV_SOCKET} likely points to a different ccmux instance",
+                    "session token mismatch; {ENV_SOCKET} likely points to a different renga instance",
                     ENV_SOCKET = super::endpoint::ENV_SOCKET
                 ))
             }
         }
         None => Err(anyhow!(
-            "{ENV_TOKEN} not set; are you running inside ccmux?"
+            "{ENV_TOKEN} not set; are you running inside renga?"
         )),
     }
 }
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn verify_session_token_rejects_missing_env() {
         let err = verify_session_token("abc-123", None).unwrap_err();
-        assert!(err.to_string().contains("CCMUX_TOKEN"), "got: {err}");
+        assert!(err.to_string().contains("RENGA_TOKEN"), "got: {err}");
     }
 
     #[test]
