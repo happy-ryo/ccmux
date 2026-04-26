@@ -4,7 +4,7 @@ import { getPageMap } from 'nextra/page-map'
 import 'nextra-theme-docs/style.css'
 import './globals.css'
 
-const siteUrl = 'https://happy-ryo.github.io/ccmux/docs'
+const siteUrl = 'https://suisya-systems.github.io/renga/docs'
 
 export const metadata = {
   title: 'renga — Claude Code Multiplexer (fork)',
@@ -39,12 +39,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           navbar={
             <Navbar
               logo={logo}
-              projectLink="https://github.com/happy-ryo/ccmux"
+              projectLink="https://github.com/suisya-systems/renga"
             />
           }
           pageMap={await getPageMap()}
-          docsRepositoryBase="https://github.com/happy-ryo/ccmux/tree/main/docs"
-          footer={<Footer>MIT License · <a href="https://github.com/happy-ryo/ccmux" target="_blank" rel="noopener" style={{color: '#d97757'}}>renga</a>, a fork of <a href="https://github.com/Shin-sibainu/ccmux" target="_blank" rel="noopener" style={{color: '#d97757'}}>ccmux</a></Footer>}
+          docsRepositoryBase="https://github.com/suisya-systems/renga/tree/main/docs"
+          footer={<Footer>MIT License · <a href="https://github.com/suisya-systems/renga" target="_blank" rel="noopener" style={{color: '#d97757'}}>renga</a>, a fork of <a href="https://github.com/Shin-sibainu/ccmux" target="_blank" rel="noopener" style={{color: '#d97757'}}>ccmux</a></Footer>}
         >
           {children}
         </Layout>

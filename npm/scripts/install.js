@@ -4,7 +4,7 @@ const https = require('https');
 const crypto = require('crypto');
 
 const VERSION = require('../package.json').version;
-const REPO = 'happy-ryo/ccmux';
+const REPO = 'suisya-systems/renga';
 const MAX_REDIRECTS = 5;
 const ALLOWED_REDIRECT_HOSTS = new Set([
   'github.com',
@@ -267,7 +267,7 @@ async function main() {
     console.error(`Failed to install renga: ${err.message}`);
     console.error(`Binary URL: ${url}`);
     console.error(`Checksums URL: ${baseUrl}/checksums.txt`);
-    console.error('You can download manually from: https://github.com/happy-ryo/ccmux/releases');
+    console.error('You can download manually from: https://github.com/suisya-systems/renga/releases');
     process.exit(1);
   }
 }
