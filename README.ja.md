@@ -2,17 +2,59 @@
 
 *Language: [English](./README.md) / 日本語*
 
-**[Claude Code](https://docs.anthropic.com/en/docs/claude-code) を複数同時に動かすために作られた、ターミナルマルチプレクサ。**
+**複数の [Claude Code](https://docs.anthropic.com/en/docs/claude-code) エージェントを 1 つの TUI でオーケストレートするための AI ネイティブ・ターミナル基盤。ペイン横断 peer メッセージング、Claude 特化 UX、単一バイナリ。**
 
 ![renga スクリーンショット](screenshot.png)
 
-## なぜ renga か
+## renga とは何か
 
-Claude Code を 2 つ以上同時に走らせ始めると、普通のターミナルや tmux ではすぐ手に負えなくなります。tmux はあくまでシェルを並べる道具なので「このペインは Claude、こっちは相方として仕事を渡せる Claude」という概念を持ちません。renga は Claude Code 専用に作られた小さな単一バイナリの TUI で、どのペインで Claude が動いているかを自動で見分け、組み込みの MCP チャネル経由で **Claude 同士が直接メッセージを送り合える** ようにし、日本語 / CJK 入力中に Claude のストリーミング出力と候補窓が衝突しないよう IME 対応の合成 overlay まで備えています。
+renga は「ペイン自身が AI エージェントであることを知っている」ターミナルです。分割・タブ・フォーカスといった操作は他の TUI multiplexer と同じですが、内部ではそれぞれのペインを **第一級のエージェント・エンドポイント** として扱います。どのペインで Claude Code が動いているかを自動で検出し、それらのペインに対して renga タブ単位でスコープされた peer チャネル（MCP サーバ）を公開するため、エージェント同士が安定 id / role で互いを名指しで呼び出せます。`spawn_claude_pane` / `set_pane_identity` / `new_tab` などのペイン制御ツールも揃っており、オーケストレータ役のエージェントが自分でワーカーを増やしていけます。
 
-想定ユーザーは **Claude Code を常時 2〜3 個並列で回す開発者** — サブエージェントをオーケストレートしたり、複数案を別ペインで比較したり、「窓口 + ワーカー」型のレイアウトで作業したりする使い方です。重い IDE プラグインや、tmux に大量のシェル glue を仕込む構成より軽く、Claude Code 用途に振り切った UX を提供します。
+主なユースケースは **エージェントのオーケストレーション** — 「窓口（secretary）」ペインがタスクを「ワーカー」ペインに振り分ける構成、サブエージェントを別ペインで並走比較する構成、長時間セッションが軽い調べ物だけ別ペインに投げる構成、などです。Claude Code を常に 1 つしか起動しないなら、renga が今のターミナルより優位な点は限られます。複数同時に動かすなら、peer チャネルと AI 認識ペインモデルがそのまま価値になります。
 
-Claude Code を常に 1 つしか起動しないなら、renga が今のターミナルより優位な点は限られます。複数同時に動かすなら、ペインを跨いだ peer メッセージングと Claude 専用 UX がそのまま価値になります。
+### tmux / zellij との位置づけ
+
+| | tmux / zellij | renga |
+|---|---|---|
+| ペインの抽象 | 汎用シェルセッション | **AI エージェント・エンドポイント**（安定 id / role / フォーカスフラグ付き） |
+| ペイン間メッセージング | コピペ、手動 `send-keys`、外部 glue | 組み込み MCP `renga-peers` チャネル。受信側にはユーザー入力と区別された `<channel source="renga-peers">` タグとして届く |
+| Claude ペインの起動 | `claude --dangerously-load-development-channels …` を手で打つ | `spawn_claude_pane` MCP ツール（構造化引数）または `Alt+P` ショートカット — peer チャネル自動配線 |
+| IME / 日本語入力 | ホストターミナル任せ。Claude のストリーミング出力で候補窓が踊りがち | 専用 IME 合成 overlay。freeze-on-overlay + 周期 catch-up でキャレット直下に候補窓を固定 |
+| 設定の表面積 | シェル glue / プラグイン / keytable | 小さな TUI バイナリ 1 本。レイアウト TOML でペイン構成と role を直接宣言 |
+
+**やらないこと（non-goals）。** renga は **汎用 tmux 代替を目指していません**。tmux のセッション永続化、ネスト server モデル、プラグインエコシステム、スクリプタブルな自動化 API を網羅する意図はありません。ターミナルエミュレータでもありません（自前のフォント・グリフ描画は持たず、既存ターミナル上で動きます）。IDE プラグインでもチャット UI でもありません。狙いは狭く一点で、**「複数の Claude Code エージェントが 1 つのウィンドウで協調する」基盤として最良であること**、そして約 10 MB の単一バイナリで配布できるサイズに収めることです。
+
+### 例: 窓口（secretary）+ ワーカー型オーケストレーション
+
+[`claude-org`](https://github.com/suisya-systems/claude-org) / [`claude-org-ja`](https://github.com/suisya-systems/claude-org-ja) で実際に使われているレイアウト。窓口役の "secretary" ペインが renga-peers 経由でワーカーペインにタスクを振り分けます。
+
+```
+tab "project-X"
+┌────────────────────┬────────────────────┐
+│ secretary          │ worker-1           │
+│ (claude, role=     │ (claude, role=     │
+│  "secretary")      │  "worker")         │
+│                    │                    │
+│  send_message ────▶│  <channel ...> で  │
+│   to_id="worker-1" │  受信              │
+│                    │                    │
+│◀── 返信 ───────────│                    │
+└────────────────────┴────────────────────┘
+```
+
+secretary のチャットからワーカーを増やしてタスクを投げるのは MCP コール 2 回で完結します。シェルもコピペも不要です。
+
+```
+> call spawn_claude_pane with direction="right", role="worker", name="worker-1"
+# 新ペインが現れ、peer チャネル配線済みで Claude が起動する
+
+> call send_message with to_id="worker-1" and
+  message="please grep src/ for TODO(perf) and report file:line + 1 line of context"
+```
+
+worker-1 は次のターンで `<channel source="renga-peers" from_id="…" from_name="secretary">…</channel>` タグを受け取り、ユーザー入力ではなく peer リクエストだと判断し（`source` 属性で見分けられる）、作業して `send_message(to_id="secretary", …)` で返信します。安定 role / name 解決があるので、secretary は数値 id を追いかける必要がありません。途中でラベルを付け替えたい場合は `set_pane_identity` で行えます。
+
+同じ仕組みでより複雑なレイアウト（dispatcher + 複数ワーカー / 評価者ペインがワーカー出力を監視 / タブを跨いだ並列実行 …）にもスケールします。ツール一覧は [Claude Code ペイン同士のメッセージング](#claude-code-ペイン同士のメッセージング) を参照してください。
 
 ## できること
 

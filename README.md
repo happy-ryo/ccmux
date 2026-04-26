@@ -2,17 +2,59 @@
 
 *Read this in other languages: [日本語](./README.ja.md)*
 
-**A terminal multiplexer purpose-built for running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions side-by-side.**
+**An AI-native terminal substrate for orchestrating multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents in one TUI — pane-aware peer messaging, Claude-specific UX, single binary.**
 
 ![renga screenshot](screenshot.png)
 
-## Why renga
+## What renga is
 
-Running more than one Claude Code agent at once gets unwieldy fast: tmux works but treats every pane as just a shell, and generic terminal apps have no concept of "this pane is Claude, that one is a peer it can hand work to." renga is a small, single-binary TUI that knows about Claude Code specifically — it detects which panes are running Claude, lets those panes message each other through a built-in MCP channel (so two Claude agents can collaborate without you copy-pasting between them), and ships an IME-aware composition overlay so Japanese / CJK input doesn't fight Claude's streaming output.
+renga is a terminal where the panes know they are AI agents. Splits, tabs, and focus work like any TUI multiplexer, but the substrate underneath treats each pane as a first-class agent endpoint: it detects which panes are running Claude Code, gives those panes an authoritative peer channel (an MCP server scoped to the renga tab) so agents can address each other by stable id or role, and exposes pane-control tools (`spawn_claude_pane`, `set_pane_identity`, `new_tab`, …) so an orchestrator agent can grow its own workforce without the user wiring shell commands by hand.
 
-It's aimed at developers who routinely run **two or more Claude Code instances in parallel** — orchestrating sub-agents, comparing approaches across panes, or coordinating a "secretary + workers" layout — and who want a lightweight TUI rather than a full IDE plugin or a tmux config full of shell glue.
+The target use case is **agent orchestration** — a "secretary" pane dispatching tasks to "worker" panes, sub-agents comparing approaches in parallel, a long-running session reaching out to a sibling for a quick lookup. If you only ever run one Claude Code at a time, renga's value over your current terminal is small. If you run several, the peer channel and the AI-aware pane model are the point.
 
-If you only ever run one Claude Code at a time, renga's value over your current terminal is small. If you run several, the pane-aware peer messaging and Claude-specific UX are the point.
+### Positioning vs. tmux / zellij
+
+| | tmux / zellij | renga |
+|---|---|---|
+| Pane model | Generic shell sessions | First-class **AI agent endpoints** with stable id, role, focus flag |
+| Inter-pane messaging | Copy-paste, manual `send-keys`, or external glue | Built-in MCP `renga-peers` channel; messages arrive in the receiver's context as `<channel source="renga-peers">` tags, distinct from user input |
+| Spawning a Claude pane | User types `claude --dangerously-load-development-channels …` | `spawn_claude_pane` MCP tool (structured args) or `Alt+P` shortcut — peer channel auto-wired |
+| IME / CJK | Host terminal handles it; candidate windows often jump as Claude streams | Built-in IME composition overlay with freeze-on-overlay + periodic catch-up so candidates anchor to the caret |
+| Configuration surface | Shell glue, plugins, keytables | A small TUI binary; layout TOMLs declare panes/roles directly |
+
+**Non-goals.** renga is *not* a generic tmux replacement — it does not aim to match tmux's session persistence, nested-server model, plugin ecosystem, or scripted automation surface. It does not try to be a terminal emulator (no font/glyph rendering of its own; it runs inside your existing terminal). It is not an IDE plugin or chat UI. The bet is narrower: be the best substrate for **multiple Claude Code agents collaborating in one window**, and stay small enough to ship as a single ~10 MB binary.
+
+### Example: secretary + workers orchestration
+
+A typical layout used by [`claude-org`](https://github.com/suisya-systems/claude-org) / [`claude-org-ja`](https://github.com/suisya-systems/claude-org-ja) — one "secretary" pane dispatches tasks to one or more "worker" panes via the renga-peers channel:
+
+```
+tab "project-X"
+┌────────────────────┬────────────────────┐
+│ secretary          │ worker-1           │
+│ (claude, role=     │ (claude, role=     │
+│  "secretary")      │  "worker")         │
+│                    │                    │
+│  send_message ────▶│  receives as       │
+│   to_id="worker-1" │  <channel ...>     │
+│                    │                    │
+│◀── reply ──────────│                    │
+└────────────────────┴────────────────────┘
+```
+
+From the secretary's chat, growing the team and dispatching a task is two MCP calls — no shell, no copy-paste:
+
+```
+> call spawn_claude_pane with direction="right", role="worker", name="worker-1"
+# new pane appears, Claude boots with the peer channel auto-wired
+
+> call send_message with to_id="worker-1" and
+  message="please grep src/ for TODO(perf) and report file:line + 1 line of context"
+```
+
+worker-1 sees a `<channel source="renga-peers" from_id="…" from_name="secretary">…</channel>` tag in its next turn, recognises it as a peer request (not user input — the tag's `source` attribute makes that distinction), does the work, and replies back via `send_message(to_id="secretary", …)`. Stable role/name lookups mean the secretary never has to track numeric pane ids; `set_pane_identity` lets it relabel a pane mid-session if needed.
+
+The same primitives scale to richer layouts (dispatcher + multiple workers across tabs, evaluator panes that watch a worker's output, …). See [Peer messaging between Claude Code panes](#peer-messaging-between-claude-code-panes) for the full tool surface.
 
 ## Features
 
