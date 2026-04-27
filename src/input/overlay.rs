@@ -208,6 +208,253 @@ impl OverlayState {
     }
 }
 
+/// Visible Claude input reconstructed from the pane's current vt100
+/// screen state. The buffer is best-effort: it preserves the
+/// currently visible prompt contents and caret position so the IME
+/// overlay can take over an in-progress draft.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VisibleInputSnapshot {
+    pub buffer: String,
+    pub cursor: usize,
+}
+
+const CLAUDE_PROMPT_GLYPHS: &[&str] = &[
+    ">", "\u{276F}", // ❯
+    "\u{203A}", // ›
+    "\u{27E9}", // ⟩
+    "\u{3009}", // 〉
+    "\u{276D}", // ❭
+    "\u{2771}", // ❱
+];
+const CLAUDE_PROMPT_SCAN_COLS: u16 = 8;
+const CLAUDE_INPUT_WALK_MAX: u16 = 20;
+
+pub(crate) fn snapshot_visible_input(pane: &crate::pane::Pane) -> Option<VisibleInputSnapshot> {
+    let parser = pane.parser.lock().ok()?;
+    let screen = parser.screen();
+    snapshot_visible_input_from_screen(screen)
+}
+
+pub(crate) fn clear_visible_input_bytes(snapshot: &VisibleInputSnapshot) -> Vec<u8> {
+    let total = snapshot.buffer.chars().count();
+    let mut bytes = Vec::with_capacity(total.saturating_mul(4));
+
+    for _ in snapshot.cursor..total {
+        bytes.extend_from_slice(b"\x1b[C");
+    }
+    bytes.extend(std::iter::repeat_n(0x7f, total));
+
+    bytes
+}
+
+pub(crate) fn visible_input_contains_claude_paste_placeholder(visible: &str) -> bool {
+    visible.contains("[Pasted text #")
+}
+
+fn snapshot_visible_input_from_screen(screen: &vt100::Screen) -> Option<VisibleInputSnapshot> {
+    let prompt_row = find_prompt_row(screen)?;
+    let prompt_col = find_prompt_glyph_col(screen, prompt_row)?;
+    let last_row = resolve_input_row_last(screen, prompt_row);
+    let (caret_row, caret_col) = resolve_claude_caret(screen)?;
+    if caret_row < prompt_row || caret_row > last_row {
+        return None;
+    }
+
+    let content_col = prompt_content_start_col(screen, prompt_row, prompt_col);
+    let mut buffer = String::new();
+    let mut cursor = 0usize;
+
+    for row in prompt_row..=last_row {
+        let row_text = extract_visible_row(screen, row, content_col);
+        if row < caret_row {
+            cursor += row_text.chars().count();
+        } else if row == caret_row {
+            cursor += count_chars_before_col(screen, row, content_col, caret_col);
+        }
+        buffer.push_str(&row_text);
+    }
+
+    Some(VisibleInputSnapshot { buffer, cursor })
+}
+
+fn cell_is_prompt_glyph(screen: &vt100::Screen, row: u16, col: u16) -> bool {
+    screen
+        .cell(row, col)
+        .is_some_and(|c| CLAUDE_PROMPT_GLYPHS.iter().any(|g| *g == c.contents()))
+}
+
+fn find_prompt_glyph_col(screen: &vt100::Screen, row: u16) -> Option<u16> {
+    let cols = screen.size().1.min(CLAUDE_PROMPT_SCAN_COLS);
+    (0..cols).find(|&col| cell_is_prompt_glyph(screen, row, col))
+}
+
+fn row_has_non_blank(screen: &vt100::Screen, row: u16) -> bool {
+    let cols = screen.size().1;
+    for col in 0..cols {
+        if let Some(c) = screen.cell(row, col) {
+            let s = c.contents();
+            if !s.is_empty() && s != " " {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn row_starts_with_prompt(screen: &vt100::Screen, row: u16) -> bool {
+    find_prompt_glyph_col(screen, row).is_some()
+}
+
+fn row_col0_is_blank(screen: &vt100::Screen, row: u16) -> bool {
+    screen
+        .cell(row, 0)
+        .map(|c| {
+            let s = c.contents();
+            s.is_empty() || s == " "
+        })
+        .unwrap_or(true)
+}
+
+fn is_continuation_candidate(screen: &vt100::Screen, row: u16) -> bool {
+    row_col0_is_blank(screen, row) && row_has_non_blank(screen, row)
+}
+
+fn find_prompt_row(screen: &vt100::Screen) -> Option<u16> {
+    let screen_rows = screen.size().0;
+    (0..screen_rows)
+        .rev()
+        .find(|&row| row_starts_with_prompt(screen, row))
+}
+
+fn resolve_input_row_last(screen: &vt100::Screen, prompt_row: u16) -> u16 {
+    let screen_rows = screen.size().0;
+    let mut last = prompt_row;
+    let mut blank_streak = 0u16;
+    let max_row = prompt_row
+        .saturating_add(CLAUDE_INPUT_WALK_MAX)
+        .min(screen_rows.saturating_sub(1));
+    let mut r = prompt_row.saturating_add(1);
+    while r <= max_row {
+        if row_starts_with_prompt(screen, r) {
+            break;
+        }
+        if row_has_non_blank(screen, r) {
+            if is_continuation_candidate(screen, r) {
+                last = r;
+                blank_streak = 0;
+            } else {
+                break;
+            }
+        } else {
+            blank_streak += 1;
+            if blank_streak >= 2 {
+                break;
+            }
+        }
+        r = r.saturating_add(1);
+    }
+    last
+}
+
+fn pick_caret_col_on_row(screen: &vt100::Screen, row: u16) -> u16 {
+    let cols = screen.size().1;
+    for col in (0..cols).rev() {
+        if screen.cell(row, col).is_some_and(|c| c.inverse()) {
+            return col;
+        }
+    }
+    let mut last_nonblank: Option<u16> = None;
+    for col in (0..cols).rev() {
+        if let Some(c) = screen.cell(row, col) {
+            let s = c.contents();
+            if !s.is_empty() && s != " " {
+                last_nonblank = Some(col);
+                break;
+            }
+        }
+    }
+    last_nonblank
+        .map(|c| c.saturating_add(1).min(cols.saturating_sub(1)))
+        .unwrap_or(2)
+}
+
+fn resolve_claude_caret(screen: &vt100::Screen) -> Option<(u16, u16)> {
+    let prompt_row = find_prompt_row(screen)?;
+    let last = resolve_input_row_last(screen, prompt_row);
+    let cols = screen.size().1;
+    for row in (prompt_row..=last).rev() {
+        for col in (0..cols).rev() {
+            if screen.cell(row, col).is_some_and(|c| c.inverse()) {
+                return Some((row, col));
+            }
+        }
+    }
+    Some((last, pick_caret_col_on_row(screen, last)))
+}
+
+fn prompt_content_start_col(screen: &vt100::Screen, prompt_row: u16, prompt_col: u16) -> u16 {
+    let mut start = prompt_col.saturating_add(1);
+    if screen
+        .cell(prompt_row, start)
+        .is_some_and(|c| c.contents() == " ")
+    {
+        start = start.saturating_add(1);
+    }
+    start
+}
+
+fn row_last_content_col(screen: &vt100::Screen, row: u16) -> Option<u16> {
+    let cols = screen.size().1;
+    (0..cols).rev().find(|&col| {
+        screen.cell(row, col).is_some_and(|c| {
+            let s = c.contents();
+            !s.is_empty() && s != " "
+        })
+    })
+}
+
+fn extract_visible_row(screen: &vt100::Screen, row: u16, start_col: u16) -> String {
+    let Some(last_col) = row_last_content_col(screen, row) else {
+        return String::new();
+    };
+    if last_col < start_col {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    for col in start_col..=last_col {
+        if let Some(cell) = screen.cell(row, col) {
+            let contents = cell.contents();
+            if !contents.is_empty() {
+                out.push_str(contents);
+            }
+        }
+    }
+    out
+}
+
+fn count_chars_before_col(
+    screen: &vt100::Screen,
+    row: u16,
+    start_col: u16,
+    caret_col: u16,
+) -> usize {
+    if caret_col <= start_col {
+        return 0;
+    }
+
+    let mut count = 0usize;
+    for col in start_col..caret_col {
+        if let Some(cell) = screen.cell(row, col) {
+            let contents = cell.contents();
+            if !contents.is_empty() {
+                count += contents.chars().count();
+            }
+        }
+    }
+    count
+}
+
 /// Modal key handling while the IME composition overlay is open.
 ///
 /// Commits with **Alt+Enter** (portable across all tier-1 terminals,
@@ -352,6 +599,19 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
 mod tests {
     use super::*;
 
+    fn make_screen(rows: u16, cols: u16, bytes: &[u8]) -> vt100::Parser {
+        let mut parser = vt100::Parser::new(rows, cols, 0);
+        parser.process(bytes);
+        parser
+    }
+
+    const INV_ON: &[u8] = b"\x1b[7m";
+    const INV_OFF: &[u8] = b"\x1b[27m";
+
+    fn at(r: u16, c: u16) -> Vec<u8> {
+        format!("\x1b[{};{}H", r + 1, c + 1).into_bytes()
+    }
+
     #[test]
     fn insert_newline_is_regular_char() {
         let mut o = OverlayState::new(0);
@@ -467,5 +727,92 @@ mod tests {
         o.backspace();
         assert_eq!(o.buffer, "abc");
         assert_eq!(o.total_lines(), 1);
+    }
+
+    #[test]
+    fn snapshot_visible_input_reads_single_line_prompt() {
+        let mut bytes = at(2, 0);
+        bytes.extend_from_slice(b"> hi");
+        bytes.extend_from_slice(INV_ON);
+        bytes.extend_from_slice(b" ");
+        bytes.extend_from_slice(INV_OFF);
+        let parser = make_screen(4, 20, &bytes);
+
+        let snapshot = snapshot_visible_input_from_screen(parser.screen()).unwrap();
+        assert_eq!(
+            snapshot,
+            VisibleInputSnapshot {
+                buffer: "hi".into(),
+                cursor: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn snapshot_visible_input_joins_wrapped_rows() {
+        let mut bytes = at(2, 0);
+        bytes.extend_from_slice(b"> aaaaaaaa");
+        bytes.extend_from_slice(&at(3, 0));
+        bytes.extend_from_slice(b"  bb");
+        bytes.extend_from_slice(INV_ON);
+        bytes.extend_from_slice(b" ");
+        bytes.extend_from_slice(INV_OFF);
+        let parser = make_screen(5, 10, &bytes);
+
+        let snapshot = snapshot_visible_input_from_screen(parser.screen()).unwrap();
+        assert_eq!(
+            snapshot,
+            VisibleInputSnapshot {
+                buffer: "aaaaaaaabb".into(),
+                cursor: 10,
+            }
+        );
+    }
+
+    #[test]
+    fn snapshot_visible_input_preserves_mid_buffer_cursor() {
+        let mut bytes = at(2, 0);
+        bytes.extend_from_slice(b"> aa");
+        bytes.extend_from_slice(INV_ON);
+        bytes.extend_from_slice(b"a");
+        bytes.extend_from_slice(INV_OFF);
+        bytes.extend_from_slice(b"aaaaa");
+        bytes.extend_from_slice(&at(3, 0));
+        bytes.extend_from_slice(b"  bb");
+        let parser = make_screen(5, 10, &bytes);
+
+        let snapshot = snapshot_visible_input_from_screen(parser.screen()).unwrap();
+        assert_eq!(
+            snapshot,
+            VisibleInputSnapshot {
+                buffer: "aaaaaaaabb".into(),
+                cursor: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn clear_visible_input_bytes_walks_to_end_then_backspaces_all_chars() {
+        let bytes = clear_visible_input_bytes(&VisibleInputSnapshot {
+            buffer: "hello".into(),
+            cursor: 2,
+        });
+        assert_eq!(bytes, b"\x1b[C\x1b[C\x1b[C\x7f\x7f\x7f\x7f\x7f");
+    }
+
+    #[test]
+    fn detects_claude_paste_placeholder_inside_visible_input() {
+        assert!(visible_input_contains_claude_paste_placeholder(
+            "prefix [Pasted text #2 +16 lines] suffix"
+        ));
+        assert!(visible_input_contains_claude_paste_placeholder(
+            "[Pasted text #1 +1 line]"
+        ));
+        assert!(visible_input_contains_claude_paste_placeholder(
+            "[Pasted text #x +16 lines]"
+        ));
+        assert!(!visible_input_contains_claude_paste_placeholder(
+            "plain input text"
+        ));
     }
 }

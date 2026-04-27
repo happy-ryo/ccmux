@@ -1093,7 +1093,37 @@ impl App {
             let pane_focused = matches!(self.ws().focus_target, FocusTarget::Pane)
                 && self.ws().panes.contains_key(&focused_id);
             if pane_focused {
-                self.overlay = Some(OverlayState::new(focused_id));
+                let snapshot = self
+                    .ws()
+                    .panes
+                    .get(&focused_id)
+                    .and_then(crate::input::overlay::snapshot_visible_input);
+
+                if snapshot.as_ref().is_some_and(|snapshot| {
+                    crate::input::overlay::visible_input_contains_claude_paste_placeholder(
+                        &snapshot.buffer,
+                    )
+                }) {
+                    self.overlay = Some(OverlayState::new(focused_id));
+                    self.mark_layout_change();
+                    return Ok(true);
+                }
+
+                let mut overlay = OverlayState::new(focused_id);
+                if let Some(snapshot) = snapshot.as_ref() {
+                    overlay.buffer = snapshot.buffer.clone();
+                    overlay.cursor = snapshot.cursor.min(overlay.buffer.chars().count());
+                }
+                self.overlay = Some(overlay);
+
+                if let Some(snapshot) = snapshot.as_ref() {
+                    let clear = crate::input::overlay::clear_visible_input_bytes(snapshot);
+                    if !clear.is_empty() {
+                        if let Some(pane) = self.ws_mut().panes.get_mut(&focused_id) {
+                            let _ = pane.write_input(&clear);
+                        }
+                    }
+                }
                 self.mark_layout_change();
                 return Ok(true);
             }
@@ -4065,6 +4095,32 @@ mod tests {
 
         assert!(consumed);
         assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn hotkey_mode_placeholder_prompt_opens_empty_overlay() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+        let pane = app
+            .ws_mut()
+            .panes
+            .get_mut(&pane_id)
+            .expect("focused pane exists");
+        let mut parser = pane.parser.lock().unwrap_or_else(|e| e.into_inner());
+        parser.process(b"\x1b[3;1H> [Pasted text #2 +16 lines]\x1b[7m \x1b[27m");
+        drop(parser);
+
+        let open = KeyEvent::new(KeyCode::Char(';'), KeyModifiers::CONTROL);
+        let consumed = app.handle_key_event(open).expect("open overlay");
+
+        assert!(consumed);
+        let overlay = app.overlay.as_ref().expect("overlay opened");
+        assert_eq!(overlay.target_pane, pane_id);
+        assert!(
+            overlay.buffer.is_empty(),
+            "paste-placeholder prompts should fall back to the legacy empty overlay"
+        );
+        assert_eq!(overlay.cursor, 0);
     }
 
     #[test]
