@@ -242,9 +242,7 @@ pub(crate) fn clear_visible_input_bytes(snapshot: &VisibleInputSnapshot) -> Vec<
     for _ in snapshot.cursor..total {
         bytes.extend_from_slice(b"\x1b[C");
     }
-    for _ in 0..total {
-        bytes.push(0x7f);
-    }
+    bytes.extend(std::iter::repeat_n(0x7f, total));
 
     bytes
 }
