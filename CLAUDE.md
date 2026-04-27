@@ -51,10 +51,16 @@ cargo run            # Run the app
 ### やってはいけない
 - **手動で `npm publish` や `gh release create` しないこと** — バージョン衝突の原因になる
 
-## Fork & Branching
-このリポジトリは `Shin-sibainu/ccmux` のフォーク。ブランチ運用 (main = 独自本流 / master = 上流ミラー) と上流同期手順は `BRANCHING.md` を参照。上流取り込みや逆 PR の作業時は `.claude/skills/upstream-sync/` Skill が自動発動する。
+## Fork & Branching (Divergence Policy)
+renga was forked from `Shin-sibainu/ccmux` but is now developed as an **independent main line**. There is no periodic / weekly upstream sync; useful upstream changes are pulled in only as ad-hoc, per-commit cherry-picks when explicitly requested. `BRANCHING.md` is the source of truth — see it for the full policy.
 
-**上流への逆 PR はユーザーからの明示的な指示がない限り提案・実行しない。** フォークで実装した機能について「汎用性があるので上流還元候補」といったラベルを umbrella Issue に残すのは OK だが、タスクの次候補として「upstream PR を出す」を勝手に積まない。上流の受け入れタイミングに依存して進捗が止まるのを避けるため、フォーク内の独自開発に集中する方針。
+Key points:
+- `main` — renga's mainline (default branch, release target). Evolves independently of upstream.
+- `master` — snapshot mirror of `upstream/master`, FF-updated only when needed as a base for cherry-picks. Never carries renga-specific commits.
+- Upstream changes enter renga only via cherry-pick of specific commits the user has named. No blanket sync.
+- `.claude/skills/upstream-sync/` skill assists with those ad-hoc cherry-pick and reverse-PR procedures. It must NOT fire on generic "sync the fork" / "merge in upstream" requests — push back to the user instead.
+
+**Do not propose or open reverse PRs against upstream unless the user explicitly asks for one.** It is fine to label individual features as "potentially generalizable upstream" on an umbrella issue, but do not queue "open an upstream PR" as a follow-up task on your own — renga's progress should not be gated on upstream's review cadence.
 
 ## Intentional `ccmux` References (post-rename)
 Issue #102 renamed the project from `ccmux` to `renga`. The following residual references to `ccmux` are intentional and should NOT be swept:

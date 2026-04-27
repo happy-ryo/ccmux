@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>renga — ccmux のフォーク</title>
+    <title>renga — Claude Code Multiplexer</title>
     <meta
       name="description"
-      content="Shin-sibainu/ccmux のフォーク。独自機能を先行開発し、npm では @suisya-systems/renga として配布中。"
+      content="Claude Code を複数同時に動かすために作られた、ターミナルマルチプレクサ。Claude pane 同士の peer メッセージング、IME 対応 overlay、単一 Rust バイナリ。"
     />
     <link rel="alternate" hreflang="en" href="./index.html" />
     <link rel="alternate" hreflang="ja" href="./ja.html" />
@@ -165,9 +165,11 @@
       </nav>
       <h1>renga</h1>
       <p class="tagline">
-        <a href="https://github.com/Shin-sibainu/ccmux">Shin-sibainu/ccmux</a>
-        のフォーク。独自機能を先行して追加し、npm では
-        <code>@suisya-systems/renga</code> の名前で配布しています (旧 <code>ccmux-fork</code>)。
+        <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a>
+        を複数同時に動かすために作られた、ターミナルマルチプレクサ。
+        ペイン同士を MCP チャネルで繋ぐ peer メッセージング、
+        日本語 / CJK 入力に対応した IME composition overlay、単一 Rust バイナリ。
+        Claude Code を 2 つ以上並列で回す開発者向けの道具です。
       </p>
 
       <figure class="hero">
@@ -176,7 +178,7 @@
           alt="ターミナル中央に開いた IME overlay。日本語の変換候補窓がキャレットの真下に吸着していて、背後の Claude ペインは凍結されている"
         />
         <figcaption>
-          画面中央にフロート表示される複数行の IME 入力ボックス (フォーク独自)。
+          画面中央にフロート表示される複数行の IME 入力ボックス (renga 独自機能)。
           ホスト OS の IME 候補窓がキャレットに吸着するので、
           日本語 / 中国語 / 韓国語の変換中に候補窓が Claude のカーソルに振り回されません。
           <code>Alt+Enter</code> で送信、<code>Enter</code> は改行、
@@ -185,9 +187,9 @@
       </figure>
 
       <p>
-        上流の変更を定期的に取り込みつつ、独自機能を先行で入れています。オリジナル版は
-        <a href="https://github.com/Shin-sibainu/ccmux">upstream リポジトリ</a>
-        を見てください。
+        renga はもともと
+        <a href="https://github.com/Shin-sibainu/ccmux">Shin-sibainu/ccmux</a>
+        から派生したプロジェクトですが、現在は独立した本流として開発しています。peer メッセージング、IME overlay、layout TOML、日英バイリンガル UX などはすべて renga 側で書き足したものです。
       </p>
 
       <pre><code>$ npm install -g @suisya-systems/renga</code></pre>
@@ -199,9 +201,9 @@
 $ npm install -g @suisya-systems/renga</code></pre>
 
       <p>
-        上流の <code>renga-cli</code> から移行する場合:
+        上流の <code>ccmux-cli</code> から移行する場合:
       </p>
-      <pre><code>$ npm uninstall -g renga-cli
+      <pre><code>$ npm uninstall -g ccmux-cli
 $ npm install -g @suisya-systems/renga</code></pre>
 
       <h2>macOS の設定: Option をメタキーにする</h2>
@@ -266,16 +268,16 @@ $ npm install -g @suisya-systems/renga</code></pre>
         <code>Alt+Left/Right</code> でタブ巡回して回避してください。
       </p>
 
-      <h2>上流との差分</h2>
+      <h2>renga が ccmux 由来から積み増した機能</h2>
       <p style="color: var(--muted); font-size: 0.9rem; margin-top: -4px;">
-        上流 (<a href="https://github.com/Shin-sibainu/ccmux">Shin-sibainu/ccmux</a>) の変更は <code>master</code> ブランチで定期的に取り込んでいます。下の表は、直近の upstream リリース時点でフォーク側にだけ入っている機能の一覧です。
+        renga は <a href="https://github.com/Shin-sibainu/ccmux">Shin-sibainu/ccmux</a> から派生し、現在は独立プロジェクトとして進化しています。下の表は、ccmux から継承したものではなく renga 側で書き足された renga 独自機能の一覧です。両プロジェクトはバージョンごとに追従する関係ではなくなっているため、列はあくまでそれぞれの現在の方向性を示すもので、永続的な互換性を保証するものではありません。
       </p>
       <table class="diff">
         <thead>
           <tr>
             <th>機能</th>
-            <th class="mark">上流</th>
-            <th class="mark">フォーク</th>
+            <th class="mark">ccmux</th>
+            <th class="mark">renga</th>
           </tr>
         </thead>
         <tbody>
@@ -407,16 +409,16 @@ $ npm install -g @suisya-systems/renga</code></pre>
       <ul class="links">
         <li>→ <a href="./docs/">ドキュメント</a></li>
         <li>
-          → <a href="https://github.com/suisya-systems/renga">GitHub (このフォーク)</a>
+          → <a href="https://github.com/suisya-systems/renga">GitHub</a>
         </li>
         <li>
-          → <a href="https://github.com/Shin-sibainu/ccmux">上流プロジェクト (オリジナル)</a>
+          → <a href="https://github.com/Shin-sibainu/ccmux">Shin-sibainu/ccmux (派生元のオリジナルプロジェクト)</a>
         </li>
       </ul>
     </main>
     <footer>
       MIT ライセンス。Anthropic の公式製品ではありません。Claude および Claude Code は
-      Anthropic, PBC の商標です。オリジナルの renga © Shin-sibainu。
+      Anthropic, PBC の商標です。派生元の ccmux © Shin-sibainu。
     </footer>
   </body>
 </html>

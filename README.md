@@ -1,14 +1,60 @@
-# renga (fork)
+# renga
 
 *Read this in other languages: [日本語](./README.ja.md)*
 
-Claude Code Multiplexer — manage multiple Claude Code instances in TUI split panes.
-
-A lightweight terminal multiplexer built specifically for running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions side-by-side.
-
-> **This is a fork** of [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) that develops independent features while periodically syncing upstream. Installs as the separate npm package `@suisya-systems/renga` (previously `ccmux-fork`). See [`BRANCHING.md`](./BRANCHING.md) for the fork policy.
+**An AI-native terminal substrate for orchestrating multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents in one TUI — pane-aware peer messaging, Claude-specific UX, single binary.**
 
 ![renga screenshot](screenshot.png)
+
+## What renga is
+
+renga is a terminal where the panes know they are AI agents. Splits, tabs, and focus work like any TUI multiplexer, but the substrate underneath treats each pane as a first-class agent endpoint: it detects which panes are running Claude Code, gives those panes an authoritative peer channel (an MCP server scoped to the renga tab) so agents can address each other by numeric id or a stable user-assigned name, and exposes pane-control tools (`spawn_claude_pane`, `set_pane_identity`, `new_tab`, …) so an orchestrator agent can grow its own workforce without the user wiring shell commands by hand. Each pane also carries an optional `role` label (used for filtering and display), but message routing itself is by id or name.
+
+The target use case is **agent orchestration** — a "secretary" pane dispatching tasks to "worker" panes, sub-agents comparing approaches in parallel, a long-running session reaching out to a sibling for a quick lookup. If you only ever run one Claude Code at a time, renga's value over your current terminal is small. If you run several, the peer channel and the AI-aware pane model are the point.
+
+### Positioning vs. tmux / zellij
+
+| | tmux / zellij | renga |
+|---|---|---|
+| Pane model | Generic shell sessions | First-class **AI agent endpoints** with stable id, role, focus flag |
+| Inter-pane messaging | Copy-paste, manual `send-keys`, or external glue | Built-in MCP `renga-peers` channel; messages arrive in the receiver's context as `<channel source="renga-peers">` tags, distinct from user input |
+| Spawning a Claude pane | User types `claude --dangerously-load-development-channels …` | `spawn_claude_pane` MCP tool (structured args) or `Alt+P` shortcut — peer channel auto-wired |
+| IME / CJK | Host terminal handles it; candidate windows often jump as Claude streams | Built-in IME composition overlay with freeze-on-overlay + periodic catch-up so candidates anchor to the caret |
+| Configuration surface | Shell glue, plugins, keytables | A small TUI binary; layout TOMLs declare panes/roles directly |
+
+**Non-goals.** renga is *not* a generic tmux replacement — it does not aim to match tmux's session persistence, nested-server model, plugin ecosystem, or scripted automation surface. It does not try to be a terminal emulator (no font/glyph rendering of its own; it runs inside your existing terminal). It is not an IDE plugin or chat UI. The bet is narrower: be the best substrate for **multiple Claude Code agents collaborating in one window**, and stay small enough to ship as a single ~10 MB binary.
+
+### Example: secretary + workers orchestration
+
+A typical layout used by [`claude-org`](https://github.com/suisya-systems/claude-org) / [`claude-org-ja`](https://github.com/suisya-systems/claude-org-ja) — one "secretary" pane dispatches tasks to one or more "worker" panes via the renga-peers channel:
+
+```
+tab "project-X"
+┌────────────────────┬────────────────────┐
+│ secretary          │ worker-1           │
+│ (claude, role=     │ (claude, role=     │
+│  "secretary")      │  "worker")         │
+│                    │                    │
+│  send_message ────▶│  receives as       │
+│   to_id="worker-1" │  <channel ...>     │
+│                    │                    │
+│◀── reply ──────────│                    │
+└────────────────────┴────────────────────┘
+```
+
+From the secretary's chat, growing the team and dispatching a task is two MCP calls — no shell, no copy-paste:
+
+```
+> call spawn_claude_pane with direction="right", role="worker", name="worker-1"
+# new pane appears, Claude boots with the peer channel auto-wired
+
+> call send_message with to_id="worker-1" and
+  message="please grep src/ for TODO(perf) and report file:line + 1 line of context"
+```
+
+worker-1 sees a `<channel source="renga-peers" from_id="…" from_name="secretary">…</channel>` tag in its next turn, recognises it as a peer request (not user input — the tag's `source` attribute makes that distinction), does the work, and replies back via `send_message(to_id="secretary", …)`. Stable name lookups mean the secretary addresses peers as `"secretary"` / `"worker-1"` instead of chasing numeric ids; `set_pane_identity` lets it (re)assign a pane's name mid-session if needed.
+
+The same primitives scale to richer layouts: a dispatcher with several workers in one tab, evaluator panes watching a worker's output, or sibling tabs each holding an isolated team (peer messaging is scoped per tab — `new_tab` widens layout, it doesn't bridge channels). See [Peer messaging between Claude Code panes](#peer-messaging-between-claude-code-panes) for the full tool surface.
 
 ## Features
 
@@ -44,7 +90,7 @@ npm install -g @suisya-systems/renga@latest
 
 > Previously installed `ccmux-fork`? Migrate with: `npm uninstall -g ccmux-fork && npm install -g @suisya-systems/renga`
 >
-> Previously installed the upstream `renga-cli`? Migrate with: `npm uninstall -g renga-cli && npm install -g @suisya-systems/renga`
+> Previously installed the upstream `ccmux-cli`? Migrate with: `npm uninstall -g ccmux-cli && npm install -g @suisya-systems/renga`
 
 ### Download binary
 
@@ -164,7 +210,7 @@ The overlay opens as a centered multi-line composition box. Host-terminal IME ca
 
 ### `[ui]` — UI language
 
-Controls the language used for status bar hints and preview panel error messages. renga started out JP-only because the fork's primary users are Japanese speakers, but everything now flips automatically based on the OS locale.
+Controls the language used for status bar hints and preview panel error messages. renga started out JP-only because its primary users are Japanese speakers, but everything now flips automatically based on the OS locale.
 
 ```toml
 [ui]
@@ -363,6 +409,12 @@ src/
 
 New to Claude Code? Check out [Claude Code Academy](https://claude-code-academy.dev) for tutorials and guides.
 
+## History & Acknowledgments
+
+renga was originally derived from [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) in early 2026 and has since evolved independently — the peer-messaging MCP channel, Claude-aware pane detection, the IME composition overlay, layout TOMLs, and the bilingual UX layer are all renga-specific work. The two projects no longer track version-for-version; renga ships its own semver line on its own cadence (see [`BRANCHING.md`](./BRANCHING.md) for the divergence policy).
+
+Many thanks to [Shin-sibainu](https://github.com/Shin-sibainu) for the original ccmux foundation, which gave renga its starting point for the ratatui pane tree, vt100-based terminal emulation, and the cross-platform PTY layer. The full upstream commit history is preserved in the repo's git log, and the `Shin-sibainu` MIT copyright is retained in [`LICENSE`](./LICENSE) per the license terms.
+
 ## License
 
-MIT
+MIT — see [`LICENSE`](./LICENSE). Copyright is retained for the original `Shin-sibainu/ccmux` author per the upstream license; renga's additional contributions are released under the same MIT terms.

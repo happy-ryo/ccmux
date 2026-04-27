@@ -7,19 +7,19 @@ import './globals.css'
 const siteUrl = 'https://suisya-systems.github.io/renga/docs'
 
 export const metadata = {
-  title: 'renga — Claude Code Multiplexer (fork)',
-  description: 'Fork of ccmux (renamed to renga) with independent development. Manage multiple Claude Code instances in TUI split panes.',
+  title: 'renga — Claude Code Multiplexer',
+  description: 'A terminal multiplexer purpose-built for running multiple Claude Code instances side-by-side. Peer messaging between Claude panes, IME-aware composition overlay, single Rust binary.',
   openGraph: {
-    title: 'renga — Claude Code Multiplexer (fork)',
-    description: 'Fork of ccmux (renamed to renga) with independent development. Rust-powered terminal multiplexer with tabs, file tree, and syntax-highlighted preview.',
+    title: 'renga — Claude Code Multiplexer',
+    description: 'Run multiple Claude Code sessions side-by-side. Peer messaging between Claude panes, IME-aware overlay, file tree, syntax-highlighted preview. Single Rust binary.',
     url: siteUrl,
     siteName: 'renga',
     type: 'website',
   },
   twitter: {
     card: 'summary',
-    title: 'renga — Claude Code Multiplexer (fork)',
-    description: 'Fork of ccmux (renamed to renga) with independent development.',
+    title: 'renga — Claude Code Multiplexer',
+    description: 'Run multiple Claude Code sessions side-by-side with peer messaging and an IME-aware overlay.',
   },
 }
 
@@ -44,7 +44,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           }
           pageMap={await getPageMap()}
           docsRepositoryBase="https://github.com/suisya-systems/renga/tree/main/docs"
-          footer={<Footer>MIT License · <a href="https://github.com/suisya-systems/renga" target="_blank" rel="noopener" style={{color: '#d97757'}}>renga</a>, a fork of <a href="https://github.com/Shin-sibainu/ccmux" target="_blank" rel="noopener" style={{color: '#d97757'}}>ccmux</a></Footer>}
+          footer={<Footer>MIT License · <a href="https://github.com/suisya-systems/renga" target="_blank" rel="noopener" style={{color: '#d97757'}}>renga</a> · originally derived from <a href="https://github.com/Shin-sibainu/ccmux" target="_blank" rel="noopener" style={{color: '#d97757'}}>ccmux</a></Footer>}
         >
           {children}
         </Layout>
