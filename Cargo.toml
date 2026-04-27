@@ -93,7 +93,12 @@ name = "renga"
 # 0.18.2 republishes the 0.18.1 artifacts with corrected package metadata
 # (repository/homepage URLs from the renga rename + URL sweep — #136 / #154
 # follow-up). No code changes.
-version = "0.18.2"
+# 0.18.3 follows up the IME overlay bootstrap-on-open work: visible
+# prompt text now transfers into the overlay when Claude's draft is
+# directly readable, while `[Pasted text #…]` placeholders fall back
+# to an empty overlay so collapsed pasted content is never lost. Patch
+# bump because this is a bug fix on top of 0.18.2.
+version = "0.18.3"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 
