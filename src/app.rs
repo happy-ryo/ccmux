@@ -118,10 +118,24 @@ const CODEX_PEER_NUDGE_SUBMIT_DELAY: Duration = Duration::from_millis(1000);
 const CODEX_APPEND_ENTER_SNAPSHOT_LINES: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct PendingCodexPeerMessage {
-    from_pane: usize,
-    from_name: Option<String>,
-    from_kind: Option<PeerClientKind>,
+pub(crate) struct PendingCodexPeerMessage {
+    pub(crate) from_pane: usize,
+    pub(crate) from_name: Option<String>,
+    pub(crate) from_kind: Option<PeerClientKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CodexPeerNotificationState {
+    pub(crate) target_pane: usize,
+    pub(crate) message: PendingCodexPeerMessage,
+    pub(crate) pending_count: usize,
+}
+
+impl CodexPeerNotificationState {
+    fn register_message(&mut self, message: PendingCodexPeerMessage) {
+        self.message = message;
+        self.pending_count = self.pending_count.saturating_add(1);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,9 +148,28 @@ fn pane_screen_tail_lines(pane: &Pane) -> Option<Vec<String>> {
     let parser = pane.parser.lock().ok()?;
     let screen = parser.screen();
     let (rows, cols) = screen.size();
-    let start_row = rows.saturating_sub(CODEX_APPEND_ENTER_SNAPSHOT_LINES as u16);
-    let mut lines = Vec::with_capacity(rows.saturating_sub(start_row) as usize);
-    for row in start_row..rows {
+    let (cursor_row, _) = screen.cursor_position();
+    let mut last_content_row = None;
+    for row in 0..rows {
+        let mut has_text = false;
+        for col in 0..cols {
+            if let Some(cell) = screen.cell(row, col) {
+                if !cell.contents().trim().is_empty() {
+                    has_text = true;
+                    break;
+                }
+            }
+        }
+        if has_text {
+            last_content_row = Some(row);
+        }
+    }
+    let end_row = last_content_row.unwrap_or(cursor_row).max(cursor_row);
+    let start_row = end_row
+        .saturating_add(1)
+        .saturating_sub(CODEX_APPEND_ENTER_SNAPSHOT_LINES as u16);
+    let mut lines = Vec::with_capacity(end_row.saturating_sub(start_row).saturating_add(1) as usize);
+    for row in start_row..=end_row {
         let mut line = String::with_capacity(cols as usize);
         for col in 0..cols {
             if let Some(cell) = screen.cell(row, col) {
@@ -175,9 +208,28 @@ fn codex_prompt_allows_peer_nudge(pane: &Pane) -> Option<bool> {
         return Some(false);
     }
     let (rows, cols) = screen.size();
-    let start_row = rows.saturating_sub(CODEX_APPEND_ENTER_SNAPSHOT_LINES as u16);
+    let mut last_content_row = None;
+    for row in 0..rows {
+        let mut has_text = false;
+        for col in 0..cols {
+            if let Some(cell) = screen.cell(row, col) {
+                if !cell.contents().trim().is_empty() {
+                    has_text = true;
+                    break;
+                }
+            }
+        }
+        if has_text {
+            last_content_row = Some(row);
+        }
+    }
     let mut prompt_row = None;
-    for row in (start_row..rows).rev() {
+    let (cursor_row, cursor_col) = screen.cursor_position();
+    let end_row = last_content_row.unwrap_or(cursor_row).max(cursor_row);
+    let start_row = end_row
+        .saturating_add(1)
+        .saturating_sub(CODEX_APPEND_ENTER_SNAPSHOT_LINES as u16);
+    for row in (start_row..=end_row).rev() {
         let mut line = String::with_capacity(cols as usize);
         for col in 0..cols {
             if let Some(cell) = screen.cell(row, col) {
@@ -190,7 +242,6 @@ fn codex_prompt_allows_peer_nudge(pane: &Pane) -> Option<bool> {
         }
     }
     let prompt_row = prompt_row?;
-    let (cursor_row, cursor_col) = screen.cursor_position();
     if cursor_row > prompt_row {
         return Some(false);
     }
@@ -733,6 +784,9 @@ pub struct App {
     /// One-shot nudges waiting to be injected into Codex panes so the
     /// pane runs `check_messages` once it looks ready for PTY input.
     pending_codex_peer_messages: HashMap<usize, VecDeque<PendingCodexPeerDelivery>>,
+    /// Focused Codex panes show a local notification overlay instead
+    /// of receiving an immediate PTY nudge.
+    codex_peer_notification: Option<CodexPeerNotificationState>,
     // Reusable clipboard handle (lazy-initialized)
     clipboard: Option<arboard::Clipboard>,
     // Pane lifecycle event bus shared with IPC subscribers.
@@ -864,6 +918,7 @@ impl App {
             claude_monitor: crate::claude_monitor::ClaudeMonitor::new(),
             peer_client_kinds: HashMap::new(),
             pending_codex_peer_messages: HashMap::new(),
+            codex_peer_notification: None,
             clipboard: None,
             event_bus,
             ime_mode: crate::config::ImeMode::default(),
@@ -1223,6 +1278,22 @@ impl App {
         // leaks into the layout / PTY unintentionally.
         if self.overlay.is_some() {
             return crate::input::overlay::handle_overlay_key(self, key);
+        }
+
+        if self.codex_peer_notification_is_visible() {
+            if matches!(key.code, KeyCode::Esc)
+                || (key.modifiers == KeyModifiers::CONTROL
+                    && matches!(key.code, KeyCode::Char('c')))
+            {
+                self.dismiss_codex_peer_notification();
+                return Ok(true);
+            }
+            if crate::input::overlay::is_overlay_commit_key(key) {
+                return self
+                    .accept_codex_peer_notification()
+                    .map_err(|e| anyhow::anyhow!(e.to_string()));
+            }
+            self.dismiss_codex_peer_notification();
         }
 
         // Rename mode — swallow all input until Enter/Esc.
@@ -1770,6 +1841,13 @@ impl App {
                 self.pending_codex_peer_messages.remove(pid);
             }
         }
+        if self
+            .codex_peer_notification
+            .as_ref()
+            .is_some_and(|n| pane_ids_in_tab.contains(&n.target_pane))
+        {
+            self.codex_peer_notification = None;
+        }
 
         // If the overlay targets a pane in the tab being closed, cancel it.
         let overlay_in_tab = self
@@ -2100,6 +2178,13 @@ impl App {
         self.claude_monitor.remove(pane_id);
         self.peer_client_kinds.remove(&pane_id);
         self.pending_codex_peer_messages.remove(&pane_id);
+        if self
+            .codex_peer_notification
+            .as_ref()
+            .is_some_and(|n| n.target_pane == pane_id)
+        {
+            self.codex_peer_notification = None;
+        }
 
         let ws = &mut self.workspaces[ws_index];
         let remaining_ids = ws.layout.collect_pane_ids();
@@ -3369,6 +3454,7 @@ impl App {
         if sender_ws != target_ws || target_id == from_pane {
             return Ok(());
         }
+        self.materialize_unfocused_codex_peer_notification();
         let from_name = self.workspaces[sender_ws]
             .pane_names
             .iter()
@@ -3376,16 +3462,31 @@ impl App {
             .map(|(n, _)| n.clone());
         let from_kind = self.peer_client_kinds.get(&from_pane).copied();
         if self.pane_expects_codex_peer_delivery(target_ws, target_id) {
-            let queue = self
-                .pending_codex_peer_messages
-                .entry(target_id)
-                .or_default();
-            if queue.is_empty() {
-                queue.push_back(PendingCodexPeerDelivery::Draft(PendingCodexPeerMessage {
-                    from_pane,
-                    from_name: from_name.clone(),
-                    from_kind,
-                }));
+            let message = PendingCodexPeerMessage {
+                from_pane,
+                from_name: from_name.clone(),
+                from_kind,
+            };
+            let target_is_focused = self.active_tab == target_ws
+                && self.workspaces[target_ws].focus_target == FocusTarget::Pane
+                && self.workspaces[target_ws].focused_pane_id == target_id;
+            if target_is_focused {
+                self.pending_codex_peer_messages.remove(&target_id);
+                match self.codex_peer_notification.as_mut() {
+                    Some(notification) if notification.target_pane == target_id => {
+                        notification.register_message(message);
+                    }
+                    _ => {
+                        self.codex_peer_notification = Some(CodexPeerNotificationState {
+                            target_pane: target_id,
+                            message,
+                            pending_count: 1,
+                        });
+                    }
+                }
+                self.dirty = true;
+            } else {
+                self.push_pending_codex_peer_nudge(target_id, message);
             }
         }
         self.event_bus.emit(ipc::Event::PeerInbox {
@@ -3724,6 +3825,80 @@ impl App {
         Ok(())
     }
 
+    fn push_pending_codex_peer_nudge(&mut self, pane_id: usize, message: PendingCodexPeerMessage) {
+        let queue = self.pending_codex_peer_messages.entry(pane_id).or_default();
+        if queue.is_empty() {
+            queue.push_back(PendingCodexPeerDelivery::Draft(message));
+        }
+    }
+
+    fn codex_peer_notification_is_visible(&self) -> bool {
+        if self.overlay.is_some() {
+            return false;
+        }
+        let Some(notification) = self.codex_peer_notification.as_ref() else {
+            return false;
+        };
+        self.ws().focus_target == FocusTarget::Pane
+            && self.ws().focused_pane_id == notification.target_pane
+            && self.ws().panes.contains_key(&notification.target_pane)
+    }
+
+    pub(crate) fn visible_codex_peer_notification(&self) -> Option<&CodexPeerNotificationState> {
+        self.codex_peer_notification_is_visible()
+            .then_some(self.codex_peer_notification.as_ref())
+            .flatten()
+    }
+
+    fn dismiss_codex_peer_notification(&mut self) {
+        if self.codex_peer_notification.take().is_some() {
+            self.dirty = true;
+        }
+    }
+
+    fn materialize_unfocused_codex_peer_notification(&mut self) {
+        let Some(notification) = self.codex_peer_notification.clone() else {
+            return;
+        };
+        if self.codex_peer_notification_is_visible() {
+            return;
+        }
+        if self
+            .resolve_pane_across_workspaces(&PaneRef::Id(notification.target_pane))
+            .is_some()
+        {
+            self.push_pending_codex_peer_nudge(notification.target_pane, notification.message);
+        }
+        self.codex_peer_notification = None;
+        self.dirty = true;
+    }
+
+    fn accept_codex_peer_notification(&mut self) -> std::result::Result<bool, ipc::CodedError> {
+        let Some(notification) = self.codex_peer_notification.clone() else {
+            return Ok(false);
+        };
+        if !self.codex_peer_notification_is_visible() {
+            return Ok(false);
+        }
+        let payload = crate::mcp_peer::build_send_keys_payload(
+            &format_codex_peer_message(&notification.message),
+            None,
+            false,
+        )
+        .expect("codex peer notification payload");
+        let pane = self
+            .ws_mut()
+            .panes
+            .get_mut(&notification.target_pane)
+            .ok_or_else(|| ipc::CodedError::new(ipc::err_code::PANE_VANISHED, "pane vanished"))?;
+        write_input_to_pane(pane, payload.as_bytes(), false)?;
+        self.pending_codex_peer_messages
+            .remove(&notification.target_pane);
+        self.codex_peer_notification = None;
+        self.dirty = true;
+        Ok(true)
+    }
+
     fn pane_expects_codex_peer_delivery(&self, ws_index: usize, pane_id: usize) -> bool {
         if self.peer_client_kinds.get(&pane_id) == Some(&PeerClientKind::Codex) {
             return true;
@@ -3754,6 +3929,7 @@ impl App {
     }
 
     pub(crate) fn flush_pending_codex_peer_messages(&mut self) {
+        self.materialize_unfocused_codex_peer_notification();
         let now = Instant::now();
         let mut empty_panes = Vec::new();
         for ws in &mut self.workspaces {
@@ -5604,12 +5780,17 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+        let notification = app
+            .visible_codex_peer_notification()
+            .expect("focused Codex target should show a notification overlay");
+        assert_eq!(notification.target_pane, sibling_id);
+        assert_eq!(notification.pending_count, 1);
         assert_eq!(
             app.pending_codex_peer_messages
                 .get(&sibling_id)
                 .map(|q| q.len()),
-            Some(1),
-            "focused Codex target should queue a deferred nudge"
+            None,
+            "focused Codex target should not queue an immediate PTY nudge"
         );
 
         app.flush_pending_codex_peer_messages();
@@ -5617,12 +5798,24 @@ mod tests {
             app.pending_codex_peer_messages
                 .get(&sibling_id)
                 .map(|q| q.len()),
-            Some(1),
-            "focused Codex target should not be nudged until focus moves away"
+            None,
+            "focused Codex target should stay notification-only while it remains focused"
         );
 
         app.handle_focus(&ipc::PaneRef::Id(sender_id))
             .expect("refocus sender");
+        app.flush_pending_codex_peer_messages();
+        assert!(
+            app.visible_codex_peer_notification().is_none(),
+            "moving focus away should hand the notification back to the worker queue"
+        );
+        assert_eq!(
+            app.pending_codex_peer_messages
+                .get(&sibling_id)
+                .map(|q| q.len()),
+            Some(1),
+            "unfocused Codex target should regain a queued nudge"
+        );
         {
             let pane = app.ws_mut().panes.get_mut(&sibling_id).expect("pane");
             let mut parser = pane.parser.lock().unwrap();
@@ -5643,6 +5836,124 @@ mod tests {
         assert!(
             !app.pending_codex_peer_messages.contains_key(&sibling_id),
             "second unfocused flush should submit the deferred nudge"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_peer_send_coalesces_focused_codex_notifications() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let sender_id = app.ws().focused_pane_id;
+        let sibling_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("split succeeds");
+        app.peer_client_kinds
+            .insert(sibling_id, PeerClientKind::Codex);
+        app.handle_focus(&ipc::PaneRef::Id(sibling_id))
+            .expect("focus sibling");
+
+        app.handle_peer_send(
+            sender_id,
+            &ipc::PaneRef::Id(sibling_id),
+            "hello focused codex".to_string(),
+        )
+        .expect("first peer send");
+        app.handle_peer_send(
+            sender_id,
+            &ipc::PaneRef::Id(sibling_id),
+            "hello again focused codex".to_string(),
+        )
+        .expect("second peer send");
+
+        let notification = app
+            .visible_codex_peer_notification()
+            .expect("focused Codex target should still show one notification");
+        assert_eq!(notification.pending_count, 2);
+        assert_eq!(
+            app.pending_codex_peer_messages
+                .get(&sibling_id)
+                .map(|q| q.len()),
+            None,
+            "focused notifications should not leak into the PTY nudge queue"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn focused_codex_notification_esc_dismisses_without_queueing_nudge() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let sender_id = app.ws().focused_pane_id;
+        let sibling_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("split succeeds");
+        app.peer_client_kinds
+            .insert(sibling_id, PeerClientKind::Codex);
+        app.handle_focus(&ipc::PaneRef::Id(sibling_id))
+            .expect("focus sibling");
+        app.handle_peer_send(
+            sender_id,
+            &ipc::PaneRef::Id(sibling_id),
+            "hello focused codex".to_string(),
+        )
+        .expect("peer send");
+
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let consumed = app.handle_key_event(esc).expect("dismiss notification");
+        assert!(consumed);
+        assert!(app.visible_codex_peer_notification().is_none());
+        assert!(
+            !app.pending_codex_peer_messages.contains_key(&sibling_id),
+            "dismissing the notification should not silently queue a PTY nudge"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn focused_codex_notification_commit_clears_notification() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let sender_id = app.ws().focused_pane_id;
+        let sibling_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("split succeeds");
+        app.peer_client_kinds
+            .insert(sibling_id, PeerClientKind::Codex);
+        app.handle_focus(&ipc::PaneRef::Id(sibling_id))
+            .expect("focus sibling");
+        app.handle_peer_send(
+            sender_id,
+            &ipc::PaneRef::Id(sibling_id),
+            "hello focused codex".to_string(),
+        )
+        .expect("peer send");
+
+        let commit = KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT);
+        let consumed = app.handle_key_event(commit).expect("commit notification");
+        assert!(consumed);
+        assert!(app.visible_codex_peer_notification().is_none());
+        assert!(
+            !app.pending_codex_peer_messages.contains_key(&sibling_id),
+            "manual insert should consume the focused notification without requeueing"
         );
         app.shutdown();
     }
@@ -5767,6 +6078,55 @@ mod tests {
             !app.pending_codex_peer_messages.contains_key(&sibling_id),
             "second flush should submit the queued nudge"
         );
+        app.shutdown();
+    }
+
+    #[test]
+    fn flush_pending_codex_peer_messages_uses_recent_content_on_tall_codex_screens() {
+        let mut app = App::new(120, 120).expect("App::new");
+        let sender_id = app.ws().focused_pane_id;
+        let sibling_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("split succeeds");
+        app.peer_client_kinds
+            .insert(sibling_id, PeerClientKind::Codex);
+        app.handle_focus(&ipc::PaneRef::Id(sender_id))
+            .expect("refocus sender");
+        app.handle_peer_send(
+            sender_id,
+            &ipc::PaneRef::Id(sibling_id),
+            "hello codex".to_string(),
+        )
+        .expect("peer send");
+
+        {
+            let pane = app.ws_mut().panes.get_mut(&sibling_id).expect("pane");
+            let mut parser = pane.parser.lock().unwrap();
+            parser.process(
+                b"\x1b[?25h\x1b[2J\x1b[H\
+                  Tip: NEW: JavaScript REPL is now available in /experimental.\n\
+                  \n\
+                  \n\
+                  \xE2\x80\xBA Summarize recent commits\n\
+                  \n\
+                    gpt-5.4 high\x1b[4;3H",
+            );
+        }
+
+        app.flush_pending_codex_peer_messages();
+        assert!(matches!(
+            app.pending_codex_peer_messages
+                .get(&sibling_id)
+                .and_then(|q| q.front()),
+            Some(PendingCodexPeerDelivery::SubmitAt(_))
+        ));
         app.shutdown();
     }
 

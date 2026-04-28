@@ -43,7 +43,7 @@ renga mcp status --client codex
 配送方式は client ごとに非対称です。
 
 - Claude Code は MCP の experimental channel を使うので、起動時に `--dangerously-load-development-channels server:renga-peers` が必要です。
-- Codex は `renga mcp install --client codex` で入れた MCP 登録を使います。そこで `RENGA_PEER_CLIENT_KIND=codex` が MCP サブプロセスに注入されるため、pane 側の起動は plain `codex` で足ります。renga は非フォーカスの worker pane が ready になったら `check_messages` を促す nudge を流し込み、実際の peer 本文は `check_messages` で読ませます。
+- Codex は `renga mcp install --client codex` で入れた MCP 登録を使います。そこで `RENGA_PEER_CLIENT_KIND=codex` が MCP サブプロセスに注入されるため、pane 側の起動は plain `codex` で足ります。renga は非フォーカスの worker pane が ready になったら `check_messages` を促す nudge を流し込み、実際の peer 本文は `check_messages` で読ませます。対象の Codex pane がフォーカス中なら、すぐ PTY 注入せずローカル通知 overlay を出します。
 
 <Callout type="warning">
   Codex 側の peer messaging は、現状どうしても Claude より不安定です。理由は 2 つで、受信が `check_messages` ベースの pull 型であることと、MCP 承認が pane ごとで共有されないことです。`pending messages` の表示が stale になることもあるので、最終的な真実は常に `check_messages` の返り値を見てください。
@@ -173,7 +173,7 @@ client が renga の外で起動されたか、renga ペインの環境変数を
 
 ### Codex に送ったのに反応がない
 
-Codex への配送は pane-driven です。renga が `check_messages` を促す nudge を queue し、Codex ペインが PTY 入力を安全に受けられる状態で、かつ非フォーカスになった時点で流し込みます。busy な間やフォーカス中に届いた間は queue に残るので、まずはペインが落ち着いてフォーカスが外れるのを待ってください。
+Codex への配送は pane-driven です。renga が `check_messages` を促す nudge を queue し、Codex ペインが PTY 入力を安全に受けられる状態で、かつ非フォーカスになった時点で流し込みます。busy な間は queue に残ります。フォーカス中に届いた場合は通知 overlay を出し、`Alt+Enter` / `Ctrl+Enter` で `check_messages` 用の文面だけを composer に挿入します。`Esc` なら無視、Enter を押して実行するかどうかは人間が決めます。後でフォーカスが外れれば、worker と同じ queued nudge 経路に戻ります。
 
 `check_messages` で受け取った本文が実際の peer 依頼です。単に返事を返すためのチャットではなく、人間からの依頼に近い peer 指示として扱うのが前提です。調査、pane 操作、tool 実行、コード編集などを頼まれたなら、その作業自体を進めてください。
 
