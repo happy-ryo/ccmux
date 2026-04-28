@@ -249,6 +249,8 @@ Peer delivery is client-specific:
 - **Claude Code** uses the MCP experimental channel protocol, so it needs `--dangerously-load-development-channels server:renga-peers` at startup.
 - **Codex** uses the MCP registration installed by `renga mcp install --client codex`; once that is in place, a plain `codex` launch is enough and incoming peer messages are drained with `check_messages`.
 
+Optional Codex auto-nudge is opt-in. Set `RENGA_CODEX_AUTO_NUDGE=1` in the parent shell before launching `codex`; `renga mcp install --client codex` configures the MCP registration to pass that env var through to `renga-peers`.
+
 renga gives you two shortcuts so you don't have to type the Claude launch flag by hand:
 
 - **`Alt+P`** — Inserts `claude --dangerously-load-development-channels server:renga-peers ` into the focused pane (trailing space, *no* Enter). Review, optionally tack on args, press Enter to run. Works in any pane, any shell.
@@ -320,6 +322,7 @@ _Event monitoring:_
 - **`list_peers` reports "renga not reachable from this peer client"** — The client was launched outside a renga pane, or without inheriting the pane env. Re-launch from inside renga (`Alt+P` / `renga split --role claude` for Claude, or a normal `codex` / `spawn_codex_pane` launch after `renga mcp install --client codex`).
 - **Peer messages don't render as `<channel>` tags** — You probably forgot the `--dangerously-load-development-channels server:renga-peers` flag. Prefer `Alt+P` over typing `claude` directly.
 - **A message sent to Codex seems to do nothing** — Codex is pull-based. The message is queued until Codex calls `check_messages`. Make sure the Codex prompt or workflow checks its inbox at turn start and at reasonable checkpoints during longer work.
+- **Codex auto-nudge does not fire** — The feature is off by default. Run `renga mcp install --client codex` so the MCP registration includes `RENGA_CODEX_AUTO_NUDGE` passthrough, then launch `codex` from a renga pane with `RENGA_CODEX_AUTO_NUDGE=1` in the parent shell environment.
 - **`send_keys` seems to do nothing** — `send_keys` writes raw bytes to the target pane's PTY; it does not grant approval out-of-band. Snapshot first with `inspect_pane(target=..., lines=20)` to confirm the pane is actually waiting for input, and prefer a stable pane `name` over guessing by focus in changing layouts.
 - **`poll_events` returns `events: []` before the timeout you expected** — A `types=[...]` filter only narrows what is returned; a non-matching event can still wake the long-poll and advance `next_since`. Re-issue the call with the returned cursor. If you receive `events_dropped`, re-sync once with `list_panes`.
 - **Upgrading renga?** — Re-run `renga mcp install --client claude --force` and/or `renga mcp install --client codex --force` so each registered client points at your new binary.

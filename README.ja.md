@@ -254,6 +254,8 @@ renga mcp install --client codex   # Codex peer も使う場合
 - **Claude Code** は MCP の experimental channel 機能を使うので、起動時に毎回 `--dangerously-load-development-channels server:renga-peers` が必要です。
 - **Codex** は `renga mcp install --client codex` で入れた MCP 登録を使います。これが `RENGA_PEER_CLIENT_KIND=codex` を MCP サブプロセスに注入するので、起動自体は plain `codex` で足ります。受信は `check_messages` による pull です。
 
+Codex の auto-nudge は opt-in です。`codex` を起動する親シェルで `RENGA_CODEX_AUTO_NUDGE=1` を設定してください。`renga mcp install --client codex` を実行してあれば、その env var は `renga-peers` の MCP サブプロセスまで自動で引き継がれます。
+
 Claude の起動フラグを毎回手で打たなくて済むように、renga 側から 2 つの経路を用意しています。
 
 - **`Alt+P`** — フォーカス中のペインに `claude --dangerously-load-development-channels server:renga-peers ` を入力してくれる (末尾にスペース、**Enter は押されない**)。そのまま Enter で起動してもいいし、追加の引数 (例 `/foo`) を続けて書いてから Enter でも OK。シェル (bash / zsh / fish / pwsh) の種類を問わず同じ動作。
@@ -325,6 +327,7 @@ _イベント監視:_
 - **`list_peers` が "renga not reachable from this peer client" を返す** — client が renga の外で起動されたか、renga ペインの環境変数を引き継げていません。renga のペイン内から起動し直してください（Claude は `Alt+P` / `renga split --role claude`、Codex は `renga mcp install --client codex` 後の plain `codex` または `spawn_codex_pane`）。
 - **相手に送ったメッセージが `<channel>` タグで表示されない** — 起動時のフラグ `--dangerously-load-development-channels server:renga-peers` を付け忘れています。`claude` と打つ代わりに `Alt+P` を使えばフラグ付きのコマンドが挿入されるので事故りにくくなります。
 - **Codex に送ったのに反応がない** — Codex は pull 型です。メッセージは `check_messages` が呼ばれるまで queue に残ります。Codex 側の prompt / workflow が turn 開始時と長作業の節目で `check_messages` を呼ぶ前提になっているか確認してください。
+- **Codex の auto-nudge が動かない** — 既定では無効です。`renga mcp install --client codex` を実行して `RENGA_CODEX_AUTO_NUDGE` の passthrough を入れた上で、renga のペイン内から `RENGA_CODEX_AUTO_NUDGE=1` を設定した親シェルで `codex` を起動してください。
 - **`send_keys` が効いていないように見える** — `send_keys` は target ペインの PTY に生の入力バイトを書き込むだけで、帯域外の「承認」操作ではありません。まず `inspect_pane(target=..., lines=20)` で本当に入力待ちか確認し、レイアウトが動く運用ではフォーカス推測ではなく安定した pane `name` を target に使ってください。
 - **`poll_events` が想定より早く `events: []` を返す** — `types=[...]` フィルタは返却結果を絞るだけで、非一致イベントでも long-poll は解除されて `next_since` は前進します。返ってきた cursor でそのまま再 poll してください。`events_dropped` が来た場合だけ、1 回 `list_panes` で再同期すると安全です。
 - **renga をアップグレードしたら繋がらなくなった** — 登録されているバイナリのパスが古いです。`renga mcp install --client claude --force` や `renga mcp install --client codex --force` で今の `renga` に更新してください。

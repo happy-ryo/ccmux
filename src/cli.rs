@@ -297,6 +297,11 @@ pub enum McpAction {
         /// Needed when upgrading renga and the command path changed.
         #[arg(long)]
         force: bool,
+        /// For Codex only: patch the `renga-peers` config entry so
+        /// `check_messages` / `send_message` default to auto-approve.
+        /// Keeps riskier tools such as `send_keys` on prompt.
+        #[arg(long)]
+        codex_auto_approve_peer_tools: bool,
     },
     /// Remove renga-peers from the selected client's MCP config.
     /// No-op if the entry is not present.
@@ -1082,13 +1087,46 @@ mod tests {
     fn parses_mcp_install_default_client_as_claude() {
         let cli = Cli::try_parse_from(["renga", "mcp", "install"]).unwrap();
         let Some(IpcCommand::Mcp {
-            action: McpAction::Install { client, force },
+            action:
+                McpAction::Install {
+                    client,
+                    force,
+                    codex_auto_approve_peer_tools,
+                },
         }) = cli.command
         else {
             panic!("expected mcp install command");
         };
         assert_eq!(client, McpClient::Claude);
         assert!(!force);
+        assert!(!codex_auto_approve_peer_tools);
+    }
+
+    #[test]
+    fn parses_mcp_install_codex_auto_approve_flag() {
+        let cli = Cli::try_parse_from([
+            "renga",
+            "mcp",
+            "install",
+            "--client",
+            "codex",
+            "--codex-auto-approve-peer-tools",
+        ])
+        .unwrap();
+        let Some(IpcCommand::Mcp {
+            action:
+                McpAction::Install {
+                    client,
+                    force,
+                    codex_auto_approve_peer_tools,
+                },
+        }) = cli.command
+        else {
+            panic!("expected mcp install command");
+        };
+        assert_eq!(client, McpClient::Codex);
+        assert!(!force);
+        assert!(codex_auto_approve_peer_tools);
     }
 
     #[test]

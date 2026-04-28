@@ -21,7 +21,9 @@ renga mcp install --client claude
 renga mcp install --client codex
 ```
 
-Registers the running `renga` binary as the `renga-peers` MCP server in each selected client's user-scope config. Internally shells out to `claude mcp add-json` for Claude and `codex mcp add` for Codex, so the clients own their on-disk schema and renga stays out of its evolution.
+Registers the running `renga` binary as the `renga-peers` MCP server in each selected client's user-scope config. Internally shells out to `claude mcp add-json` for Claude and `codex mcp add` for Codex first, so the primary registration path still goes through the client CLIs.
+
+For Codex, renga also applies the minimum post-registration patch needed to preserve the required env-var passthrough on the `renga-peers` entry in `~/.codex/config.toml`. If you also want `check_messages` and `send_message` to default to auto-approve, opt in explicitly with `--codex-auto-approve-peer-tools`. It intentionally does not auto-approve riskier tools such as `send_keys` or pane-control actions.
 
 Idempotent — re-runs without `--force` print the current entry and bail. Pass `--force` to overwrite after a renga upgrade. Use `renga mcp uninstall --client ...` to remove and `renga mcp status --client ...` to inspect.
 
@@ -35,6 +37,12 @@ Peer delivery is asymmetric:
 
 - Claude Code uses MCP's experimental channel protocol and needs `--dangerously-load-development-channels server:renga-peers` at startup.
 - Codex uses the MCP registration installed by `renga mcp install --client codex`; once that exists, a plain `codex` launch is enough and incoming peer messages are drained with `check_messages`.
+
+Codex auto-nudge is optional. Set `RENGA_CODEX_AUTO_NUDGE=1` in the parent shell before launching `codex`; `renga mcp install --client codex` ensures that env var is passed through to the `renga-peers` MCP subprocess.
+
+<Callout type="warning">
+  Peer messaging on Codex is currently less stable than on Claude by design. Two constraints matter: Codex receives via pull-based `check_messages`, and MCP approvals are pane-local rather than shared across panes. The on-screen `pending messages` prompt can therefore become stale; treat `check_messages` as the source of truth.
+</Callout>
 
 renga gives you shortcuts so you do not have to type the Claude launch flag by hand.
 
@@ -165,6 +173,28 @@ You launched Claude Code without `--dangerously-load-development-channels server
 ### A message sent to Codex seems to do nothing
 
 Codex is pull-based. The message is queued until Codex calls `check_messages`. Make sure the Codex prompt or workflow checks its inbox at turn start and at reasonable checkpoints during longer work.
+
+### Codex still shows `pending messages` but `check_messages` returns 0
+
+Codex auto-nudge is not a continuously-synchronised banner. It is a one-shot prompt nudging Codex to call `check_messages`, and that prompt remains in the Codex transcript after the inbox has been drained.
+
+If `check_messages` returns 0, treat the on-screen nudge as stale. The real inbox is already empty.
+
+### Codex auto-nudge does not fire
+
+The feature is off by default. Re-run `renga mcp install --client codex` if needed so the MCP registration passes through `RENGA_CODEX_AUTO_NUDGE`, then launch `codex` from inside a renga pane with `RENGA_CODEX_AUTO_NUDGE=1` set in the parent shell.
+
+### A new Codex pane asks for approval again
+
+Codex MCP approvals are pane-local. Unlike Claude Code, do not assume one approval automatically propagates to other Codex panes in the same tab.
+
+Warm up each new Codex pane once:
+
+1. Send that pane a single peer message.
+2. On the `check_messages` approval prompt, choose `Always allow`.
+3. On the first `send_message` approval prompt, choose `Always allow` again.
+
+`renga mcp install --client codex --codex-auto-approve-peer-tools` tries to preconfigure those two approvals up front, but depending on the Codex version and runtime, a brand-new pane may still prompt once before the setting fully takes effect.
 
 ### `send_keys` seems to do nothing
 
