@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -268,9 +269,10 @@ pub enum IpcCommand {
     /// the pane PTY, and never blocks on its own subcommand dispatch.
     McpPeer,
     /// Manage the `renga-peers` MCP server registration in Claude
-    /// Code. Thin wrapper around `claude mcp add-json / remove / list`
-    /// so users get a zero-argument one-liner instead of having to
-    /// know the exact JSON payload. Requires the `claude` CLI on PATH.
+    /// Code or Codex. Thin wrapper around their MCP management
+    /// commands so users get a one-liner instead of having to know the
+    /// exact registration payload. Requires the selected client CLI on
+    /// PATH.
     Mcp {
         #[command(subcommand)]
         action: McpAction,
@@ -283,23 +285,50 @@ pub enum IpcCommand {
 /// user expects.
 #[derive(Subcommand, Debug, Clone)]
 pub enum McpAction {
-    /// Register renga-peers in Claude Code's user-scope MCP config.
+    /// Register renga-peers in the selected client's MCP config.
     /// Idempotent — re-running overwrites the existing entry only when
     /// `--force` is passed, otherwise prints the current entry and
     /// bails so accidental re-runs don't silently repoint.
     Install {
+        /// Which client to register renga-peers with.
+        #[arg(long, value_enum, default_value_t = McpClient::Claude)]
+        client: McpClient,
         /// Overwrite any existing renga-peers entry without prompting.
         /// Needed when upgrading renga and the command path changed.
         #[arg(long)]
         force: bool,
     },
-    /// Remove renga-peers from Claude Code's user-scope MCP config.
+    /// Remove renga-peers from the selected client's MCP config.
     /// No-op if the entry is not present.
-    Uninstall,
+    Uninstall {
+        /// Which client to remove the registration from.
+        #[arg(long, value_enum, default_value_t = McpClient::Claude)]
+        client: McpClient,
+    },
     /// Show whether renga-peers is currently registered, and if so
-    /// what command it points at. Prints `claude mcp list` output
-    /// filtered to the renga-peers line for easy eyeballing.
-    Status,
+    /// what command it points at.
+    Status {
+        /// Which client to query the registration from.
+        #[arg(long, value_enum, default_value_t = McpClient::Claude)]
+        client: McpClient,
+    },
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "lowercase")]
+pub enum McpClient {
+    #[default]
+    Claude,
+    Codex,
+}
+
+impl fmt::Display for McpClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Claude => write!(f, "claude"),
+            Self::Codex => write!(f, "codex"),
+        }
+    }
 }
 
 impl Cli {
@@ -438,7 +467,7 @@ impl IpcCommand {
                  this variant must be intercepted before to_request() in main.rs"
             ),
             IpcCommand::Mcp { .. } => anyhow::bail!(
-                "mcp install/uninstall/status shells out to `claude mcp`; \
+                "mcp install/uninstall/status shells out to a client MCP CLI; \
                  this variant must be intercepted before to_request() in main.rs"
             ),
         }
@@ -1047,6 +1076,31 @@ mod tests {
         let cli = Cli::try_parse_from(["renga", "--show-macos-tip"]).unwrap();
         assert!(cli.show_macos_tip);
         assert!(!cli.no_macos_tip);
+    }
+
+    #[test]
+    fn parses_mcp_install_default_client_as_claude() {
+        let cli = Cli::try_parse_from(["renga", "mcp", "install"]).unwrap();
+        let Some(IpcCommand::Mcp {
+            action: McpAction::Install { client, force },
+        }) = cli.command
+        else {
+            panic!("expected mcp install command");
+        };
+        assert_eq!(client, McpClient::Claude);
+        assert!(!force);
+    }
+
+    #[test]
+    fn parses_mcp_status_codex_client() {
+        let cli = Cli::try_parse_from(["renga", "mcp", "status", "--client", "codex"]).unwrap();
+        let Some(IpcCommand::Mcp {
+            action: McpAction::Status { client },
+        }) = cli.command
+        else {
+            panic!("expected mcp status command");
+        };
+        assert_eq!(client, McpClient::Codex);
     }
 
     #[test]
