@@ -5641,7 +5641,7 @@ mod tests {
         }
         app.flush_pending_codex_peer_messages();
         assert!(
-            app.pending_codex_peer_messages.get(&sibling_id).is_none(),
+            !app.pending_codex_peer_messages.contains_key(&sibling_id),
             "second unfocused flush should submit the deferred nudge"
         );
         app.shutdown();
@@ -5704,7 +5704,7 @@ mod tests {
         }
         app.flush_pending_codex_peer_messages();
         assert!(
-            app.pending_codex_peer_messages.get(&sibling_id).is_none(),
+            !app.pending_codex_peer_messages.contains_key(&sibling_id),
             "second flush should submit the queued nudge"
         );
         app.shutdown();
@@ -5764,7 +5764,7 @@ mod tests {
         }
         app.flush_pending_codex_peer_messages();
         assert!(
-            app.pending_codex_peer_messages.get(&sibling_id).is_none(),
+            !app.pending_codex_peer_messages.contains_key(&sibling_id),
             "second flush should submit the queued nudge"
         );
         app.shutdown();
@@ -5829,7 +5829,7 @@ mod tests {
         }
         app.flush_pending_codex_peer_messages();
         assert!(
-            app.pending_codex_peer_messages.get(&sibling_id).is_none(),
+            !app.pending_codex_peer_messages.contains_key(&sibling_id),
             "clean Codex prompt should eventually submit the queued nudge"
         );
         app.shutdown();
