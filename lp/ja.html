@@ -182,6 +182,7 @@
           ホスト OS の IME 候補窓がキャレットに吸着するので、
           日本語 / 中国語 / 韓国語の変換中に候補窓が Claude のカーソルに振り回されません。
           <code>Alt+Enter</code> で送信、<code>Enter</code> は改行、
+          <code>Esc</code>/<code>Ctrl+C</code> で一旦閉じても同じドラフトを後で開き直せます。
           <code>--ime-freeze-panes</code> を組み合わせると背後のちらつきも止まります。
         </figcaption>
       </figure>
@@ -294,9 +295,9 @@ $ npm install -g @suisya-systems/renga</code></pre>
           </tr>
           <tr>
             <td>
-              Claude Code から MCP 経由でペインを操作
+              Claude Code から MCP 経由でペイン操作 + オーケストレーション
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                同じ <code>renga mcp install</code> で <code>list_panes</code> / <code>spawn_pane</code> / <code>close_pane</code> / <code>focus_pane</code> / <code>new_tab</code> が使えるようになり、Claude が会話から離れずにペイン分割・相方 Claude の起動・フォーカス移動まで自分でできる。<code>command="claude"</code> を渡せば <code>Alt+P</code> と同じメッセージング対応の起動コマンドに自動書き換えするので、新しく立ち上げた Claude も peer ネットワークに最初から繋がる。
+                同じ <code>renga mcp install</code> で <code>list_panes</code> / <code>spawn_pane</code> / <code>spawn_claude_pane</code> / <code>close_pane</code> / <code>focus_pane</code> / <code>new_tab</code> / <code>inspect_pane</code> / <code>send_keys</code> / <code>set_pane_identity</code> / <code>poll_events</code> が使えるようになり、Claude が会話から離れずにペイン分割・相方 Claude の起動・別ペイン画面の確認・対話プロンプトへの応答・ワーカー名付け・ペイン寿命監視まで自分でできる。<code>command="claude"</code> を渡せば <code>Alt+P</code> と同じメッセージング対応の起動コマンドに自動書き換えするので、新しく立ち上げた Claude も peer ネットワークに最初から繋がる。
               </span>
             </td>
             <td class="mark">—</td>

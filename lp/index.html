@@ -188,8 +188,9 @@
           caret inside the box, so Japanese / Chinese / Korean
           composition stops chasing Claude's moving cursor. Press
           <code>Alt+Enter</code> to send, <code>Enter</code> for a
-          newline, pair with <code>--ime-freeze-panes</code> to
-          silence background flicker.
+          newline, <code>Esc</code>/<code>Ctrl+C</code> to close
+          temporarily and reopen the same draft later, and pair with
+          <code>--ime-freeze-panes</code> to silence background flicker.
         </figcaption>
       </figure>
 
@@ -308,9 +309,9 @@ $ npm install -g @suisya-systems/renga</code></pre>
           </tr>
           <tr>
             <td>
-              MCP pane control from inside Claude Code
+              MCP pane control + orchestration from inside Claude Code
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                Same <code>renga mcp install</code> exposes <code>list_panes</code>, <code>spawn_pane</code>, <code>close_pane</code>, <code>focus_pane</code>, <code>new_tab</code> so a Claude instance can split the layout, spin up a sibling Claude, or switch focus — without the user leaving the conversation. A bare <code>command="claude"</code> is auto-upgraded to the <code>Alt+P</code> peer-enabled launch, so new Claude panes join the peer network automatically.
+                Same <code>renga mcp install</code> exposes <code>list_panes</code>, <code>spawn_pane</code>, <code>spawn_claude_pane</code>, <code>close_pane</code>, <code>focus_pane</code>, <code>new_tab</code>, <code>inspect_pane</code>, <code>send_keys</code>, <code>set_pane_identity</code>, and <code>poll_events</code> so a Claude instance can split the layout, launch a sibling Claude, inspect another pane's screen, answer an interactive prompt, rename workers, and watch pane lifecycle changes — without the user leaving the conversation. A bare <code>command="claude"</code> is auto-upgraded to the <code>Alt+P</code> peer-enabled launch, so new Claude panes join the peer network automatically.
               </span>
             </td>
             <td class="mark">—</td>
