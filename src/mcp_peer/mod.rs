@@ -337,7 +337,7 @@ promptly with send_message before resuming your prior task.\n\n"
 running in the same renga tab can see you and send you messages.\n\n\
 {receive_guidance}\
 Peer messaging tools:\n\
-- list_peers: Discover other Claude Code instances in the same renga tab.\n\
+- list_peers: Discover other peer-enabled agent instances in the same renga tab.\n\
 - send_message: Send a message to another instance by peer ID or name.\n\
 - set_summary: (stub in v1) Set a 1-2 sentence summary of what you're working on.\n\
 - check_messages: Drain any queued peer messages waiting for this client.\n\n\
@@ -352,6 +352,10 @@ inside `command` so the claude auto-upgrade keeps working.\n\
 structured `permission_mode` / `model` / `args[]` fields instead of a free-form command \
 string, and always enables the peer channel. Prefer this over `spawn_pane(command=\"claude ...\")` \
 for orchestrator flows — keeps Claude launch policy in renga instead of in every prompt.\n\
+- spawn_codex_pane: Higher-level convenience when the target process is Codex. Takes \
+structured `args[]` instead of a free-form command string and launches plain `codex`. Prefer \
+this over `spawn_pane(command=\"codex ...\")` so orchestrator prompts do not have to synthesize \
+shell-quoted Codex commands.\n\
 - close_pane: Close a pane by id or name. Refuses when it's the last pane of the last tab.\n\
 - focus_pane: Move keyboard focus to another pane in the same tab.\n\
 - new_tab: Open a brand-new tab with a fresh pane and switch focus to it. Unlike the other \
@@ -363,8 +367,8 @@ text by default; pass format=\"grid\" for row-addressable JSON or lines=N to tri
 the last N rows.\n\
 - send_keys: Send raw key input (y/n, Shift+Tab, Esc, arrow keys, Ctrl+letters, etc.) to a \
 pane's PTY. Use this to answer interactive prompts or drive a TUI when the target isn't a \
-Claude instance that can read send_message. DISTINCT from send_message, which delivers \
-logical messages between Claudes via channel notifications.\n\n\
+peer-enabled agent that can read send_message. DISTINCT from send_message, which delivers \
+logical peer messages rather than PTY bytes.\n\n\
 Event monitoring:\n\
 - poll_events: Long-poll for pane lifecycle events (pane_started, pane_exited, \
 events_dropped). First call (no `since`) starts at \"right now\" — no historical replay. \
@@ -378,7 +382,8 @@ launch policy in renga so orchestrator prompts never have to synthesize shell-qu
 strings. For arbitrary shell commands (non-Claude), use spawn_pane / new_tab. When those \
 are asked to run a bare `claude` invocation the MCP still auto-upgrades it to the \
 peer-enabled form (`claude --dangerously-load-development-channels server:renga-peers`), but \
-spawn_claude_pane is the recommended API for agent harnesses.\n\n\
+spawn_claude_pane is the recommended API for agent harnesses. For Codex launches, prefer \
+spawn_codex_pane once `renga mcp install --client codex` has been run for that user.\n\n\
 IMPORTANT about pane control: these tools affect the user's live layout. Use them with \
 restraint — don't close or focus panes you don't own unless the user asked you to. When in \
 doubt, ask first."
@@ -506,6 +511,42 @@ fn tools_spec() -> Value {
                         "type": "array",
                         "items": { "type": "string" },
                         "description": "Additional Claude CLI args appended after the structured fields. Must NOT contain --dangerously-load-development-channels, --permission-mode, or --model — pass those via the structured fields instead, or the call is rejected with invalid-params."
+                    }
+                },
+                "required": ["direction"]
+            }
+        },
+        {
+            "name": "spawn_codex_pane",
+            "description": "Higher-level convenience over `spawn_pane`: splits a pane and launches Codex without the orchestrating caller having to synthesize a shell-quoted `codex ...` command string. This helper assumes the user has already run `renga mcp install --client codex`; that registration injects the `RENGA_PEER_CLIENT_KIND=codex` env into Codex's MCP server subprocess, so a plain `codex` launch is enough for the new pane to register as a pull-based peer. Extra `args[]` are appended after the `codex` token using the same POSIX-style shell quoting as spawn_claude_pane. Pane creation semantics (split refusal, cwd validation, name / role attachment) match `spawn_pane`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "enum": ["vertical", "horizontal"],
+                        "description": "`vertical` splits side-by-side (new pane to the right); `horizontal` splits top/bottom (new pane on the bottom)."
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Pane to split. Numeric id, stable name, or the literal 'focused'. Defaults to 'focused' when omitted."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Optional stable id for the new pane so it can be addressed by name later."
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "Optional free-form role label (e.g. 'worker', 'reviewer', 'curator'). Shown in the UI and in list_panes output."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory for the new pane. Absolute paths are used as-is; relative paths are resolved against the caller pane's cwd. Same semantics as `spawn_pane`'s cwd."
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Additional Codex CLI args appended after the `codex` token. renga owns shell quoting for each item, so callers should pass one logical token per array entry."
                     }
                 },
                 "required": ["direction"]
@@ -880,6 +921,7 @@ fn handle_tools_call(id: &Value, params: &Value, ctx: &PeerCtx) -> Result<Value>
         "list_panes" => handle_list_panes(id, ctx),
         "spawn_pane" => handle_spawn_pane(id, &args, ctx),
         "spawn_claude_pane" => handle_spawn_claude_pane(id, &args, ctx),
+        "spawn_codex_pane" => handle_spawn_codex_pane(id, &args, ctx),
         "close_pane" => handle_close_pane(id, &args, ctx),
         "focus_pane" => handle_focus_pane(id, &args, ctx),
         "new_tab" => handle_new_tab(id, &args, ctx),
@@ -1251,6 +1293,31 @@ fn build_claude_launch_command(
     parts.join(" ")
 }
 
+fn build_codex_launch_command(extra_args: &[String]) -> String {
+    let mut parts: Vec<String> = vec!["codex".to_string()];
+    for a in extra_args {
+        parts.push(shell_quote(a));
+    }
+    parts.join(" ")
+}
+
+fn parse_string_args_array(args: &Value) -> std::result::Result<Vec<String>, String> {
+    match args.get("args") {
+        None => Ok(Vec::new()),
+        Some(Value::Array(items)) => {
+            let mut out = Vec::with_capacity(items.len());
+            for (idx, v) in items.iter().enumerate() {
+                match v.as_str() {
+                    Some(s) => out.push(s.to_string()),
+                    None => return Err(format!("args[{idx}] must be a string, got {v}")),
+                }
+            }
+            Ok(out)
+        }
+        Some(other) => Err(format!("`args` must be an array of strings; got {other}")),
+    }
+}
+
 /// Parse the `args` JSON array for `spawn_claude_pane`, rejecting
 /// entries that match any of the structured-field flags (which the
 /// caller must pass via `permission_mode` / `model`) or attempt to
@@ -1296,31 +1363,9 @@ fn handle_spawn_claude_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
 
     // `args` must be a JSON array of strings when present — reject
     // anything else instead of silently coercing, so typos surface.
-    let extra_args: Vec<String> = match args.get("args") {
-        None => Vec::new(),
-        Some(Value::Array(items)) => {
-            let mut out = Vec::with_capacity(items.len());
-            for (idx, v) in items.iter().enumerate() {
-                match v.as_str() {
-                    Some(s) => out.push(s.to_string()),
-                    None => {
-                        return err_response(
-                            id,
-                            -32602,
-                            &format!("args[{idx}] must be a string, got {v}"),
-                        );
-                    }
-                }
-            }
-            out
-        }
-        Some(other) => {
-            return err_response(
-                id,
-                -32602,
-                &format!("`args` must be an array of strings; got {other}"),
-            );
-        }
+    let extra_args = match parse_string_args_array(args) {
+        Ok(v) => v,
+        Err(msg) => return err_response(id, -32602, &msg),
     };
     if let Err(msg) = validate_claude_extra_args(&extra_args) {
         return err_response(id, -32602, &msg);
@@ -1364,6 +1409,61 @@ fn handle_spawn_claude_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
             -32603,
             &format!(
                 "renga refused spawn_claude_pane: {}",
+                fmt_code(&message, &code)
+            ),
+        ),
+        Ok(other) => err_response(id, -32603, &format!("unexpected renga response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("renga call failed: {e}")),
+    }
+}
+
+fn handle_spawn_codex_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
+    let direction = match parse_direction(args.get("direction").and_then(|v| v.as_str())) {
+        Ok(d) => d,
+        Err(msg) => return err_response(id, -32602, &msg),
+    };
+    let target = parse_target(args.get("target").and_then(|v| v.as_str()));
+    let name = opt_string(args, "name");
+    let role = opt_string(args, "role");
+    let cwd = opt_string(args, "cwd");
+    let extra_args = match parse_string_args_array(args) {
+        Ok(v) => v,
+        Err(msg) => return err_response(id, -32602, &msg),
+    };
+    let command = build_codex_launch_command(&extra_args);
+
+    let (caller_pane, endpoint) = match require_connected(ctx, id, "spawn codex pane") {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let cwd = match resolve_mcp_cwd(endpoint, caller_pane, cwd.as_deref()) {
+        Ok(v) => v,
+        Err(msg) => return err_response(id, -32602, &msg),
+    };
+    match client::send_request(
+        endpoint,
+        &Request::Split {
+            target,
+            direction,
+            command: Some(command.clone()),
+            id: name,
+            role,
+            cwd,
+        },
+    ) {
+        Ok(Response::Ok { data }) => {
+            let new_id = data.get("id").and_then(|v| v.as_u64());
+            let msg = match new_id {
+                Some(n) => format!("Spawned Codex pane id={n}. Launch command: {command}"),
+                None => format!("Spawned Codex pane (id not reported). Launch command: {command}"),
+            };
+            ok_response(id, tool_text_result(&msg))
+        }
+        Ok(Response::Err { message, code }) => err_response(
+            id,
+            -32603,
+            &format!(
+                "renga refused spawn_codex_pane: {}",
                 fmt_code(&message, &code)
             ),
         ),
@@ -2367,6 +2467,7 @@ mod tests {
             "check_messages",
             "list_panes",
             "spawn_pane",
+            "spawn_codex_pane",
             "close_pane",
             "focus_pane",
             "new_tab",
@@ -2435,9 +2536,30 @@ mod tests {
     }
 
     #[test]
+    fn tools_spec_advertises_spawn_codex_pane() {
+        let spec = tools_spec();
+        let names: Vec<&str> = spec
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t.get("name").and_then(|v| v.as_str()))
+            .collect();
+        assert!(
+            names.contains(&"spawn_codex_pane"),
+            "spawn_codex_pane missing from tools list: {names:?}"
+        );
+    }
+
+    #[test]
     fn build_claude_launch_command_bare_defaults_to_peer_channel_only() {
         let got = build_claude_launch_command(None, None, &[]);
         assert_eq!(got, CLAUDE_PEER_LAUNCH_CMD);
+    }
+
+    #[test]
+    fn build_codex_launch_command_bare_defaults_to_plain_codex() {
+        let got = build_codex_launch_command(&[]);
+        assert_eq!(got, "codex");
     }
 
     #[test]
@@ -2578,6 +2700,18 @@ mod tests {
     }
 
     #[test]
+    fn build_codex_launch_command_quotes_values_with_whitespace() {
+        let got = build_codex_launch_command(&[
+            "--config".to_string(),
+            "C:/Program Files/Codex".to_string(),
+        ]);
+        assert!(
+            got.contains("'C:/Program Files/Codex'"),
+            "arg with space not quoted: {got}"
+        );
+    }
+
+    #[test]
     fn validate_claude_extra_args_does_not_reject_empty_head_boundary() {
         // `=oops` and `""` split into an empty head, which must not
         // match any reserved flag. Guard so a future refactor that
@@ -2669,6 +2803,37 @@ mod tests {
             }),
             &ctx,
         );
+        let err_code = resp
+            .get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_i64());
+        assert_eq!(err_code, Some(-32602), "resp={resp}");
+    }
+
+    #[test]
+    fn spawn_codex_pane_rejects_null_args_as_invalid_params() {
+        let ctx = connected_ctx_with(Arc::new((
+            Mutex::new(EventBuffer::default()),
+            Condvar::new(),
+        )));
+        let id = json!(1);
+        let resp =
+            handle_spawn_codex_pane(&id, &json!({ "direction": "vertical", "args": null }), &ctx);
+        let err_code = resp
+            .get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_i64());
+        assert_eq!(err_code, Some(-32602), "resp={resp}");
+    }
+
+    #[test]
+    fn spawn_codex_pane_rejects_missing_direction() {
+        let ctx = connected_ctx_with(Arc::new((
+            Mutex::new(EventBuffer::default()),
+            Condvar::new(),
+        )));
+        let id = json!(1);
+        let resp = handle_spawn_codex_pane(&id, &json!({}), &ctx);
         let err_code = resp
             .get("error")
             .and_then(|e| e.get("code"))
@@ -3582,6 +3747,7 @@ mod tests {
         for (name, args) in [
             ("list_panes", json!({})),
             ("spawn_pane", json!({ "direction": "vertical" })),
+            ("spawn_codex_pane", json!({ "direction": "vertical" })),
             ("close_pane", json!({ "target": "1" })),
             ("focus_pane", json!({ "target": "1" })),
             ("new_tab", json!({})),
