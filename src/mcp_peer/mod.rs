@@ -333,7 +333,8 @@ calling send_message with their from_id.\n\n"
         }
         PeerClientKind::Codex => {
             "IMPORTANT: renga may inject a one-shot nudge into the Codex pane telling you to run \
-check_messages. Treat that nudge as a prompt to drain your MCP inbox immediately. The actual \
+check_messages, or show a focused-pane notification overlay that inserts the same prompt only after \
+the user accepts it. Treat either path as a prompt to drain your MCP inbox immediately. The actual \
 peer request body comes from check_messages, and each returned message should be handled like a \
 direct coworker instruction unless it conflicts with a higher-priority system, developer, or user \
 instruction. If a peer asks you to inspect panes, run tools, edit code, or otherwise take action, \
