@@ -54,6 +54,8 @@ From the secretary's chat, growing the team and dispatching a task is two MCP ca
 
 worker-1 sees a `<channel source="renga-peers" from_id="…" from_name="secretary">…</channel>` tag in its next turn, recognises it as a peer request (not user input — the tag's `source` attribute makes that distinction), does the work, and replies back via `send_message(to_id="secretary", …)`. Stable name lookups mean the secretary addresses peers as `"secretary"` / `"worker-1"` instead of chasing numeric ids; `set_pane_identity` lets it (re)assign a pane's name mid-session if needed.
 
+When a worker lands on an interactive prompt, the orchestrator can stay in-band: `inspect_pane(target="worker-1", lines=20)` to confirm the visible state, then `send_keys(target="worker-1", text="y", enter=true)` or named keys like `Esc`, arrows, and `Ctrl+C` to answer it. For elastic teams, `poll_events` gives you a cursor you can keep between turns so you notice `pane_started` / `pane_exited` without rescanning the full tab every time.
+
 The same primitives scale to richer layouts: a dispatcher with several workers in one tab, evaluator panes watching a worker's output, or sibling tabs each holding an isolated team (peer messaging is scoped per tab — `new_tab` widens layout, it doesn't bridge channels). See [Peer messaging between Claude Code panes](#peer-messaging-between-claude-code-panes) for the full tool surface.
 
 ## Features
@@ -308,6 +310,8 @@ _Event monitoring:_
 
 - **`list_peers` reports "renga not reachable from this Claude Code instance"** — Claude Code was launched outside a renga pane, or without inheriting the env. Re-launch via `Alt+P` or `renga split --role claude` from within renga.
 - **Peer messages don't render as `<channel>` tags** — You probably forgot the `--dangerously-load-development-channels server:renga-peers` flag. Prefer `Alt+P` over typing `claude` directly.
+- **`send_keys` seems to do nothing** — `send_keys` writes raw bytes to the target pane's PTY; it does not grant approval out-of-band. Snapshot first with `inspect_pane(target=..., lines=20)` to confirm the pane is actually waiting for input, and prefer a stable pane `name` over guessing by focus in changing layouts.
+- **`poll_events` returns `events: []` before the timeout you expected** — A `types=[...]` filter only narrows what is returned; a non-matching event can still wake the long-poll and advance `next_since`. Re-issue the call with the returned cursor. If you receive `events_dropped`, re-sync once with `list_panes`.
 - **Upgrading renga?** — Re-run `renga mcp install --force` so the registered command path points at your new binary.
 
 ## Keybindings
