@@ -5,7 +5,7 @@ import { Callout } from 'nextra/components'
 同じ renga タブに並べた Claude Code と Codex のペインが、`renga-peers` を通じて直接メッセージを送り合える機能です。片方のエージェントにちょっとした調査を頼んだり、失敗したテストの続きをもう片方に引き継いだりを、ユーザーが手でコピペしなくても進められるようになります。
 
 <Callout type="info">
-  Claude 側は `<channel source="renga-peers">...</channel>` タグで受信するので、ユーザー入力と区別できます。Codex 側は `check_messages` による pull 受信なので、割り込み型の `<channel>` にはなりません。
+  Claude 側は `<channel source="renga-peers">...</channel>` タグで受信するので、ユーザー入力と区別できます。Codex 側も pane layer で扱いますが、renga が PTY 経由で流し込むのは `check_messages` を促す one-shot nudge だけで、実際の依頼本文は MCP inbox に残します。
 </Callout>
 
 ## スコープは「renga タブ」単位
@@ -43,9 +43,7 @@ renga mcp status --client codex
 配送方式は client ごとに非対称です。
 
 - Claude Code は MCP の experimental channel を使うので、起動時に `--dangerously-load-development-channels server:renga-peers` が必要です。
-- Codex は `renga mcp install --client codex` で入れた MCP 登録を使います。そこで `RENGA_PEER_CLIENT_KIND=codex` が MCP サブプロセスに注入されるため、pane 側の起動は plain `codex` で足ります。受信は `check_messages` による pull です。
-
-Codex の auto-nudge は任意です。`codex` を起動する親シェルで `RENGA_CODEX_AUTO_NUDGE=1` を設定してください。`renga mcp install --client codex` を実行してあれば、その env var は `renga-peers` の MCP サブプロセスまで引き継がれます。
+- Codex は `renga mcp install --client codex` で入れた MCP 登録を使います。そこで `RENGA_PEER_CLIENT_KIND=codex` が MCP サブプロセスに注入されるため、pane 側の起動は plain `codex` で足ります。renga は非フォーカスの worker pane が ready になったら `check_messages` を促す nudge を流し込み、実際の peer 本文は `check_messages` で読ませます。
 
 <Callout type="warning">
   Codex 側の peer messaging は、現状どうしても Claude より不安定です。理由は 2 つで、受信が `check_messages` ベースの pull 型であることと、MCP 承認が pane ごとで共有されないことです。`pending messages` の表示が stale になることもあるので、最終的な真実は常に `check_messages` の返り値を見てください。
@@ -84,7 +82,7 @@ Codex ワーカーを会話の中から増やしたい場合は、`spawn_codex_p
 |---|---|
 | `list_peers(scope?)` | 同じ renga タブにいる他のペインを返します。自分自身は除外。`scope` は claude-peers-mcp との互換のため受け取りますが、renga では常にタブ単位なので中身は見ません。 |
 | `send_message(to_id, message)` | 同じタブにいる相手にメッセージを送ります。数字の id でも、ペインに付けた名前 (stable name) でも指定可能。別タブ宛や存在しない id 宛は「成功として返すが何も配送しない」挙動にしているので、送信側から他タブのペインを id 探索で列挙する攻撃は成立しません。 |
-| `check_messages` | pull 型 client の受信箱を drain します。Claude では主にフォールバックですが、Codex ではこれが主受信経路なので、各ターン開始時と長作業の節目で呼ぶ前提です。 |
+| `check_messages` | queued peer message を drain します。Codex では renga の nudge を受けたあとに、実際の peer 本文をここから読みます。返ってきた各メッセージは「ただの文字列」ではなく、必要なら tool 実行やコード編集まで含む peer 指示として扱ってください。 |
 | `set_summary(text)` | v1 では受け取るだけで保存しません。`list_peers` ではペイン名と役割 (role) を summary の代わりに返しているので実質不要になっています。本格的な実装は v2 の検討事項。 |
 
 ### ペイン操作
@@ -175,17 +173,16 @@ client が renga の外で起動されたか、renga ペインの環境変数を
 
 ### Codex に送ったのに反応がない
 
-Codex は pull 型です。メッセージは `check_messages` が呼ばれるまで queue に残ります。Codex 側の prompt / workflow が turn 開始時と長作業の節目で `check_messages` を呼ぶ前提になっているか確認してください。
+Codex への配送は pane-driven です。renga が `check_messages` を促す nudge を queue し、Codex ペインが PTY 入力を安全に受けられる状態で、かつ非フォーカスになった時点で流し込みます。busy な間やフォーカス中に届いた間は queue に残るので、まずはペインが落ち着いてフォーカスが外れるのを待ってください。
+
+`check_messages` で受け取った本文が実際の peer 依頼です。単に返事を返すためのチャットではなく、人間からの依頼に近い peer 指示として扱うのが前提です。調査、pane 操作、tool 実行、コード編集などを頼まれたなら、その作業自体を進めてください。
 
 ### Codex の `pending messages` 表示が残るのに `check_messages` は 0 件
 
-Codex auto-nudge は queue 状態を常時同期するバナーではなく、`check_messages` を促す one-shot の入力です。Codex の履歴に残るので、受信箱を drain したあとでも画面上にはしばらく見えます。
+pane-local nudge は queue 状態を常時同期するバナーではなく、`check_messages` を促す one-shot の入力です。Codex の履歴に残るので、受信箱を drain したあとでも画面上にはしばらく見えます。
 
 `check_messages` が 0 件なら、それは stale な nudge です。実 inbox 側は空なので、そのまま無視して構いません。
 
-### Codex の auto-nudge が動かない
-
-この機能は既定で無効です。必要なら `renga mcp install --client codex` を再実行して `RENGA_CODEX_AUTO_NUDGE` の passthrough が入っている状態にし、renga のペイン内から `RENGA_CODEX_AUTO_NUDGE=1` を設定した親シェルで `codex` を起動してください。
 
 ### 新しい Codex pane でまた承認が出る
 

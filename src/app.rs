@@ -1,7 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -111,6 +111,107 @@ pub enum AppCommand {
         role: Option<Option<String>>,
         reply: oneshot::Sender<std::result::Result<PaneInfo, ipc::CodedError>>,
     },
+}
+
+const CODEX_APPEND_ENTER_DELAY: Duration = Duration::from_millis(75);
+const CODEX_PEER_NUDGE_SUBMIT_DELAY: Duration = Duration::from_millis(1000);
+const CODEX_APPEND_ENTER_SNAPSHOT_LINES: usize = 8;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingCodexPeerMessage {
+    from_pane: usize,
+    from_name: Option<String>,
+    from_kind: Option<PeerClientKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PendingCodexPeerDelivery {
+    Draft(PendingCodexPeerMessage),
+    SubmitAt(Instant),
+}
+
+fn pane_screen_tail_lines(pane: &Pane) -> Option<Vec<String>> {
+    let parser = pane.parser.lock().ok()?;
+    let screen = parser.screen();
+    let (rows, cols) = screen.size();
+    let start_row = rows.saturating_sub(CODEX_APPEND_ENTER_SNAPSHOT_LINES as u16);
+    let mut lines = Vec::with_capacity(rows.saturating_sub(start_row) as usize);
+    for row in start_row..rows {
+        let mut line = String::with_capacity(cols as usize);
+        for col in 0..cols {
+            if let Some(cell) = screen.cell(row, col) {
+                line.push_str(cell.contents());
+            }
+        }
+        lines.push(line.trim_end().to_string());
+    }
+    Some(lines)
+}
+
+fn pane_screen_has_visible_text(pane: &Pane) -> bool {
+    let Ok(parser) = pane.parser.lock() else {
+        return false;
+    };
+    let screen = parser.screen();
+    let (rows, cols) = screen.size();
+    for row in 0..rows {
+        for col in 0..cols {
+            if let Some(cell) = screen.cell(row, col) {
+                if !cell.contents().trim().is_empty() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn codex_peer_screen_tail(pane: &Pane) -> Option<String> {
+    Some(
+        pane_screen_tail_lines(pane)?
+            .join("\n")
+            .to_ascii_lowercase(),
+    )
+}
+
+fn pending_startup_looks_like_codex(pane: &Pane) -> bool {
+    pane.pending_startup
+        .as_ref()
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .is_some_and(|text| text.trim_start().starts_with("codex"))
+}
+
+fn format_codex_peer_message(msg: &PendingCodexPeerMessage) -> String {
+    let mut header = format!("Peer request from id={}", msg.from_pane);
+    if let Some(name) = &msg.from_name {
+        header.push_str(&format!(" name={name}"));
+    }
+    if let Some(kind) = msg.from_kind {
+        let kind = match kind {
+            PeerClientKind::Claude => "claude",
+            PeerClientKind::Codex => "codex",
+        };
+        header.push_str(&format!(" kind={kind}"));
+    }
+    let guidance = "Run check_messages now. Treat each returned message as a direct coworker request: do the requested work, and use send_message only when a reply or status update is needed.";
+    format!("{header}. {guidance}")
+}
+
+fn write_input_to_pane(
+    pane: &mut Pane,
+    data: &[u8],
+    append_enter: bool,
+) -> std::result::Result<(), ipc::CodedError> {
+    pane.write_input(data)
+        .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?;
+    if append_enter {
+        if !data.is_empty() && (pane.is_codex_running() || pending_startup_looks_like_codex(pane)) {
+            std::thread::sleep(CODEX_APPEND_ENTER_DELAY);
+        }
+        pane.write_input(b"\r")
+            .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?;
+    }
+    Ok(())
 }
 
 /// Resolve a [`PaneRef`] to a concrete pane id.
@@ -595,6 +696,9 @@ pub struct App {
     /// Keyed by pane id so `list_peers` / `list_panes` can surface
     /// whether a pane is using Claude-style push or Codex-style poll.
     peer_client_kinds: HashMap<usize, PeerClientKind>,
+    /// One-shot nudges waiting to be injected into Codex panes so the
+    /// pane runs `check_messages` once it looks ready for PTY input.
+    pending_codex_peer_messages: HashMap<usize, VecDeque<PendingCodexPeerDelivery>>,
     // Reusable clipboard handle (lazy-initialized)
     clipboard: Option<arboard::Clipboard>,
     // Pane lifecycle event bus shared with IPC subscribers.
@@ -725,6 +829,7 @@ impl App {
             },
             claude_monitor: crate::claude_monitor::ClaudeMonitor::new(),
             peer_client_kinds: HashMap::new(),
+            pending_codex_peer_messages: HashMap::new(),
             clipboard: None,
             event_bus,
             ime_mode: crate::config::ImeMode::default(),
@@ -1628,6 +1733,7 @@ impl App {
                 self.saved_overlay_drafts.remove(pid);
                 self.claude_monitor.remove(*pid);
                 self.peer_client_kinds.remove(pid);
+                self.pending_codex_peer_messages.remove(pid);
             }
         }
 
@@ -1959,6 +2065,7 @@ impl App {
         // Clean up claude monitor state for this pane.
         self.claude_monitor.remove(pane_id);
         self.peer_client_kinds.remove(&pane_id);
+        self.pending_codex_peer_messages.remove(&pane_id);
 
         let ws = &mut self.workspaces[ws_index];
         let remaining_ids = ws.layout.collect_pane_ids();
@@ -3017,6 +3124,7 @@ impl App {
             ws.shutdown();
         }
         self.peer_client_kinds.clear();
+        self.pending_codex_peer_messages.clear();
     }
 
     /// Drain any pending IPC commands and dispatch them. Safe to call
@@ -3205,7 +3313,7 @@ impl App {
     /// loopback rendering already; in production self-send is always
     /// a mistake.
     fn handle_peer_send(
-        &self,
+        &mut self,
         from_pane: usize,
         target: &PaneRef,
         body: String,
@@ -3233,6 +3341,16 @@ impl App {
             .find(|(_, id)| **id == from_pane)
             .map(|(n, _)| n.clone());
         let from_kind = self.peer_client_kinds.get(&from_pane).copied();
+        if self.pane_expects_codex_peer_delivery(target_ws, target_id) {
+            self.pending_codex_peer_messages
+                .entry(target_id)
+                .or_default()
+                .push_back(PendingCodexPeerDelivery::Draft(PendingCodexPeerMessage {
+                    from_pane,
+                    from_name: from_name.clone(),
+                    from_kind,
+                }));
+        }
         self.event_bus.emit(ipc::Event::PeerInbox {
             target_pane: target_id,
             from_pane,
@@ -3564,14 +3682,103 @@ impl App {
             self.ws_mut().panes.get_mut(&pane_id).ok_or_else(|| {
                 ipc::CodedError::new(ipc::err_code::PANE_VANISHED, "pane vanished")
             })?;
-        pane.write_input(data)
-            .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?;
-        if append_enter {
-            pane.write_input(b"\r")
-                .map_err(|e| ipc::CodedError::new(ipc::err_code::IO_ERROR, e.to_string()))?;
-        }
+        write_input_to_pane(pane, data, append_enter)?;
         self.dirty = true;
         Ok(())
+    }
+
+    fn pane_expects_codex_peer_delivery(&self, ws_index: usize, pane_id: usize) -> bool {
+        if self.peer_client_kinds.get(&pane_id) == Some(&PeerClientKind::Codex) {
+            return true;
+        }
+        self.workspaces[ws_index]
+            .panes
+            .get(&pane_id)
+            .is_some_and(|pane| pane.is_codex_running() || pending_startup_looks_like_codex(pane))
+    }
+
+    fn codex_peer_delivery_ready(registered_codex: bool, pane: &Pane) -> bool {
+        if !registered_codex && !pane.is_codex_running() {
+            return false;
+        }
+        let Some(tail) = codex_peer_screen_tail(pane) else {
+            return false;
+        };
+        if tail.contains("esc to interrupt") || tail.contains("tab to queue message") {
+            return false;
+        }
+        if tail.contains("enter to send") || tail.contains("ready for input") {
+            return true;
+        }
+        if !pane_screen_has_visible_text(pane) {
+            return false;
+        }
+        let parser = match pane.parser.lock() {
+            Ok(parser) => parser,
+            Err(_) => return false,
+        };
+        !parser.screen().hide_cursor()
+    }
+
+    pub(crate) fn flush_pending_codex_peer_messages(&mut self) {
+        let now = Instant::now();
+        let mut empty_panes = Vec::new();
+        for ws in &mut self.workspaces {
+            let pane_ids: Vec<usize> = ws.panes.keys().copied().collect();
+            for pane_id in pane_ids {
+                if ws.focused_pane_id == pane_id {
+                    continue;
+                }
+                let Some(queue) = self.pending_codex_peer_messages.get_mut(&pane_id) else {
+                    continue;
+                };
+                let Some(delivery) = queue.front().cloned() else {
+                    empty_panes.push(pane_id);
+                    continue;
+                };
+                if let Some(pane) = ws.panes.get_mut(&pane_id) {
+                    match delivery {
+                        PendingCodexPeerDelivery::Draft(message) => {
+                            let registered_codex = self.peer_client_kinds.get(&pane_id)
+                                == Some(&PeerClientKind::Codex);
+                            if !Self::codex_peer_delivery_ready(registered_codex, pane) {
+                                continue;
+                            }
+                            let payload = crate::mcp_peer::build_send_keys_payload(
+                                &format_codex_peer_message(&message),
+                                None,
+                                false,
+                            )
+                            .expect("codex peer draft payload");
+                            if write_input_to_pane(pane, payload.as_bytes(), false).is_ok() {
+                                queue.pop_front();
+                                queue.push_front(PendingCodexPeerDelivery::SubmitAt(
+                                    now + CODEX_PEER_NUDGE_SUBMIT_DELAY,
+                                ));
+                                self.dirty = true;
+                            }
+                        }
+                        PendingCodexPeerDelivery::SubmitAt(ready_at) => {
+                            if now < ready_at {
+                                continue;
+                            }
+                            let payload = crate::mcp_peer::build_send_keys_payload("", None, true)
+                                .expect("codex peer submit payload");
+                            if write_input_to_pane(pane, payload.as_bytes(), false).is_ok() {
+                                queue.pop_front();
+                                self.dirty = true;
+                            }
+                        }
+                    }
+                }
+                if queue.is_empty() {
+                    empty_panes.push(pane_id);
+                }
+            }
+        }
+        for pane_id in empty_panes {
+            self.pending_codex_peer_messages.remove(&pane_id);
+        }
     }
 
     fn handle_focus(&mut self, target: &PaneRef) -> std::result::Result<(), ipc::CodedError> {
@@ -4035,6 +4242,28 @@ fn key_event_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_codex_peer_message_includes_sender_and_check_messages_guidance() {
+        let formatted = format_codex_peer_message(&PendingCodexPeerMessage {
+            from_pane: 7,
+            from_name: Some("planner".to_string()),
+            from_kind: Some(PeerClientKind::Claude),
+        });
+        assert!(!formatted.contains('\n'), "{formatted:?}");
+        assert!(
+            formatted.contains("Peer request from id=7 name=planner kind=claude."),
+            "{formatted:?}"
+        );
+        assert!(
+            formatted.contains("Run check_messages now."),
+            "{formatted:?}"
+        );
+        assert!(
+            formatted.contains("use send_message only when a reply or status update is needed."),
+            "{formatted:?}"
+        );
+    }
 
     // -- pane_local_coords / pane_local_coords_clamped ---------------
 
@@ -5190,6 +5419,278 @@ mod tests {
         assert!(
             !got_inbox,
             "cross-tab PeerSend must NOT emit a PeerInbox event"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_peer_send_queues_codex_nudge_and_emits_peer_inbox() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let (_sub_id, rx) = app.event_bus.subscribe();
+        let sender_id = app.ws().focused_pane_id;
+        let sibling_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("split succeeds");
+        app.peer_client_kinds
+            .insert(sibling_id, PeerClientKind::Codex);
+        app.handle_focus(&ipc::PaneRef::Id(sender_id))
+            .expect("refocus sender");
+        while rx.try_recv().is_ok() {}
+
+        app.handle_peer_send(
+            sender_id,
+            &ipc::PaneRef::Id(sibling_id),
+            "hello codex".to_string(),
+        )
+        .expect("peer send");
+
+        let peer_inbox = rx
+            .try_iter()
+            .find(|event| matches!(event, ipc::Event::PeerInbox { .. }))
+            .expect("Codex delivery should still emit PeerInbox");
+        match peer_inbox {
+            ipc::Event::PeerInbox {
+                target_pane,
+                from_pane,
+                from_name,
+                from_kind,
+                body,
+                ..
+            } => {
+                assert_eq!(target_pane, sibling_id);
+                assert_eq!(from_pane, sender_id);
+                assert_eq!(from_name.as_deref(), None);
+                assert_eq!(from_kind, None);
+                assert_eq!(body, "hello codex");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        let queued = app
+            .pending_codex_peer_messages
+            .get(&sibling_id)
+            .expect("queued codex peer message");
+        assert_eq!(queued.len(), 1);
+        match &queued[0] {
+            PendingCodexPeerDelivery::Draft(msg) => {
+                assert_eq!(msg.from_pane, sender_id);
+                assert_eq!(msg.from_name.as_deref(), None);
+                assert_eq!(msg.from_kind, None);
+            }
+            other => panic!("unexpected queued delivery: {other:?}"),
+        }
+        app.shutdown();
+    }
+
+    #[test]
+    fn handle_peer_send_defers_codex_nudge_while_target_is_focused() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let (_sub_id, rx) = app.event_bus.subscribe();
+        let sender_id = app.ws().focused_pane_id;
+        let sibling_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("split succeeds");
+        app.peer_client_kinds
+            .insert(sibling_id, PeerClientKind::Codex);
+        app.handle_focus(&ipc::PaneRef::Id(sibling_id))
+            .expect("focus sibling");
+        while rx.try_recv().is_ok() {}
+
+        app.handle_peer_send(
+            sender_id,
+            &ipc::PaneRef::Id(sibling_id),
+            "hello focused codex".to_string(),
+        )
+        .expect("peer send");
+
+        let peer_inbox = rx
+            .try_iter()
+            .find(|event| matches!(event, ipc::Event::PeerInbox { .. }))
+            .expect("focused Codex should still receive PeerInbox");
+        match peer_inbox {
+            ipc::Event::PeerInbox {
+                target_pane, body, ..
+            } => {
+                assert_eq!(target_pane, sibling_id);
+                assert_eq!(body, "hello focused codex");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        assert_eq!(
+            app.pending_codex_peer_messages
+                .get(&sibling_id)
+                .map(|q| q.len()),
+            Some(1),
+            "focused Codex target should queue a deferred nudge"
+        );
+
+        app.flush_pending_codex_peer_messages();
+        assert_eq!(
+            app.pending_codex_peer_messages
+                .get(&sibling_id)
+                .map(|q| q.len()),
+            Some(1),
+            "focused Codex target should not be nudged until focus moves away"
+        );
+
+        app.handle_focus(&ipc::PaneRef::Id(sender_id))
+            .expect("refocus sender");
+        {
+            let pane = app.ws_mut().panes.get_mut(&sibling_id).expect("pane");
+            let mut parser = pane.parser.lock().unwrap();
+            parser.process(b"\x1b[?25h\x1b[2J\x1b[Hready for input\n\nenter to send");
+        }
+        app.flush_pending_codex_peer_messages();
+        assert_eq!(
+            app.pending_codex_peer_messages
+                .get(&sibling_id)
+                .map(|q| q.len()),
+            Some(1),
+            "first unfocused flush should advance the deferred nudge to submit stage"
+        );
+        if let Some(queue) = app.pending_codex_peer_messages.get_mut(&sibling_id) {
+            queue[0] = PendingCodexPeerDelivery::SubmitAt(Instant::now());
+        }
+        app.flush_pending_codex_peer_messages();
+        assert!(
+            app.pending_codex_peer_messages.get(&sibling_id).is_none(),
+            "second unfocused flush should submit the deferred nudge"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn flush_pending_codex_peer_messages_requires_ready_screen() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let sender_id = app.ws().focused_pane_id;
+        let sibling_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("split succeeds");
+        app.peer_client_kinds
+            .insert(sibling_id, PeerClientKind::Codex);
+        app.handle_focus(&ipc::PaneRef::Id(sender_id))
+            .expect("refocus sender");
+        {
+            let pane = app.ws_mut().panes.get_mut(&sibling_id).expect("pane");
+            *pane.title.lock().unwrap() = "Codex".to_string();
+            let mut parser = pane.parser.lock().unwrap();
+            parser.process(b"\x1b[?25lworking");
+        }
+        app.handle_peer_send(
+            sender_id,
+            &ipc::PaneRef::Id(sibling_id),
+            "hello codex".to_string(),
+        )
+        .expect("peer send");
+        app.flush_pending_codex_peer_messages();
+        assert_eq!(
+            app.pending_codex_peer_messages
+                .get(&sibling_id)
+                .map(|q| q.len()),
+            Some(1),
+            "busy Codex pane should keep the message queued"
+        );
+
+        {
+            let pane = app.ws_mut().panes.get_mut(&sibling_id).expect("pane");
+            let mut parser = pane.parser.lock().unwrap();
+            parser.process(b"\x1b[?25h\x1b[2J\x1b[Hready for input\n\nenter to send");
+        }
+        app.flush_pending_codex_peer_messages();
+        assert_eq!(
+            app.pending_codex_peer_messages
+                .get(&sibling_id)
+                .map(|q| q.len()),
+            Some(1),
+            "first ready flush should advance to submit stage"
+        );
+        if let Some(queue) = app.pending_codex_peer_messages.get_mut(&sibling_id) {
+            queue[0] = PendingCodexPeerDelivery::SubmitAt(Instant::now());
+        }
+        app.flush_pending_codex_peer_messages();
+        assert!(
+            app.pending_codex_peer_messages.get(&sibling_id).is_none(),
+            "second flush should submit the queued nudge"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn flush_pending_codex_peer_messages_waits_for_non_blank_codex_screen() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let sender_id = app.ws().focused_pane_id;
+        let sibling_id = app
+            .handle_split(
+                &ipc::PaneRef::Focused,
+                ipc::Direction::Vertical,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("split succeeds");
+        app.peer_client_kinds
+            .insert(sibling_id, PeerClientKind::Codex);
+        app.handle_focus(&ipc::PaneRef::Id(sender_id))
+            .expect("refocus sender");
+        app.handle_peer_send(
+            sender_id,
+            &ipc::PaneRef::Id(sibling_id),
+            "hello codex".to_string(),
+        )
+        .expect("peer send");
+
+        app.flush_pending_codex_peer_messages();
+        assert_eq!(
+            app.pending_codex_peer_messages
+                .get(&sibling_id)
+                .map(|q| q.len()),
+            Some(1),
+            "blank Codex screen should keep the nudge queued"
+        );
+
+        {
+            let pane = app.ws_mut().panes.get_mut(&sibling_id).expect("pane");
+            let mut parser = pane.parser.lock().unwrap();
+            parser.process(
+                b"\x1b[?25h\x1b[2J\x1b[H\xE2\x80\xBA Explain this codebase\n\n  gpt-5.4 high",
+            );
+        }
+        app.flush_pending_codex_peer_messages();
+        assert_eq!(
+            app.pending_codex_peer_messages
+                .get(&sibling_id)
+                .map(|q| q.len()),
+            Some(1),
+            "non-blank Codex screen should advance to submit stage first"
+        );
+        if let Some(queue) = app.pending_codex_peer_messages.get_mut(&sibling_id) {
+            queue[0] = PendingCodexPeerDelivery::SubmitAt(Instant::now());
+        }
+        app.flush_pending_codex_peer_messages();
+        assert!(
+            app.pending_codex_peer_messages.get(&sibling_id).is_none(),
+            "second flush should submit the queued nudge"
         );
         app.shutdown();
     }

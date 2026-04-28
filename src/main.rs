@@ -386,6 +386,8 @@ fn run_event_loop(
             }
         }
 
+        app.flush_pending_codex_peer_messages();
+
         // After paste, wait a few frames for PTY echo to settle
         if app.paste_cooldown > 0 {
             app.paste_cooldown -= 1;

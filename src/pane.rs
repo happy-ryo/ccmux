@@ -413,7 +413,19 @@ impl Pane {
     /// survive Claude's transient task-name title rewrites.
     pub fn is_claude_running(&self) -> bool {
         if let Ok(t) = self.title.lock() {
-            t.to_lowercase().contains("claude")
+            title_mentions_client(&t, "claude")
+        } else {
+            false
+        }
+    }
+
+    /// Check if Codex is running in this pane (by current window
+    /// title). Unlike Claude we do not currently need a sticky latch:
+    /// this is used only for UI affordances such as pane labeling and
+    /// border color, not caret placement or command-injection gating.
+    pub fn is_codex_running(&self) -> bool {
+        if let Ok(t) = self.title.lock() {
+            title_mentions_client(&t, "codex")
         } else {
             false
         }
@@ -891,6 +903,10 @@ fn trim_ascii_whitespace_end(buf: &[u8]) -> &[u8] {
     &buf[..end]
 }
 
+fn title_mentions_client(title: &str, needle: &str) -> bool {
+    title.to_ascii_lowercase().contains(needle)
+}
+
 /// Detect the appropriate shell to launch.
 pub fn detect_shell() -> PathBuf {
     #[cfg(windows)]
@@ -1239,5 +1255,12 @@ mod tests {
     fn prompt_ready_zsh_percent_after_space() {
         // Bare `%` preceded by whitespace stays a valid zsh prompt.
         assert!(is_prompt_ready(b"user ~/dir % "));
+    }
+
+    #[test]
+    fn title_mentions_client_matches_case_insensitively() {
+        assert!(title_mentions_client("Codex - review mode", "codex"));
+        assert!(title_mentions_client("CLAUDE /company", "claude"));
+        assert!(!title_mentions_client("bash", "codex"));
     }
 }
