@@ -5,7 +5,7 @@
 - [Node.js](https://nodejs.org/) (for npm install)
 - A terminal emulator (Windows Terminal, iTerm2, etc.)
 - On Windows: [Git for Windows](https://git-scm.com/download/win) (includes Git Bash, recommended for cd tracking)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (optional, but that's the point)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and/or Codex (optional, but that is the point)
 
 Only needed when building from source: [Rust toolchain](https://rustup.rs/).
 
@@ -19,13 +19,14 @@ npm install -g @suisya-systems/renga
 
 Requires Node.js. After install, use the `renga` command from anywhere.
 
-If you want Claude Code panes to talk to each other or control panes from inside Claude, register renga's MCP server once:
+If you want Claude Code or Codex panes to talk to each other or control panes from inside the client, register renga's MCP server once per client:
 
 ```bash
-renga mcp install
+renga mcp install --client claude
+renga mcp install --client codex   # if you want Codex peers too
 ```
 
-That exposes the built-in `renga-peers` channel and pane-control tools such as `list_panes`, `spawn_claude_pane`, `inspect_pane`, and `send_keys` inside Claude Code.
+That exposes the built-in `renga-peers` network and pane-control tools such as `list_panes`, `spawn_claude_pane`, `spawn_codex_pane`, `inspect_pane`, and `send_keys` inside the selected client.
 
 ### Download binary
 
@@ -68,13 +69,15 @@ You'll see a terminal pane with your shell, a file tree sidebar on the left, and
 
 ## Basic workflow
 
-### 1. Start Claude Code the peer-aware way
+### 1. Start Claude Code or Codex the peer-aware way
 
 Press `Alt+P` in a terminal pane. renga inserts the peer-enabled Claude launch command for you; review it, optionally append args, and press `Enter`.
 
 If you prefer the CLI path, `renga split --role claude` and `renga new-tab --role claude` open a new pane and auto-launch Claude Code with the same peer wiring.
 
 The pane border turns orange when Claude Code is running.
+
+If you want a Codex worker, make sure `renga mcp install --client codex` has been run once, then launch plain `codex` in a pane or let an orchestrator call `spawn_codex_pane`.
 
 ### 2. Split panes
 
@@ -92,7 +95,7 @@ Use `Ctrl+Right` / `Ctrl+Left` to cycle through sidebar, preview, and terminal p
 
 ### 5. Let Claude orchestrate other panes
 
-After `renga mcp install`, a Claude pane can call tools like `list_peers`, `send_message`, `list_panes`, `spawn_claude_pane`, `inspect_pane`, `send_keys`, and `poll_events`. That is the core renga workflow: one pane can launch workers, inspect their prompts, and coordinate them without leaving the conversation.
+After the MCP server is installed for a client, a pane can call tools like `list_peers`, `send_message`, `list_panes`, `spawn_claude_pane`, `spawn_codex_pane`, `inspect_pane`, `send_keys`, and `poll_events`. Claude receives peer pushes as `<channel>` tags; Codex drains them with `check_messages`. That is the core renga workflow: one pane can launch workers, inspect their prompts, and coordinate them without leaving the conversation.
 
 See [Peer Messaging](/en/peer-messaging) for the full tool surface.
 

@@ -408,7 +408,7 @@ fn tools_spec() -> Value {
         },
         {
             "name": "send_message",
-            "description": "Send a message to another pane in the same renga tab. The recipient Claude Code instance sees it as a <channel source=\"renga-peers\"> tag, distinct from user input.",
+            "description": "Send a message to another pane in the same renga tab. Claude recipients see it as a <channel source=\"renga-peers\"> tag, while pull-based clients such as Codex receive it through `check_messages`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -745,7 +745,7 @@ fn handle_list_peers(id: &Value, ctx: &PeerCtx) -> Value {
             return ok_response(
                 id,
                 tool_text_result(&format!(
-                    "(no peers — renga not reachable from this Claude Code instance: {reason})"
+                    "(no peers — renga not reachable from this peer client: {reason})"
                 )),
             );
         }
