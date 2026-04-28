@@ -16,6 +16,7 @@ const TEXT_DIM: Color = Color::Rgb(0x6e, 0x76, 0x81);
 const ACCENT_GREEN: Color = Color::Rgb(0x3f, 0xb9, 0x50);
 const ACCENT_BLUE: Color = Color::Rgb(0x58, 0xa6, 0xff);
 const ACCENT_CLAUDE: Color = Color::Rgb(0xd9, 0x77, 0x57);
+const ACCENT_CODEX: Color = Color::Rgb(0x10, 0xa3, 0x7f);
 const HEADER_BG: Color = Color::Rgb(0x16, 0x1b, 0x22);
 const ACTIVE_TAB_BG: Color = Color::Rgb(0x0d, 0x11, 0x17);
 const ACTIVE_BG: Color = Color::Rgb(0x1c, 0x23, 0x33);
@@ -598,16 +599,28 @@ fn render_single_pane(
     area: Rect,
 ) {
     let is_claude = pane.is_claude_running();
-    let border_color = if is_focused && is_claude {
-        ACCENT_CLAUDE
-    } else if is_focused {
-        FOCUS_BORDER
+    let is_codex = pane.is_codex_running();
+    let client_accent = if is_claude {
+        Some(ACCENT_CLAUDE)
+    } else if is_codex {
+        Some(ACCENT_CODEX)
+    } else {
+        None
+    };
+    let border_color = if is_focused {
+        client_accent.unwrap_or(FOCUS_BORDER)
     } else {
         BORDER
     };
 
     let is_scrolled = pane.is_scrolled_back();
-    let label = if is_claude { "claude" } else { "shell" };
+    let label = if is_claude {
+        "claude"
+    } else if is_codex {
+        "codex"
+    } else {
+        "shell"
+    };
 
     // Build claude status suffix
     let claude_suffix = if is_claude {
@@ -641,14 +654,14 @@ fn render_single_pane(
         format!("   {} [{}]{} ", label, pane.id, claude_suffix)
     };
 
-    let title_style = if is_focused && is_claude {
-        Style::default()
-            .fg(ACCENT_CLAUDE)
-            .add_modifier(Modifier::BOLD)
-    } else if is_focused {
-        Style::default()
-            .fg(FOCUS_BORDER)
-            .add_modifier(Modifier::BOLD)
+    let title_style = if is_focused {
+        if let Some(accent) = client_accent {
+            Style::default().fg(accent).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(FOCUS_BORDER)
+                .add_modifier(Modifier::BOLD)
+        }
     } else {
         Style::default().fg(TEXT_DIM)
     };

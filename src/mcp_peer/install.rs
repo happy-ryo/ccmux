@@ -23,12 +23,7 @@ use super::ENV_CLIENT_KIND;
 use crate::cli::{McpAction, McpClient};
 
 const SERVER_NAME: &str = "renga-peers";
-const CODEX_PASSTHROUGH_ENV_VARS: &[&str] = &[
-    "RENGA_PANE_ID",
-    "RENGA_SOCKET",
-    "RENGA_TOKEN",
-    "RENGA_CODEX_AUTO_NUDGE",
-];
+const CODEX_PASSTHROUGH_ENV_VARS: &[&str] = &["RENGA_PANE_ID", "RENGA_SOCKET", "RENGA_TOKEN"];
 const CODEX_AUTO_APPROVE_TOOLS: &[&str] = &["check_messages", "send_message"];
 
 /// Entry point from `main.rs` for the `renga mcp <action>` subcommand.

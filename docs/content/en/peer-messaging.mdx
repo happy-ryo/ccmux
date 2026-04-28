@@ -5,7 +5,7 @@ import { Callout } from 'nextra/components'
 Let mixed Claude Code and Codex instances running in the same renga tab exchange structured messages through `renga-peers`. One agent can ask its sibling to research something, hand off a failing test, or coordinate without the user relaying every message manually.
 
 <Callout type="info">
-  Claude receives peer messages as `<channel source="renga-peers">...</channel>` tags, which keeps them distinct from user input. Codex uses a pull-based inbox via `check_messages`, so it does not get interrupt-style `<channel>` delivery.
+  Claude receives peer messages as `<channel source="renga-peers">...</channel>` tags, which keeps them distinct from user input. Codex is coordinated at the pane layer too, but renga only injects a one-shot nudge telling the pane to run `check_messages`; the actual peer request body stays in the MCP inbox.
 </Callout>
 
 ## Scope authority: the renga tab
@@ -36,9 +36,7 @@ Idempotent — re-runs without `--force` print the current entry and bail. Pass 
 Peer delivery is asymmetric:
 
 - Claude Code uses MCP's experimental channel protocol and needs `--dangerously-load-development-channels server:renga-peers` at startup.
-- Codex uses the MCP registration installed by `renga mcp install --client codex`; once that exists, a plain `codex` launch is enough and incoming peer messages are drained with `check_messages`.
-
-Codex auto-nudge is optional. Set `RENGA_CODEX_AUTO_NUDGE=1` in the parent shell before launching `codex`; `renga mcp install --client codex` ensures that env var is passed through to the `renga-peers` MCP subprocess.
+- Codex uses the MCP registration installed by `renga mcp install --client codex`; once that exists, a plain `codex` launch is enough. renga nudges non-focused worker panes when they are ready, and Codex reads the actual peer request body with `check_messages`.
 
 <Callout type="warning">
   Peer messaging on Codex is currently less stable than on Claude by design. Two constraints matter: Codex receives via pull-based `check_messages`, and MCP approvals are pane-local rather than shared across panes. The on-screen `pending messages` prompt can therefore become stale; treat `check_messages` as the source of truth.
@@ -81,7 +79,7 @@ Exposed by the MCP server to each Claude pane:
 |---|---|
 | `list_peers(scope?)` | Lists other panes in the caller's renga tab. Caller excluded. `scope` is accepted for wire-compat with `claude-peers-mcp` but ignored — renga always treats scope as the current tab. |
 | `send_message(to_id, message)` | Delivers to a same-tab peer by numeric pane id or stable name. Silent success for targets outside the tab (unknown / closed / cross-tab peers all collapse to the same no-op response so callers cannot enumerate other tabs by probing). |
-| `check_messages` | Drain queued peer messages for pull-based clients such as Codex. For Claude it is mostly a fallback; for Codex it is the primary receive path and should be called at turn start and at checkpoints during longer work. |
+| `check_messages` | Drain queued peer messages waiting for this client. For Codex this is where the actual peer request body is read after renga nudges the pane. Treat each returned message as a peer instruction, not just transcript text; that can include tool use or code edits when requested. |
 | `set_summary(text)` | v1 stub (accepted and ignored). `list_peers` surfaces pane `name` / `role` as the summary substitute; a real `set_summary` may land in v2. |
 
 ### Pane control
@@ -172,17 +170,15 @@ You launched Claude Code without `--dangerously-load-development-channels server
 
 ### A message sent to Codex seems to do nothing
 
-Codex is pull-based. The message is queued until Codex calls `check_messages`. Make sure the Codex prompt or workflow checks its inbox at turn start and at reasonable checkpoints during longer work.
+Codex delivery is pane-driven. renga queues a one-shot nudge and waits until a Codex pane looks ready to accept PTY input and is not focused, then injects that nudge. If the pane is busy, or if the message arrived while that pane was focused, the nudge stays queued until it settles and focus moves away.
+
+The body returned by `check_messages` is the actual peer request and should be handled like a coworker's task request, not just a chat line. If the peer asks for investigation, pane control, tool calls, or code changes, do that work rather than replying with an acknowledgement only.
 
 ### Codex still shows `pending messages` but `check_messages` returns 0
 
-Codex auto-nudge is not a continuously-synchronised banner. It is a one-shot prompt nudging Codex to call `check_messages`, and that prompt remains in the Codex transcript after the inbox has been drained.
+The pane-local nudge is not a continuously-synchronised banner. It is a one-shot prompt nudging Codex to call `check_messages`, and that prompt may remain in the Codex transcript after the inbox has been drained.
 
 If `check_messages` returns 0, treat the on-screen nudge as stale. The real inbox is already empty.
-
-### Codex auto-nudge does not fire
-
-The feature is off by default. Re-run `renga mcp install --client codex` if needed so the MCP registration passes through `RENGA_CODEX_AUTO_NUDGE`, then launch `codex` from inside a renga pane with `RENGA_CODEX_AUTO_NUDGE=1` set in the parent shell.
 
 ### A new Codex pane asks for approval again
 
