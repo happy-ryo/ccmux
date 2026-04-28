@@ -284,7 +284,7 @@ _Pane control (same tab, except `new_tab`):_
 
 | Tool | Effect |
 |---|---|
-| `list_panes` | Lists every pane in the caller's tab with id, optional name/role, focus flag, and terminal geometry. |
+| `list_panes` | Lists every pane in the caller's tab with id, optional name/role, focus flag, cwd, and terminal geometry. |
 | `spawn_pane(direction, …)` | Splits a target pane. Optional `command`, `name`, `role`, `cwd`. A bare `command="claude"` (or `claude <args>`) is auto-upgraded to the `Alt+P` peer-enabled launch line so the new pane joins the renga-peers network without the caller having to remember `--dangerously-load-development-channels`. |
 | `spawn_claude_pane(direction, …)` | Higher-level convenience for launching Claude. Takes structured `permission_mode` / `model` / `args[]` fields instead of a free-form command string, always enables the peer channel, and keeps launch policy in renga. Prefer this over `spawn_pane(command="claude ...")` when the target process is Claude Code — orchestrator prompts don't have to synthesize shell-quoted command strings. Reserved flags (`--dangerously-load-development-channels` / `--permission-mode` / `--model`) inside `args[]` are rejected with `invalid-params`. |
 | `close_pane(target)` | Closes a pane. Refuses with `last_pane` when it's the only pane of the only tab. |
