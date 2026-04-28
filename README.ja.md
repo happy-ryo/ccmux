@@ -295,7 +295,15 @@ _ペイン操作 (`new_tab` を除き同一タブ内):_
 | `close_pane(target)` | ペインを閉じる。最後のタブの最後のペインを閉じようとしたときは `last_pane` で拒否。 |
 | `focus_pane(target)` | 同じタブ内でフォーカス移動。ユーザーの手元からフォーカスを奪うことになるので使いどころに注意。 |
 | `new_tab(…)` | 新しいタブを 1 枚開いてそこへフォーカスを移す。`spawn_pane` と同じ `cwd` オプションと `claude` 自動アップグレードが効く。 |
+| `inspect_pane(target, …)` | 別ペインの可視画面をスナップショットして、プロンプト待ち・警告バナー・モード変化などをそのペイン自身に説明させず検出できる。デフォルトはプレーンテキスト、`format="grid"` で行アドレス付き JSON、`lines=N` で末尾 N 行に絞り込み。 |
+| `send_keys(target, …)` | 別ペインの PTY に生のキー入力 (`Enter` / `Esc` / 矢印 / `Ctrl+<letter>` / 任意テキストなど) を送る。`send_message` を解釈できない対話プロンプトや TUI を操作したいとき向け。 |
 | `set_pane_identity(target, name?, role?)` | 既存ペインの安定 `name` / `role` を付け直す・クリアする。3 ステート: キー省略 = 現状維持、`null` = クリア、文字列 = 設定。`renga --layout ops` を忘れて起動したセッションで secretary ペインに `id = "secretary"` が付いていない、といった状態からのリカバリに使う。全桁数字の name は数値 id と曖昧化するため拒否、同一タブ内の name 衝突も拒否。CLI では `renga rename [--id \| --name \| --focused] [--to-name \| --clear-name] [--to-role \| --clear-role]`。 |
+
+_イベント監視:_
+
+| ツール | 役割 |
+|---|---|
+| `poll_events(timeout_ms?, since?, types?)` | `pane_started` / `pane_exited` / `events_dropped` を cursor 付き long-poll で受け取る。オーケストレータが毎ターン pane 一覧を総当たりせずに、ワーカーの起動・終了だけを追いたいとき向け。 |
 
 > この `claude` 自動アップグレードは layout TOML (`renga --layout <name>`) 経由で起動するペインにも適用される。layout toml に `command = "claude"` と書けばペイン起動時に peer 対応コマンドへ書き換えられるので、各エントリで毎回 `--dangerously-load-development-channels server:renga-peers` を書く必要はない。
 
