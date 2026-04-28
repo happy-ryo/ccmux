@@ -75,6 +75,8 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     // — better to let line 2 truncate horizontally than drop it.
     let macos_tip_h: u16 = if show_macos_tip { 2 } else { 0 };
     let show_overlay = app.overlay.is_some();
+    let show_codex_peer_notification =
+        !show_overlay && app.visible_codex_peer_notification().is_some();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -100,6 +102,8 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     // window even when the status bar is visible.
     if show_overlay {
         render_ime_overlay(app, frame, area);
+    } else if show_codex_peer_notification {
+        render_codex_peer_notification(app, frame, area);
     }
 }
 
@@ -121,6 +125,82 @@ const OVERLAY_MAX_INNER_HEIGHT: u16 = 10;
 const OVERLAY_TARGET_WIDTH_PCT: u16 = 60;
 const OVERLAY_MAX_WIDTH: u16 = 100;
 const OVERLAY_MIN_WIDTH: u16 = 42;
+
+fn render_codex_peer_notification(app: &mut App, frame: &mut Frame, area: Rect) {
+    let Some(notification) = app.visible_codex_peer_notification() else {
+        return;
+    };
+
+    let box_w = area.width.min(68);
+    let box_h = area.height.min(7);
+    if box_w < 44 || box_h < 5 {
+        return;
+    }
+    let box_x = area.x + (area.width.saturating_sub(box_w)) / 2;
+    let box_y = area.y + (area.height.saturating_sub(box_h)) / 2;
+    let box_rect = Rect::new(box_x, box_y, box_w, box_h);
+    frame.render_widget(ratatui::widgets::Clear, box_rect);
+
+    let title = Line::from(vec![
+        Span::styled(" PEER ▷ ", Style::default().fg(ACCENT_CODEX)),
+        Span::styled(
+            "pending Codex messages",
+            Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    let sender = match (
+        &notification.message.from_name,
+        notification.message.from_kind,
+    ) {
+        (Some(name), Some(kind)) => {
+            let kind = match kind {
+                crate::ipc::PeerClientKind::Claude => "claude",
+                crate::ipc::PeerClientKind::Codex => "codex",
+            };
+            format!("from {name} (id={} {kind})", notification.message.from_pane)
+        }
+        (Some(name), None) => format!("from {name} (id={})", notification.message.from_pane),
+        (None, Some(kind)) => {
+            let kind = match kind {
+                crate::ipc::PeerClientKind::Claude => "claude",
+                crate::ipc::PeerClientKind::Codex => "codex",
+            };
+            format!("from id={} {kind}", notification.message.from_pane)
+        }
+        (None, None) => format!("from id={}", notification.message.from_pane),
+    };
+    let noun = if notification.pending_count == 1 {
+        "message"
+    } else {
+        "messages"
+    };
+    let lines = vec![
+        Line::from(Span::styled(
+            format!(
+                "{} pending peer {} in the MCP inbox.",
+                notification.pending_count, noun
+            ),
+            Style::default().fg(TEXT),
+        )),
+        Line::from(Span::styled(sender, Style::default().fg(TEXT_DIM))),
+        Line::from(Span::styled(
+            "Alt+Enter/Ctrl+Enter inserts the check_messages prompt. Press Enter yourself to send it.",
+            Style::default().fg(TEXT_DIM),
+        )),
+    ];
+    let hint = Line::from(Span::styled(
+        " Alt+Enter/Ctrl+Enter insert nudge · Esc ignore ",
+        Style::default().fg(TEXT_DIM),
+    ));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT_CODEX))
+        .style(Style::default().bg(PANEL_BG))
+        .title(title)
+        .title_bottom(hint);
+    frame.render_widget(Paragraph::new(lines).block(block), box_rect);
+}
 
 fn render_ime_overlay(app: &mut App, frame: &mut Frame, area: Rect) {
     let overlay = match app.overlay.as_ref() {

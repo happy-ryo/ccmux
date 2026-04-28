@@ -260,7 +260,7 @@ renga mcp install --client codex --codex-auto-approve-peer-tools
 配送方式は client ごとに違います。
 
 - **Claude Code** は MCP の experimental channel 機能を使うので、起動時に毎回 `--dangerously-load-development-channels server:renga-peers` が必要です。
-- **Codex** は `renga mcp install --client codex` で入れた MCP 登録を使います。これが `RENGA_PEER_CLIENT_KIND=codex` を MCP サブプロセスに注入するので、起動自体は plain `codex` で足ります。renga は非フォーカスの worker pane が落ち着いたら `check_messages` を促す nudge を送り、実際の peer 本文は `check_messages` で読みます。
+- **Codex** は `renga mcp install --client codex` で入れた MCP 登録を使います。これが `RENGA_PEER_CLIENT_KIND=codex` を MCP サブプロセスに注入するので、起動自体は plain `codex` で足ります。renga は非フォーカスの worker pane が落ち着いたら `check_messages` を促す nudge を送り、実際の peer 本文は `check_messages` で読みます。対象の Codex pane がいまフォーカス中なら、すぐ PTY 注入せずローカル通知 overlay を出します。
 
 Claude の起動フラグを毎回手で打たなくて済むように、renga 側から 2 つの経路を用意しています。
 
@@ -332,7 +332,7 @@ _イベント監視:_
 
 - **`list_peers` が "renga not reachable from this peer client" を返す** — client が renga の外で起動されたか、renga ペインの環境変数を引き継げていません。renga のペイン内から起動し直してください（Claude は `Alt+P` / `renga split --role claude`、Codex は `renga mcp install --client codex` 後の plain `codex` または `spawn_codex_pane`）。
 - **相手に送ったメッセージが `<channel>` タグで表示されない** — 起動時のフラグ `--dangerously-load-development-channels server:renga-peers` を付け忘れています。`claude` と打つ代わりに `Alt+P` を使えばフラグ付きのコマンドが挿入されるので事故りにくくなります。
-- **Codex に送ったのに反応がない** — renga は Codex ペインが PTY 入力を安全に受けられる状態で、かつ非フォーカスになってから `check_messages` を促す nudge を流し込みます。フォーカス中に届いたメッセージは捨てられるのではなく、フォーカスが外れるまで後ろ倒しされます。実際の依頼本文は MCP inbox 側にあり、`check_messages` の返り値が真実です。
+- **Codex に送ったのに反応がない** — renga は Codex ペインが PTY 入力を安全に受けられる状態で、かつ非フォーカスになってから `check_messages` を促す nudge を流し込みます。フォーカス中に届いたメッセージは、会話を汚さないように通知 overlay へ回します。`Alt+Enter` / `Ctrl+Enter` で `check_messages` を呼ぶための文面だけ挿入し、`Esc` なら無視、Enter を押して実行するかどうかは人間が決めます。フォーカスを外せば worker と同じ deferred nudge に戻ります。実際の依頼本文は MCP inbox 側にあり、`check_messages` の返り値が真実です。
 - **新しい Codex pane で `check_messages` / `send_message` の承認がまた出る** — Codex の承認は pane-local に振る舞うことがあります。`renga mcp install --client codex --codex-auto-approve-peer-tools` で安全な peer messaging 系の承認を事前設定できますが、Codex のバージョンや実行形態によっては、新しい pane で一度だけ warm-up 承認が必要です。
 - **`send_keys` が効いていないように見える** — `send_keys` は target ペインの PTY に生の入力バイトを書き込むだけで、帯域外の「承認」操作ではありません。まず `inspect_pane(target=..., lines=20)` で本当に入力待ちか確認し、レイアウトが動く運用ではフォーカス推測ではなく安定した pane `name` を target に使ってください。
 - **`poll_events` が想定より早く `events: []` を返す** — `types=[...]` フィルタは返却結果を絞るだけで、非一致イベントでも long-poll は解除されて `next_since` は前進します。返ってきた cursor でそのまま再 poll してください。`events_dropped` が来た場合だけ、1 回 `list_panes` で再同期すると安全です。

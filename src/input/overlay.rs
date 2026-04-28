@@ -490,9 +490,7 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
     // keyboard protocol only) commit the buffer. Bare Enter inserts
     // a newline into the multi-line composition area.
     if matches!(key.code, KeyCode::Enter) {
-        let is_commit = key
-            .modifiers
-            .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL | KeyModifiers::SUPER);
+        let is_commit = is_overlay_commit_key(key);
         if !is_commit {
             // Shift+Enter also inserts a newline — matches chat-app
             // conventions and keeps the "no commit modifier" rule
@@ -594,6 +592,13 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
     }
     app.dirty = true;
     Ok(true)
+}
+
+pub(crate) fn is_overlay_commit_key(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Enter)
+        && key
+            .modifiers
+            .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL | KeyModifiers::SUPER)
 }
 
 #[cfg(test)]
