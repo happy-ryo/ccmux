@@ -43,11 +43,14 @@ use serde_json::{json, Value};
 
 use crate::app::CLAUDE_PEER_LAUNCH_CMD;
 use crate::ipc::endpoint::{endpoint_from_env, EndpointName, ENV_SOCKET};
-use crate::ipc::{self, client, Direction, PaneInfo, PaneRef, PeerInfo, Request, Response};
+use crate::ipc::{
+    self, client, Direction, PaneInfo, PaneRef, PeerClientKind, PeerInfo, Request, Response,
+};
 
 const SERVER_NAME: &str = "renga-peers";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ENV_PANE_ID: &str = "RENGA_PANE_ID";
+const ENV_CLIENT_KIND: &str = "RENGA_PEER_CLIENT_KIND";
 
 fn log_stderr(msg: &str) {
     eprintln!("[renga-mcp-peer] {msg}");
@@ -61,7 +64,11 @@ pub fn run() -> Result<()> {
     let ctx = PeerCtx::load();
     match &ctx.mode {
         Mode::Connected { pane_id, .. } => {
-            log_stderr(&format!("connected mode: pane_id={pane_id}"));
+            log_stderr(&format!(
+                "connected mode: pane_id={pane_id}, client_kind={:?}",
+                ctx.client_kind
+            ));
+            register_client_kind(&ctx);
             spawn_inbox_subscriber(ctx.clone());
         }
         Mode::Detached { reason } => {
@@ -72,6 +79,23 @@ pub fn run() -> Result<()> {
     stdio_loop(&ctx)
 }
 
+fn register_client_kind(ctx: &PeerCtx) {
+    let Mode::Connected { pane_id, endpoint } = &ctx.mode else {
+        return;
+    };
+    match client::send_request(
+        endpoint,
+        &Request::PeerRegisterClient {
+            pane_id: *pane_id,
+            kind: ctx.client_kind,
+        },
+    ) {
+        Ok(Response::Ok { .. }) => {}
+        Ok(other) => log_stderr(&format!("peer kind registration returned: {other:?}")),
+        Err(e) => log_stderr(&format!("peer kind registration failed: {e}")),
+    }
+}
+
 /// Runtime context shared between the main stdio loop and the inbox
 /// subscriber thread. Cloneable because both halves read the same
 /// `(pane_id, endpoint)` pair to contact the renga server and the
@@ -79,7 +103,9 @@ pub fn run() -> Result<()> {
 #[derive(Clone)]
 struct PeerCtx {
     mode: Mode,
+    client_kind: PeerClientKind,
     events: EventSink,
+    inbox: InboxSink,
 }
 
 /// Soft cap on the per-process lifecycle event buffer used by
@@ -136,6 +162,21 @@ fn new_event_sink() -> EventSink {
     Arc::new((Mutex::new(EventBuffer::default()), Condvar::new()))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QueuedPeerMessage {
+    from_id: String,
+    from_name: Option<String>,
+    from_kind: Option<PeerClientKind>,
+    body: String,
+    sent_at: String,
+}
+
+type InboxSink = Arc<Mutex<VecDeque<QueuedPeerMessage>>>;
+
+fn new_inbox_sink() -> InboxSink {
+    Arc::new(Mutex::new(VecDeque::new()))
+}
+
 #[derive(Clone)]
 enum Mode {
     /// Running inside a renga pane with a reachable IPC endpoint.
@@ -152,6 +193,11 @@ enum Mode {
 impl PeerCtx {
     fn load() -> Self {
         let events = new_event_sink();
+        let inbox = new_inbox_sink();
+        let client_kind = std::env::var(ENV_CLIENT_KIND)
+            .ok()
+            .and_then(|s| parse_client_kind(&s))
+            .unwrap_or(PeerClientKind::Claude);
         let pane_id = match std::env::var(ENV_PANE_ID) {
             Ok(s) => match s.parse::<usize>() {
                 Ok(v) => v,
@@ -161,6 +207,8 @@ impl PeerCtx {
                             reason: format!("{ENV_PANE_ID} is set but not a valid usize: {s:?}"),
                         },
                         events,
+                        inbox,
+                        client_kind,
                     };
                 }
             },
@@ -172,6 +220,8 @@ impl PeerCtx {
                         ),
                     },
                     events,
+                    inbox,
+                    client_kind,
                 };
             }
         };
@@ -179,14 +229,26 @@ impl PeerCtx {
             Ok(endpoint) => PeerCtx {
                 mode: Mode::Connected { pane_id, endpoint },
                 events,
+                inbox,
+                client_kind,
             },
             Err(e) => PeerCtx {
                 mode: Mode::Detached {
                     reason: format!("{ENV_SOCKET} missing or invalid: {e}"),
                 },
                 events,
+                inbox,
+                client_kind,
             },
         }
+    }
+}
+
+fn parse_client_kind(raw: &str) -> Option<PeerClientKind> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "claude" => Some(PeerClientKind::Claude),
+        "codex" => Some(PeerClientKind::Codex),
+        _ => None,
     }
 }
 
@@ -254,20 +316,31 @@ fn now_ts_string() -> String {
 
 // ── MCP method handlers ───────────────────────────────────────
 
-fn instructions_blob() -> String {
-    "You are connected to the renga-peers network. Other Claude Code instances \
-running in the same renga tab can see you and send you messages.\n\n\
-IMPORTANT: When you receive a <channel source=\"renga-peers\" ...> message, RESPOND IMMEDIATELY. \
+fn instructions_blob(client_kind: PeerClientKind) -> String {
+    let receive_guidance = match client_kind {
+        PeerClientKind::Claude => {
+            "IMPORTANT: When you receive a <channel source=\"renga-peers\" ...> message, RESPOND IMMEDIATELY. \
 Do not wait until your current task is finished. Pause what you are doing, reply to the sender \
 using send_message, then resume your work. Treat incoming peer messages like a coworker tapping \
 you on the shoulder — answer right away, even if you're in the middle of something.\n\n\
 Read the from_id and from_name attributes to understand who sent the message. Reply by \
-calling send_message with their from_id.\n\n\
+calling send_message with their from_id.\n\n"
+        }
+        PeerClientKind::Codex => {
+            "IMPORTANT: This client uses pull-based message receipt. Call check_messages at the start \
+of a turn and at reasonable checkpoints during longer work. If messages are waiting, respond \
+promptly with send_message before resuming your prior task.\n\n"
+        }
+    };
+    format!(
+        "You are connected to the renga-peers network. Other peer-enabled agent instances \
+running in the same renga tab can see you and send you messages.\n\n\
+{receive_guidance}\
 Peer messaging tools:\n\
 - list_peers: Discover other Claude Code instances in the same renga tab.\n\
 - send_message: Send a message to another instance by peer ID or name.\n\
 - set_summary: (stub in v1) Set a 1-2 sentence summary of what you're working on.\n\
-- check_messages: Manually drain your inbox (fallback; channel push is the primary path).\n\n\
+- check_messages: Drain any queued peer messages waiting for this client.\n\n\
 Pane control tools (all scoped to the current renga tab, except new_tab which is the one \
 cross-tab tool):\n\
 - list_panes: Inspect all panes in the current tab, including geometry and the focus flag.\n\
@@ -309,14 +382,14 @@ spawn_claude_pane is the recommended API for agent harnesses.\n\n\
 IMPORTANT about pane control: these tools affect the user's live layout. Use them with \
 restraint — don't close or focus panes you don't own unless the user asked you to. When in \
 doubt, ask first."
-        .to_string()
+    )
 }
 
 fn tools_spec() -> Value {
     json!([
         {
             "name": "list_peers",
-            "description": "List other Claude Code / shell panes in the same renga tab. Each peer includes id, name (if assigned), role, and cwd.",
+            "description": "List other peer-enabled panes in the same renga tab. Each peer includes id, optional name / role, cwd, and when known the client kind and whether it receives messages via push or polling.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -351,12 +424,12 @@ fn tools_spec() -> Value {
         },
         {
             "name": "check_messages",
-            "description": "Manually drain the inbox. In v1 channel push is the only delivery path, so this currently returns 'no messages' — kept for wire-compat with claude-peers-mcp.",
+            "description": "Drain any queued peer messages waiting for this client. Pull-based clients such as Codex should call this regularly; Claude clients usually receive messages via channel push instead.",
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
             "name": "list_panes",
-            "description": "List every pane in the current renga tab, with stable id, optional name, role, focused flag, and terminal geometry. Complements list_peers (which only returns other panes and hides geometry).",
+            "description": "List every pane in the current renga tab, with stable id, optional name / role, focused flag, terminal geometry, cwd, and when known the peer client kind / receive mode. Complements list_peers (which only returns other panes and hides geometry).",
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
@@ -597,21 +670,25 @@ fn tools_spec() -> Value {
     ])
 }
 
-fn handle_initialize(id: &Value, params: &Value) -> Value {
+fn handle_initialize(id: &Value, params: &Value, ctx: &PeerCtx) -> Value {
     let client_protocol = params
         .get("protocolVersion")
         .and_then(|v| v.as_str())
         .unwrap_or("2025-06-18");
+    let experimental = match ctx.client_kind {
+        PeerClientKind::Claude => json!({ "claude/channel": {} }),
+        PeerClientKind::Codex => json!({}),
+    };
     ok_response(
         id,
         json!({
             "protocolVersion": client_protocol,
             "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
             "capabilities": {
-                "experimental": { "claude/channel": {} },
+                "experimental": experimental,
                 "tools": {}
             },
-            "instructions": instructions_blob()
+            "instructions": instructions_blob(ctx.client_kind)
         }),
     )
 }
@@ -660,12 +737,32 @@ fn format_peer_list(peers: &[PeerInfo]) -> String {
         if let Some(role) = &p.role {
             out.push_str(&format!(" role={role}"));
         }
+        if let Some(kind) = p.kind {
+            out.push_str(&format!(" kind={}", kind_label(kind)));
+        }
+        if let Some(mode) = p.receive_mode {
+            out.push_str(&format!(" receive={}", receive_mode_label(mode)));
+        }
         if let Some(cwd) = &p.cwd {
             out.push_str(&format!("\n  cwd: {cwd}"));
         }
         out.push('\n');
     }
     out
+}
+
+fn kind_label(kind: PeerClientKind) -> &'static str {
+    match kind {
+        PeerClientKind::Claude => "claude",
+        PeerClientKind::Codex => "codex",
+    }
+}
+
+fn receive_mode_label(mode: ipc::PeerReceiveMode) -> &'static str {
+    match mode {
+        ipc::PeerReceiveMode::Push => "push",
+        ipc::PeerReceiveMode::Pull => "pull",
+    }
 }
 
 fn handle_send_message(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
@@ -710,6 +807,55 @@ fn handle_send_message(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
     }
 }
 
+fn format_queued_messages(messages: &[QueuedPeerMessage]) -> String {
+    if messages.is_empty() {
+        return "No queued messages.".to_string();
+    }
+    let mut out = format!("Queued messages: {}\n\n", messages.len());
+    for msg in messages {
+        out.push_str(&format!("- from_id={}", msg.from_id));
+        if let Some(name) = &msg.from_name {
+            out.push_str(&format!(" from_name={name}"));
+        }
+        if let Some(kind) = msg.from_kind {
+            out.push_str(&format!(" from_kind={}", kind_label(kind)));
+        }
+        out.push_str(&format!(
+            "\n  sent_at: {}\n  body: {}\n",
+            msg.sent_at, msg.body
+        ));
+    }
+    out
+}
+
+fn handle_check_messages(id: &Value, ctx: &PeerCtx) -> Value {
+    let mut inbox = ctx.inbox.lock().unwrap_or_else(|p| p.into_inner());
+    let messages: Vec<QueuedPeerMessage> = inbox.drain(..).collect();
+    let structured: Vec<Value> = messages
+        .iter()
+        .map(|msg| {
+            json!({
+                "from_id": msg.from_id,
+                "from_name": msg.from_name,
+                "from_kind": msg.from_kind.map(kind_label),
+                "body": msg.body,
+                "sent_at": msg.sent_at,
+            })
+        })
+        .collect();
+    ok_response(
+        id,
+        json!({
+            "content": [{ "type": "text", "text": format_queued_messages(&messages) }],
+            "structuredContent": {
+                "messages": structured,
+                "count": messages.len(),
+            },
+            "isError": false,
+        }),
+    )
+}
+
 fn fmt_code(message: &str, code: &Option<String>) -> String {
     match code {
         Some(c) => format!("[{c}] {message}"),
@@ -730,12 +876,7 @@ fn handle_tools_call(id: &Value, params: &Value, ctx: &PeerCtx) -> Result<Value>
             id,
             tool_text_result("Summary accepted (v1 stub: renga displays pane name / role)."),
         ),
-        "check_messages" => ok_response(
-            id,
-            tool_text_result(
-                "No queued messages. Channel push is the primary delivery path in v1.",
-            ),
-        ),
+        "check_messages" => handle_check_messages(id, ctx),
         "list_panes" => handle_list_panes(id, ctx),
         "spawn_pane" => handle_spawn_pane(id, &args, ctx),
         "spawn_claude_pane" => handle_spawn_claude_pane(id, &args, ctx),
@@ -1839,7 +1980,7 @@ fn dispatch(req: &Value, ctx: &PeerCtx) -> Result<Vec<Value>> {
         return Ok(Vec::new());
     }
     let frames = match method {
-        "initialize" => vec![handle_initialize(&id, &params)],
+        "initialize" => vec![handle_initialize(&id, &params, ctx)],
         "tools/list" => vec![handle_tools_list(&id)],
         "tools/call" => vec![handle_tools_call(&id, &params, ctx)?],
         "ping" => vec![ok_response(&id, json!({}))],
@@ -1913,6 +2054,8 @@ fn spawn_inbox_subscriber(ctx: PeerCtx) {
     };
     let endpoint_clone = endpoint.clone();
     let sink = ctx.events.clone();
+    let inbox = ctx.inbox.clone();
+    let client_kind = ctx.client_kind;
     thread::Builder::new()
         .name("renga-mcp-peer-inbox".into())
         .spawn(move || {
@@ -1943,16 +2086,28 @@ fn spawn_inbox_subscriber(ctx: PeerCtx) {
                         target_pane,
                         from_pane,
                         from_name,
+                        from_kind,
                         body,
                         ..
                     } if target_pane == pane_id => {
-                        let note = channel_notification(
-                            &body,
-                            &from_pane.to_string(),
-                            from_name.as_deref(),
-                        );
-                        if let Err(e) = write_frame(&note) {
-                            log_stderr(&format!("failed to push channel notification: {e}"));
+                        if client_kind.receive_mode() == ipc::PeerReceiveMode::Pull {
+                            let mut q = inbox.lock().unwrap_or_else(|p| p.into_inner());
+                            q.push_back(QueuedPeerMessage {
+                                from_id: from_pane.to_string(),
+                                from_name: from_name.clone(),
+                                from_kind,
+                                body: body.clone(),
+                                sent_at: now_ts_string(),
+                            });
+                        } else {
+                            let note = channel_notification(
+                                &body,
+                                &from_pane.to_string(),
+                                from_name.as_deref(),
+                            );
+                            if let Err(e) = write_frame(&note) {
+                                log_stderr(&format!("failed to push channel notification: {e}"));
+                            }
                         }
                     }
                     // The EventBus bounds each subscriber at 256 events
@@ -1966,15 +2121,23 @@ fn spawn_inbox_subscriber(ctx: PeerCtx) {
                         log_stderr(&format!(
                             "event bus dropped {count} event(s) due to slow subscriber"
                         ));
-                        let note = channel_notification(
-                            &format!(
-                                "renga event bus dropped {count} event(s) before they reached this Claude Code instance. A peer message may have been lost — consider asking the sender to retry."
-                            ),
-                            "renga",
-                            Some("renga runtime"),
+                        let body = format!(
+                            "renga event bus dropped {count} event(s) before they reached this peer client. A peer message may have been lost — consider asking the sender to retry."
                         );
-                        if let Err(e) = write_frame(&note) {
-                            log_stderr(&format!("failed to push drop notice: {e}"));
+                        if client_kind.receive_mode() == ipc::PeerReceiveMode::Pull {
+                            let mut q = inbox.lock().unwrap_or_else(|p| p.into_inner());
+                            q.push_back(QueuedPeerMessage {
+                                from_id: "renga".to_string(),
+                                from_name: Some("renga runtime".to_string()),
+                                from_kind: None,
+                                body,
+                                sent_at: now_ts_string(),
+                            });
+                        } else {
+                            let note = channel_notification(&body, "renga", Some("renga runtime"));
+                            if let Err(e) = write_frame(&note) {
+                                log_stderr(&format!("failed to push drop notice: {e}"));
+                            }
                         }
                     }
                     // PaneStarted / PaneExited / Heartbeat / other
@@ -2161,6 +2324,8 @@ mod tests {
                 width: 80,
                 height: 24,
                 cwd: None,
+                kind: Some(PeerClientKind::Claude),
+                receive_mode: Some(ipc::PeerReceiveMode::Push),
             },
             PaneInfo {
                 id: 2,
@@ -2172,6 +2337,8 @@ mod tests {
                 width: 40,
                 height: 24,
                 cwd: None,
+                kind: Some(PeerClientKind::Codex),
+                receive_mode: Some(ipc::PeerReceiveMode::Pull),
             },
         ];
         let text = format_pane_list(&panes);
@@ -2578,12 +2745,7 @@ mod tests {
         // tools must still return a Response::Ok with explanatory text
         // rather than a JSON-RPC error, so Claude can relay the reason
         // to the user instead of treating the tool as broken.
-        let ctx = PeerCtx {
-            mode: Mode::Detached {
-                reason: "RENGA_PANE_ID not set".to_string(),
-            },
-            events: new_event_sink(),
-        };
+        let ctx = detached_ctx("RENGA_PANE_ID not set");
         let id = json!(1);
         let resp = handle_list_panes(&id, &ctx);
         assert_eq!(
@@ -2609,12 +2771,7 @@ mod tests {
         // at the tool layer without round-tripping to renga, so
         // Claude gets an immediate JSON-RPC -32602 it can retry with a
         // real id.
-        let ctx = PeerCtx {
-            mode: Mode::Detached {
-                reason: "not relevant".into(),
-            },
-            events: new_event_sink(),
-        };
+        let ctx = detached_ctx("not relevant");
         let id = json!(1);
         let resp = handle_close_pane(&id, &json!({ "target": "   " }), &ctx);
         assert_eq!(
@@ -2632,12 +2789,7 @@ mod tests {
         // regression here would let a bare `focus_pane` call silently
         // resolve to `PaneRef::Focused`, focusing the caller on itself
         // instead of erroring on missing input.
-        let ctx = PeerCtx {
-            mode: Mode::Detached {
-                reason: "not relevant".into(),
-            },
-            events: new_event_sink(),
-        };
+        let ctx = detached_ctx("not relevant");
         let id = json!(1);
         let resp = handle_focus_pane(&id, &json!({ "target": "" }), &ctx);
         assert_eq!(
@@ -2654,12 +2806,7 @@ mod tests {
         // `spawn_pane` validates direction before touching renga, so a
         // missing or unknown value must come back as -32602 even when
         // no server is reachable.
-        let ctx = PeerCtx {
-            mode: Mode::Detached {
-                reason: "not relevant".into(),
-            },
-            events: new_event_sink(),
-        };
+        let ctx = detached_ctx("not relevant");
         let id = json!(1);
         let resp = handle_spawn_pane(&id, &json!({}), &ctx);
         assert_eq!(
@@ -2786,12 +2933,7 @@ mod tests {
 
     #[test]
     fn handle_inspect_pane_rejects_empty_target() {
-        let ctx = PeerCtx {
-            mode: Mode::Detached {
-                reason: "not relevant".into(),
-            },
-            events: new_event_sink(),
-        };
+        let ctx = detached_ctx("not relevant");
         let id = json!(1);
         let resp = handle_inspect_pane(&id, &json!({ "target": "   " }), &ctx);
         assert_eq!(
@@ -2807,12 +2949,7 @@ mod tests {
     fn handle_inspect_pane_rejects_unknown_format() {
         // Format validation runs before any IPC round-trip, so a bad
         // `format` must come back as -32602 even in detached mode.
-        let ctx = PeerCtx {
-            mode: Mode::Detached {
-                reason: "not relevant".into(),
-            },
-            events: new_event_sink(),
-        };
+        let ctx = detached_ctx("not relevant");
         let id = json!(1);
         let resp = handle_inspect_pane(&id, &json!({ "target": "1", "format": "csv" }), &ctx);
         assert_eq!(
@@ -2828,12 +2965,7 @@ mod tests {
     fn handle_inspect_pane_detached_surfaces_friendly_text() {
         // Detached mode must not error; instead return the standard
         // "renga not reachable" text so Claude can relay it to the user.
-        let ctx = PeerCtx {
-            mode: Mode::Detached {
-                reason: "RENGA_PANE_ID not set".into(),
-            },
-            events: new_event_sink(),
-        };
+        let ctx = detached_ctx("RENGA_PANE_ID not set");
         let id = json!(1);
         let resp = handle_inspect_pane(&id, &json!({ "target": "1" }), &ctx);
         let text = resp
@@ -2952,12 +3084,7 @@ mod tests {
 
     #[test]
     fn handle_send_keys_rejects_empty_target() {
-        let ctx = PeerCtx {
-            mode: Mode::Detached {
-                reason: "not relevant".into(),
-            },
-            events: new_event_sink(),
-        };
+        let ctx = detached_ctx("not relevant");
         let id = json!(1);
         let resp = handle_send_keys(&id, &json!({ "target": "   ", "text": "y" }), &ctx);
         assert_eq!(
@@ -2988,14 +3115,31 @@ mod tests {
         }
     }
 
-    fn connected_ctx_with(events: EventSink) -> PeerCtx {
+    fn detached_ctx(reason: &str) -> PeerCtx {
+        PeerCtx {
+            mode: Mode::Detached {
+                reason: reason.to_string(),
+            },
+            client_kind: PeerClientKind::Claude,
+            events: new_event_sink(),
+            inbox: new_inbox_sink(),
+        }
+    }
+
+    fn connected_ctx_with_kind(events: EventSink, client_kind: PeerClientKind) -> PeerCtx {
         PeerCtx {
             mode: Mode::Connected {
                 pane_id: 1,
                 endpoint: dummy_endpoint(),
             },
+            client_kind,
             events,
+            inbox: new_inbox_sink(),
         }
+    }
+
+    fn connected_ctx_with(events: EventSink) -> PeerCtx {
+        connected_ctx_with_kind(events, PeerClientKind::Claude)
     }
 
     fn pane_exited_value(id: usize, seq_ts: u64) -> Value {
@@ -3058,12 +3202,7 @@ mod tests {
 
     #[test]
     fn handle_send_keys_rejects_unknown_key_name_before_ipc() {
-        let ctx = PeerCtx {
-            mode: Mode::Detached {
-                reason: "not relevant".into(),
-            },
-            events: new_event_sink(),
-        };
+        let ctx = detached_ctx("not relevant");
         let id = json!(1);
         let resp = handle_send_keys(&id, &json!({ "target": "1", "keys": ["Nonsense"] }), &ctx);
         assert_eq!(
@@ -3084,13 +3223,98 @@ mod tests {
     }
 
     #[test]
+    fn handle_initialize_only_advertises_claude_channel_for_claude_clients() {
+        let id = json!(1);
+        let params = json!({ "protocolVersion": "2025-06-18" });
+
+        let claude = handle_initialize(&id, &params, &connected_ctx_with(new_event_sink()));
+        assert_eq!(
+            claude.pointer("/result/capabilities/experimental/claude~1channel"),
+            Some(&json!({}))
+        );
+
+        let codex = handle_initialize(
+            &id,
+            &params,
+            &connected_ctx_with_kind(new_event_sink(), PeerClientKind::Codex),
+        );
+        assert!(
+            codex
+                .pointer("/result/capabilities/experimental/claude~1channel")
+                .is_none(),
+            "Codex must not advertise the Claude-specific channel capability: {codex}"
+        );
+        let instructions = codex
+            .pointer("/result/instructions")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(
+            instructions.contains("pull-based message receipt"),
+            "Codex instructions should explain pull receipt: {instructions}"
+        );
+    }
+
+    #[test]
+    fn handle_check_messages_drains_pull_inbox_and_preserves_sender_metadata() {
+        let ctx = connected_ctx_with_kind(new_event_sink(), PeerClientKind::Codex);
+        {
+            let mut inbox = ctx.inbox.lock().unwrap();
+            inbox.push_back(QueuedPeerMessage {
+                from_id: "2".to_string(),
+                from_name: Some("planner".to_string()),
+                from_kind: Some(PeerClientKind::Claude),
+                body: "please inspect pane 4".to_string(),
+                sent_at: "2026-04-28T10:00:00Z".to_string(),
+            });
+        }
+
+        let resp = handle_check_messages(&json!(1), &ctx);
+        let body = structured(&resp);
+        let messages = body
+            .get("messages")
+            .and_then(|v| v.as_array())
+            .expect("messages array");
+        assert_eq!(body.get("count").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].get("from_id").and_then(|v| v.as_str()),
+            Some("2")
+        );
+        assert_eq!(
+            messages[0].get("from_name").and_then(|v| v.as_str()),
+            Some("planner")
+        );
+        assert_eq!(
+            messages[0].get("from_kind").and_then(|v| v.as_str()),
+            Some("claude")
+        );
+        assert_eq!(
+            messages[0].get("body").and_then(|v| v.as_str()),
+            Some("please inspect pane 4")
+        );
+        assert_eq!(
+            resp.pointer("/result/content/0/text")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+            "Queued messages: 1\n\n- from_id=2 from_name=planner from_kind=claude\n  sent_at: 2026-04-28T10:00:00Z\n  body: please inspect pane 4\n"
+        );
+
+        let drained = handle_check_messages(&json!(2), &ctx);
+        assert_eq!(
+            structured(&drained).get("count").and_then(|v| v.as_u64()),
+            Some(0)
+        );
+        assert_eq!(
+            drained
+                .pointer("/result/content/0/text")
+                .and_then(|v| v.as_str()),
+            Some("No queued messages.")
+        );
+    }
+
+    #[test]
     fn handle_send_keys_detached_surfaces_friendly_text() {
-        let ctx = PeerCtx {
-            mode: Mode::Detached {
-                reason: "RENGA_PANE_ID not set".into(),
-            },
-            events: new_event_sink(),
-        };
+        let ctx = detached_ctx("RENGA_PANE_ID not set");
         let id = json!(1);
         let resp = handle_send_keys(
             &id,
@@ -3173,6 +3397,7 @@ mod tests {
             target_pane: 1,
             from_pane: 2,
             from_name: None,
+            from_kind: None,
             body: "x".into(),
             ts_ms: 1,
         }));
@@ -3222,12 +3447,7 @@ mod tests {
 
     #[test]
     fn handle_poll_events_detached_returns_empty_without_blocking() {
-        let ctx = PeerCtx {
-            mode: Mode::Detached {
-                reason: "no socket".into(),
-            },
-            events: new_event_sink(),
-        };
+        let ctx = detached_ctx("no socket");
         let start = Instant::now();
         let resp = handle_poll_events(&json!(1), &json!({ "timeout_ms": 5_000 }), &ctx);
         assert!(
@@ -3357,12 +3577,7 @@ mod tests {
         // the friendly "renga not reachable" text (result.isError =
         // false) or the -32602 we already test for; none of them
         // should ever surface a -32601 "unknown tool" here.
-        let ctx = PeerCtx {
-            mode: Mode::Detached {
-                reason: "not relevant".into(),
-            },
-            events: new_event_sink(),
-        };
+        let ctx = detached_ctx("not relevant");
         let id = json!(1);
         for (name, args) in [
             ("list_panes", json!({})),
