@@ -571,6 +571,10 @@ pub struct App {
     /// composed text to the target pane via the existing
     /// bracketed-paste path; `Esc` / `Ctrl+C` cancels.
     pub overlay: Option<OverlayState>,
+    /// Saved IME overlay drafts keyed by target pane. Closing the
+    /// overlay temporarily stashes the draft here so reopening on the
+    /// same pane can resume composition.
+    saved_overlay_drafts: HashMap<usize, OverlayState>,
     /// (tab index, timestamp) of the last left-click on a tab label.
     /// Used to detect a double-click → enter rename mode.
     last_tab_click: Option<(usize, Instant)>,
@@ -700,6 +704,7 @@ impl App {
             last_new_tab_rect: None,
             rename_input: None,
             overlay: None,
+            saved_overlay_drafts: HashMap::new(),
             last_tab_click: None,
             selection: None,
             version_info: {
@@ -763,6 +768,32 @@ impl App {
         };
         if shown_at.elapsed() >= crate::macos_tip::AUTO_DISMISS {
             self.dismiss_macos_tip();
+        }
+    }
+
+    pub(crate) fn suspend_overlay(&mut self) {
+        if let Some(overlay) = self.overlay.take() {
+            self.saved_overlay_drafts
+                .insert(overlay.target_pane, overlay);
+        }
+    }
+
+    pub(crate) fn clear_overlay_draft(&mut self, pane_id: usize) {
+        self.saved_overlay_drafts.remove(&pane_id);
+    }
+
+    fn take_overlay_draft(&mut self, pane_id: usize) -> Option<OverlayState> {
+        self.saved_overlay_drafts.remove(&pane_id)
+    }
+
+    fn drop_overlay_for_pane(&mut self, pane_id: usize) {
+        self.clear_overlay_draft(pane_id);
+        if self
+            .overlay
+            .as_ref()
+            .is_some_and(|overlay| overlay.target_pane == pane_id)
+        {
+            self.overlay = None;
         }
     }
 
@@ -1093,6 +1124,12 @@ impl App {
             let pane_focused = matches!(self.ws().focus_target, FocusTarget::Pane)
                 && self.ws().panes.contains_key(&focused_id);
             if pane_focused {
+                if let Some(saved) = self.take_overlay_draft(focused_id) {
+                    self.overlay = Some(saved);
+                    self.mark_layout_change();
+                    return Ok(true);
+                }
+
                 let snapshot = self
                     .ws()
                     .panes
@@ -1188,7 +1225,7 @@ impl App {
         if key.modifiers == KeyModifiers::ALT && key.code == KeyCode::Right {
             if !self.workspaces.is_empty() {
                 self.active_tab = (self.active_tab + 1) % self.workspaces.len();
-                self.overlay = None;
+                self.suspend_overlay();
             }
             return Ok(true);
         }
@@ -1201,7 +1238,7 @@ impl App {
                 } else {
                     self.active_tab - 1
                 };
-                self.overlay = None;
+                self.suspend_overlay();
             }
             return Ok(true);
         }
@@ -1251,7 +1288,7 @@ impl App {
                 if let Some(digit) = c.to_digit(10) {
                     if digit >= 1 && (digit as usize) <= self.workspaces.len() {
                         self.active_tab = (digit as usize) - 1;
-                        self.overlay = None;
+                        self.suspend_overlay();
                         return Ok(true);
                     }
                 }
@@ -1544,7 +1581,7 @@ impl App {
         let ws = Workspace::new(name, cwd, pane_id, 10, 40, self.event_tx.clone())?;
         self.workspaces.push(ws);
         self.active_tab = self.workspaces.len() - 1;
-        self.overlay = None;
+        self.suspend_overlay();
         Ok(pane_id)
     }
 
@@ -1553,6 +1590,8 @@ impl App {
             return;
         }
 
+        let pane_ids_in_tab: Vec<usize> = self.workspaces[index].panes.keys().copied().collect();
+
         // Snapshot (pane_id, name, role) for each not-yet-emitted pane
         // in this tab. We mark them as emitted *before* the actual
         // workspace removal so the natural-exit detection in the event
@@ -1560,8 +1599,7 @@ impl App {
         let mut to_emit: Vec<(usize, Option<String>, Option<String>)> = Vec::new();
         {
             let ws = &mut self.workspaces[index];
-            let pane_ids: Vec<usize> = ws.panes.keys().copied().collect();
-            for pid in &pane_ids {
+            for pid in &pane_ids_in_tab {
                 let name = ws
                     .pane_names
                     .iter()
@@ -1574,8 +1612,9 @@ impl App {
                     }
                 }
             }
-            for pid in pane_ids {
-                self.claude_monitor.remove(pid);
+            for pid in &pane_ids_in_tab {
+                self.saved_overlay_drafts.remove(pid);
+                self.claude_monitor.remove(*pid);
             }
         }
 
@@ -1597,7 +1636,7 @@ impl App {
             self.active_tab = self.workspaces.len() - 1;
         }
         if prev_active != self.active_tab {
-            self.overlay = None;
+            self.suspend_overlay();
         }
         // Relayout the (possibly new) active tab so its rects are
         // recomputed and a repaint is scheduled. Needed when close_tab
@@ -1902,13 +1941,7 @@ impl App {
 
         // If the IME overlay targets the pane being removed, cancel it
         // so we don't leave a modal pointing at a dead pane id.
-        if self
-            .overlay
-            .as_ref()
-            .is_some_and(|o| o.target_pane == pane_id)
-        {
-            self.overlay = None;
-        }
+        self.drop_overlay_for_pane(pane_id);
 
         // Clean up claude monitor state for this pane.
         self.claude_monitor.remove(pane_id);
@@ -2217,7 +2250,7 @@ impl App {
                                     && now.duration_since(prev_t).as_millis() < 500
                         );
                         if self.active_tab != tab_idx {
-                            self.overlay = None;
+                            self.suspend_overlay();
                         }
                         self.active_tab = tab_idx;
                         if is_double {
@@ -4050,14 +4083,10 @@ mod tests {
     }
 
     #[test]
-    fn hotkey_mode_esc_closes_overlay_and_discards_buffer() {
-        // Regression guard for the #90 cleanup: Esc on the overlay
-        // must always close and discard, regardless of whether the
-        // buffer was empty. The pre-removal Always-mode behavior
-        // used to keep a composing overlay open on the first Esc
-        // and dismiss on the second — Hotkey mode was already
-        // "close immediately", and this test pins that down so a
-        // future copy-paste of the old branch can't sneak back.
+    fn hotkey_mode_esc_closes_overlay_and_restores_buffer_on_reopen() {
+        // Esc should close the overlay immediately, but the draft now
+        // persists per pane so a close/reopen cycle can resume
+        // composition instead of discarding the buffer.
         let mut app = App::new(40, 80).expect("App::new");
         let pane_a = app.ws().focused_pane_id;
         assert_eq!(app.ime_mode, crate::config::ImeMode::Hotkey);
@@ -4074,15 +4103,29 @@ mod tests {
             app.overlay.is_none(),
             "Esc must close the overlay even with a non-empty buffer"
         );
+        assert!(
+            app.saved_overlay_drafts.contains_key(&pane_a),
+            "Esc should preserve the draft for the target pane"
+        );
+
+        let open = KeyEvent::new(KeyCode::Char(';'), KeyModifiers::CONTROL);
+        let reopened = app.handle_key_event(open).expect("reopen overlay");
+        assert!(reopened);
+        let overlay = app.overlay.as_ref().expect("overlay reopened");
+        assert_eq!(overlay.target_pane, pane_a);
+        assert_eq!(overlay.buffer, "あ");
+        assert_eq!(overlay.cursor, 1);
+        assert!(
+            !app.saved_overlay_drafts.contains_key(&pane_a),
+            "live overlay session should own the draft until it closes again"
+        );
     }
 
     #[test]
-    fn hotkey_mode_ctrl_c_closes_overlay_and_discards_buffer() {
-        // Symmetric to the Esc test — Ctrl+C shares the cancel
-        // branch and must behave identically, without forwarding
-        // the Ctrl+C keystroke to the target pane. The old
-        // Always-mode path did forward it on empty-buffer
-        // dismissal; that forwarding is gone along with Always.
+    fn hotkey_mode_ctrl_c_closes_overlay_and_saves_buffer() {
+        // Ctrl+C shares the cancel branch with Esc and must preserve
+        // the draft for a later reopen without forwarding Ctrl+C to
+        // the target pane.
         let mut app = App::new(40, 80).expect("App::new");
         let pane_a = app.ws().focused_pane_id;
         let mut state = crate::input::overlay::OverlayState::new(pane_a);
@@ -4095,6 +4138,7 @@ mod tests {
 
         assert!(consumed);
         assert!(app.overlay.is_none());
+        assert!(app.saved_overlay_drafts.contains_key(&pane_a));
     }
 
     #[test]
@@ -4243,6 +4287,58 @@ mod tests {
         assert!(
             !app.dirty,
             "catch-up must not fire when freeze is disabled, even if interval elapsed"
+        );
+    }
+
+    #[test]
+    fn overlay_commit_clears_saved_draft_for_target_pane() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_a = app.ws().focused_pane_id;
+        let mut live = crate::input::overlay::OverlayState::new(pane_a);
+        for ch in "draft".chars() {
+            live.insert_char(ch);
+        }
+        app.overlay = Some(live);
+
+        let mut stale = crate::input::overlay::OverlayState::new(pane_a);
+        stale.insert_char('x');
+        app.saved_overlay_drafts.insert(pane_a, stale);
+
+        let commit = KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT);
+        let consumed = crate::input::overlay::handle_overlay_key(&mut app, commit)
+            .expect("handle_overlay_key Alt+Enter");
+
+        assert!(consumed);
+        assert!(app.overlay.is_none());
+        assert!(
+            !app.saved_overlay_drafts.contains_key(&pane_a),
+            "successful commit should clear any saved draft for that pane"
+        );
+    }
+
+    #[test]
+    fn closing_pane_drops_saved_overlay_draft() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_a = app.ws().focused_pane_id;
+        let pane_b = app
+            .split_focused_pane(SplitDirection::Vertical, None)
+            .expect("split focused pane")
+            .expect("split should create a pane");
+
+        let mut saved = crate::input::overlay::OverlayState::new(pane_a);
+        saved.insert_char('保');
+        app.saved_overlay_drafts.insert(pane_a, saved);
+
+        app.remove_pane_from_layout(0, pane_a)
+            .expect("remove pane with saved draft");
+
+        assert!(
+            !app.saved_overlay_drafts.contains_key(&pane_a),
+            "pane removal must drop its saved overlay draft"
+        );
+        assert!(
+            app.ws().panes.contains_key(&pane_b),
+            "control pane should remain after closing the original pane"
         );
     }
 
