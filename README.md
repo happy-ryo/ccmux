@@ -2,23 +2,23 @@
 
 *Read this in other languages: [日本語](./README.ja.md)*
 
-**An AI-native terminal substrate for orchestrating multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents in one TUI — pane-aware peer messaging, Claude-specific UX, single binary.**
+**An AI-native terminal substrate for orchestrating multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and Codex agents in one TUI — mixed-client peer messaging, Claude-specific UX where it matters, single binary.**
 
 ![renga screenshot](screenshot.png)
 
 ## What renga is
 
-renga is a terminal where the panes know they are AI agents. Splits, tabs, and focus work like any TUI multiplexer, but the substrate underneath treats each pane as a first-class agent endpoint: it detects which panes are running Claude Code, gives those panes an authoritative peer channel (an MCP server scoped to the renga tab) so agents can address each other by numeric id or a stable user-assigned name, and exposes pane-control tools (`spawn_claude_pane`, `set_pane_identity`, `new_tab`, …) so an orchestrator agent can grow its own workforce without the user wiring shell commands by hand. Each pane also carries an optional `role` label (used for filtering and display), but message routing itself is by id or name.
+renga is a terminal where the panes know they are AI agents. Splits, tabs, and focus work like any TUI multiplexer, but the substrate underneath treats each pane as a first-class agent endpoint: it detects which panes are running Claude Code, lets Codex panes participate in the same peer network, exposes pane-control tools (`spawn_claude_pane`, `spawn_codex_pane`, `set_pane_identity`, `new_tab`, …), and keeps peer scope authoritative at the renga-tab level. Claude peers receive interrupt-style channel pushes; Codex peers use a pull-based inbox via `check_messages`. Each pane also carries an optional `role` label (used for filtering and display), but message routing itself is by id or name.
 
-The target use case is **agent orchestration** — a "secretary" pane dispatching tasks to "worker" panes, sub-agents comparing approaches in parallel, a long-running session reaching out to a sibling for a quick lookup. If you only ever run one Claude Code at a time, renga's value over your current terminal is small. If you run several, the peer channel and the AI-aware pane model are the point.
+The target use case is **agent orchestration** — a "secretary" pane dispatching tasks to "worker" panes, sub-agents comparing approaches in parallel, a long-running session reaching out to a sibling for a quick lookup, or a mixed Claude/Codex tab where each client is used for what it is best at. If you only ever run one agent at a time, renga's value over your current terminal is small. If you run several, the peer channel and the AI-aware pane model are the point.
 
 ### Positioning vs. tmux / zellij
 
 | | tmux / zellij | renga |
 |---|---|---|
 | Pane model | Generic shell sessions | First-class **AI agent endpoints** with stable id, role, focus flag |
-| Inter-pane messaging | Copy-paste, manual `send-keys`, or external glue | Built-in MCP `renga-peers` channel; messages arrive in the receiver's context as `<channel source="renga-peers">` tags, distinct from user input |
-| Spawning a Claude pane | User types `claude --dangerously-load-development-channels …` | `spawn_claude_pane` MCP tool (structured args) or `Alt+P` shortcut — peer channel auto-wired |
+| Inter-pane messaging | Copy-paste, manual `send-keys`, or external glue | Built-in MCP `renga-peers` network; Claude receives channel pushes, Codex polls with `check_messages` |
+| Spawning agent panes | User hand-wires shell commands and client flags | `spawn_claude_pane` / `spawn_codex_pane` MCP tools, plus `Alt+P` for Claude |
 | IME / CJK | Host terminal handles it; candidate windows often jump as Claude streams | Built-in IME composition overlay with freeze-on-overlay + periodic catch-up so candidates anchor to the caret |
 | Configuration surface | Shell glue, plugins, keytables | A small TUI binary; layout TOMLs declare panes/roles directly |
 
@@ -62,7 +62,7 @@ The same primitives scale to richer layouts: a dispatcher with several workers i
 
 - **Multi-pane terminal** — Split vertically/horizontally, run independent PTY shells
 - **Tab workspaces** — Multiple project tabs with click-to-switch
-- **Peer messaging between Claude Code panes** — Same-tab Claude Code instances can talk to each other via an MCP channel; peer messages arrive as `<channel source="renga-peers">` tags distinct from user input ([see below](#peer-messaging-between-claude-code-panes))
+- **Mixed-client peer messaging** — Same-tab Claude Code and Codex instances can talk to each other via `renga-peers`; Claude receives channel pushes and Codex polls with `check_messages` ([see below](#peer-messaging-between-claude-code-and-codex-panes))
 - **File tree sidebar** — Browse project files with icons, expand/collapse directories
 - **Syntax-highlighted preview** — View file contents with language-aware coloring
 - **Claude Code detection** — Pane border turns orange when Claude Code is running
@@ -227,26 +227,34 @@ lang = "auto"   # "auto" | "ja" | "en"
 
 The `--lang auto\|ja\|en` CLI flag overrides the config file for a single run. Values are case-insensitive in both CLI (`--lang JA`) and TOML (`lang = "Ja"`). Precedence is **CLI > config > OS locale detection > English fallback**.
 
-## Peer messaging between Claude Code panes
+## Peer messaging between Claude Code and Codex panes
 
-Let two or more Claude Code instances running in the same renga tab exchange structured messages — so one Claude can ask its sibling to research something, hand off a test failure, or coordinate without the user relaying every message manually. Peer messages land in the receiver's context as `<channel source="renga-peers">` tags, cleanly distinguishable from user input.
+Let mixed Claude Code and Codex instances running in the same renga tab exchange structured messages — so one agent can ask its sibling to research something, hand off a test failure, or coordinate without the user relaying every message manually. Claude peers receive `<channel source="renga-peers">` tags; Codex peers drain queued messages with `check_messages`.
 
 > **Why this is different from [`claude-peers-mcp`](https://github.com/happy-ryo/claude-peers-mcp)** — both offer the same tool surface, but `claude-peers-mcp` infers peer scope from `cwd` / `git_root` / `PID` (heuristic, can collide). renga-peers uses the **renga tab** as the authoritative scope — panes the user literally put in the same tab. The two can coexist in the same Claude install; channel names don't collide (`server:renga-peers` vs `server:claude-peers`).
 
 ### Setup — one-time
 
 ```bash
-renga mcp install
+renga mcp install --client claude
+renga mcp install --client codex   # if you want Codex peers too
 ```
 
-Registers the running `renga` binary as the `renga-peers` MCP server in Claude Code's user config. Re-running is idempotent; pass `--force` to overwrite after a renga upgrade. `renga mcp uninstall` and `renga mcp status` are the inverse and introspection commands.
+Registers the running `renga` binary as the `renga-peers` MCP server in each selected client's user config. Re-running is idempotent; pass `--force` to overwrite after a renga upgrade. `renga mcp uninstall --client ...` and `renga mcp status --client ...` are the inverse and introspection commands.
 
 ### Usage — launch Claude Code with the peer channel
 
-Peer messages ride the MCP experimental channel protocol, so Claude Code needs the `--dangerously-load-development-channels server:renga-peers` flag at startup. renga gives you two shortcuts so you don't have to type it by hand:
+Peer delivery is client-specific:
+
+- **Claude Code** uses the MCP experimental channel protocol, so it needs `--dangerously-load-development-channels server:renga-peers` at startup.
+- **Codex** uses the MCP registration installed by `renga mcp install --client codex`; once that is in place, a plain `codex` launch is enough and incoming peer messages are drained with `check_messages`.
+
+renga gives you two shortcuts so you don't have to type the Claude launch flag by hand:
 
 - **`Alt+P`** — Inserts `claude --dangerously-load-development-channels server:renga-peers ` into the focused pane (trailing space, *no* Enter). Review, optionally tack on args, press Enter to run. Works in any pane, any shell.
 - **`renga split --role claude`** / **`renga new-tab --role claude`** — Creates a new pane and auto-launches Claude Code with the flag already applied. Explicit `--command` wins if you pass one, so the flag path stays an escape hatch you can override.
+
+Once Codex is registered, orchestrator panes can also launch it in-band with `spawn_codex_pane(direction, …)`.
 
 ### Two-pane workflow
 
@@ -279,7 +287,7 @@ _Peer messaging:_
 |---|---|
 | `list_peers` | Lists other panes in the caller's tab. Caller is excluded. |
 | `send_message(to_id, message)` | Delivers to a same-tab peer by numeric id or stable name. Silent no-op for targets outside the tab — callers cannot enumerate other tabs. |
-| `check_messages` | Manual inbox drain. Channel push is the primary delivery path; this is a fallback for when you want to re-check. |
+| `check_messages` | Drain queued peer messages for pull-based clients such as Codex. For Claude it is mostly a fallback; for Codex it is the primary receive path and should be called at turn start and at checkpoints during longer work. |
 | `set_summary` | v1 stub. renga uses pane name / role as the summary substitute. |
 
 _Pane control (same tab, except `new_tab`):_
@@ -289,6 +297,7 @@ _Pane control (same tab, except `new_tab`):_
 | `list_panes` | Lists every pane in the caller's tab with id, optional name/role, focus flag, cwd, and terminal geometry. |
 | `spawn_pane(direction, …)` | Splits a target pane. Optional `command`, `name`, `role`, `cwd`. A bare `command="claude"` (or `claude <args>`) is auto-upgraded to the `Alt+P` peer-enabled launch line so the new pane joins the renga-peers network without the caller having to remember `--dangerously-load-development-channels`. |
 | `spawn_claude_pane(direction, …)` | Higher-level convenience for launching Claude. Takes structured `permission_mode` / `model` / `args[]` fields instead of a free-form command string, always enables the peer channel, and keeps launch policy in renga. Prefer this over `spawn_pane(command="claude ...")` when the target process is Claude Code — orchestrator prompts don't have to synthesize shell-quoted command strings. Reserved flags (`--dangerously-load-development-channels` / `--permission-mode` / `--model`) inside `args[]` are rejected with `invalid-params`. |
+| `spawn_codex_pane(direction, …)` | Higher-level convenience for launching Codex. Takes structured `args[]`, builds the final `codex ...` command with renga-owned shell quoting, and relies on `renga mcp install --client codex` for the MCP-side `RENGA_PEER_CLIENT_KIND=codex` registration. Prefer this over `spawn_pane(command="codex ...")` when an orchestrator wants a Codex worker. |
 | `close_pane(target)` | Closes a pane. Refuses with `last_pane` when it's the only pane of the only tab. |
 | `focus_pane(target)` | Moves keyboard focus inside the same tab. Use sparingly — yanking focus out from under the user is disruptive. |
 | `new_tab(…)` | Opens a brand-new tab with a fresh pane and switches focus to it. Accepts the same `cwd` option as `spawn_pane`. Same `claude` auto-upgrade. |
@@ -308,11 +317,12 @@ _Event monitoring:_
 
 ### Troubleshooting
 
-- **`list_peers` reports "renga not reachable from this Claude Code instance"** — Claude Code was launched outside a renga pane, or without inheriting the env. Re-launch via `Alt+P` or `renga split --role claude` from within renga.
+- **`list_peers` reports "renga not reachable from this peer client"** — The client was launched outside a renga pane, or without inheriting the pane env. Re-launch from inside renga (`Alt+P` / `renga split --role claude` for Claude, or a normal `codex` / `spawn_codex_pane` launch after `renga mcp install --client codex`).
 - **Peer messages don't render as `<channel>` tags** — You probably forgot the `--dangerously-load-development-channels server:renga-peers` flag. Prefer `Alt+P` over typing `claude` directly.
+- **A message sent to Codex seems to do nothing** — Codex is pull-based. The message is queued until Codex calls `check_messages`. Make sure the Codex prompt or workflow checks its inbox at turn start and at reasonable checkpoints during longer work.
 - **`send_keys` seems to do nothing** — `send_keys` writes raw bytes to the target pane's PTY; it does not grant approval out-of-band. Snapshot first with `inspect_pane(target=..., lines=20)` to confirm the pane is actually waiting for input, and prefer a stable pane `name` over guessing by focus in changing layouts.
 - **`poll_events` returns `events: []` before the timeout you expected** — A `types=[...]` filter only narrows what is returned; a non-matching event can still wake the long-poll and advance `next_since`. Re-issue the call with the returned cursor. If you receive `events_dropped`, re-sync once with `list_panes`.
-- **Upgrading renga?** — Re-run `renga mcp install --force` so the registered command path points at your new binary.
+- **Upgrading renga?** — Re-run `renga mcp install --client claude --force` and/or `renga mcp install --client codex --force` so each registered client points at your new binary.
 
 ## Keybindings
 
