@@ -289,7 +289,7 @@ _ペイン操作 (`new_tab` を除き同一タブ内):_
 
 | ツール | 役割 |
 |---|---|
-| `list_panes` | 同じタブの全ペインを id / 名前 / role / フォーカス状態 / レイアウト位置込みで一覧する。 |
+| `list_panes` | 同じタブの全ペインを id / 名前 / role / フォーカス状態 / cwd / レイアウト位置込みで一覧する。 |
 | `spawn_pane(direction, …)` | 指定ペインを分割して新ペインを生やす。`command`・`name`・`role`・`cwd` はどれもオプション。`command="claude"` (または `claude <args>`) を渡したときは `Alt+P` と同じ peer 対応コマンドに自動書き換えするので、毎回 `--dangerously-load-development-channels` を覚えていなくてもメッセージング付きの Claude が立ち上がる。 |
 | `spawn_claude_pane(direction, …)` | Claude 起動専用の高レベル API。`command` の代わりに `permission_mode` / `model` / `args[]` を構造化フィールドで受け取り、peer チャネルを必ず有効にした状態で Claude Code を立ち上げる。orchestrator 側で shell クオートや launch policy を管理せず renga 側に集約できるので、`spawn_pane(command="claude ...")` を合成するより agent harness 向き。`args[]` に予約済みフラグ（`--dangerously-load-development-channels` / `--permission-mode` / `--model`）が入っていると `invalid-params` で拒否する。 |
 | `close_pane(target)` | ペインを閉じる。最後のタブの最後のペインを閉じようとしたときは `last_pane` で拒否。 |
