@@ -13,6 +13,7 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::fs;
 
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -20,6 +21,12 @@ use super::ENV_CLIENT_KIND;
 use crate::cli::{McpAction, McpClient};
 
 const SERVER_NAME: &str = "renga-peers";
+const CODEX_PASSTHROUGH_ENV_VARS: &[&str] = &[
+    "RENGA_PANE_ID",
+    "RENGA_SOCKET",
+    "RENGA_TOKEN",
+    "RENGA_CODEX_AUTO_NUDGE",
+];
 
 /// Entry point from `main.rs` for the `renga mcp <action>` subcommand.
 pub fn run(action: &McpAction) -> Result<()> {
@@ -38,6 +45,9 @@ fn install(force: bool, client: McpClient) -> Result<()> {
 
     if let Some(existing) = find_existing_entry(client)? {
         if !force {
+            if client == McpClient::Codex {
+                ensure_codex_env_var_passthrough()?;
+            }
             println!(
                 "{SERVER_NAME} is already registered in {} → {existing}\n\
                  Re-run with `renga mcp install --client {client} --force` to overwrite with: {}",
@@ -93,6 +103,7 @@ fn install_codex(exe: &Path) -> Result<()> {
     if !status.success() {
         bail!("`codex mcp add` exited with status {status}");
     }
+    ensure_codex_env_var_passthrough()?;
     Ok(())
 }
 
@@ -277,6 +288,101 @@ fn codex_add_args(exe: &Path) -> Vec<OsString> {
     ]
 }
 
+fn ensure_codex_env_var_passthrough() -> Result<()> {
+    let path = codex_config_path()?;
+    let current = fs::read_to_string(&path)
+        .with_context(|| format!("read Codex config at {}", path.display()))?;
+    let updated = upsert_codex_env_var_passthrough(&current).ok_or_else(|| {
+        anyhow!(
+            "Codex config at {} does not contain an [{section}] section after registration",
+            path.display(),
+            section = codex_server_section_name()
+        )
+    })?;
+    if updated != current {
+        fs::write(&path, updated)
+            .with_context(|| format!("write Codex config at {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn codex_config_path() -> Result<PathBuf> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| anyhow!("could not resolve the current user's home directory"))?;
+    Ok(home.join(".codex").join("config.toml"))
+}
+
+fn codex_server_section_name() -> String {
+    format!("mcp_servers.{SERVER_NAME}")
+}
+
+fn upsert_codex_env_var_passthrough(src: &str) -> Option<String> {
+    let header = format!("[{}]", codex_server_section_name());
+    let newline = if src.contains("\r\n") { "\r\n" } else { "\n" };
+    let had_trailing_newline = src.ends_with(newline);
+    let mut out: Vec<String> = Vec::new();
+    let mut in_section = false;
+    let mut found_section = false;
+    let mut wrote_env_vars = false;
+
+    for line in src.lines() {
+        let trimmed = line.trim();
+        if !in_section {
+            if trimmed == header {
+                in_section = true;
+                found_section = true;
+            }
+            out.push(line.to_string());
+            continue;
+        }
+
+        if trimmed.starts_with('[') {
+            if !wrote_env_vars {
+                while out.last().is_some_and(|line| line.trim().is_empty()) {
+                    out.pop();
+                }
+                out.push(codex_env_vars_line());
+                out.push(String::new());
+                wrote_env_vars = true;
+            }
+            in_section = false;
+            out.push(line.to_string());
+            continue;
+        }
+
+        if trimmed.starts_with("env_vars") {
+            out.push(codex_env_vars_line());
+            wrote_env_vars = true;
+        } else {
+            out.push(line.to_string());
+        }
+    }
+
+    if !found_section {
+        return None;
+    }
+    if in_section && !wrote_env_vars {
+        out.push(codex_env_vars_line());
+    }
+
+    let mut rebuilt = out.join(newline);
+    if had_trailing_newline {
+        rebuilt.push_str(newline);
+    }
+    Some(rebuilt)
+}
+
+fn codex_env_vars_line() -> String {
+    format!(
+        "env_vars = [{}]",
+        CODEX_PASSTHROUGH_ENV_VARS
+            .iter()
+            .map(|name| format!("\"{name}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
 fn is_codex_missing_entry(stderr: &str) -> bool {
     stderr.contains(&format!("No MCP server named '{SERVER_NAME}' found."))
 }
@@ -439,5 +545,41 @@ mod tests {
         assert!(is_cmd_script(Path::new("C:/Users/example/codex.cmd")));
         assert!(is_cmd_script(Path::new("C:/Users/example/codex.BAT")));
         assert!(!is_cmd_script(Path::new("C:/Users/example/codex.exe")));
+    }
+
+    #[test]
+    fn upsert_codex_env_var_passthrough_inserts_before_env_subtable() {
+        let input = concat!(
+            "[mcp_servers.renga-peers]\n",
+            "command = 'C:\\Users\\iwama\\.cargo\\bin\\renga.exe'\n",
+            "args = [\"mcp-peer\"]\n",
+            "\n",
+            "[mcp_servers.renga-peers.env]\n",
+            "RENGA_PEER_CLIENT_KIND = \"codex\"\n"
+        );
+        let output = upsert_codex_env_var_passthrough(input).unwrap();
+        assert!(output.contains(&format!(
+            "{}\n\n[mcp_servers.renga-peers.env]",
+            codex_env_vars_line()
+        )));
+    }
+
+    #[test]
+    fn upsert_codex_env_var_passthrough_replaces_existing_line() {
+        let input = concat!(
+            "[mcp_servers.renga-peers]\n",
+            "command = 'renga'\n",
+            "args = [\"mcp-peer\"]\n",
+            "env_vars = [\"OLD\"]\n"
+        );
+        let output = upsert_codex_env_var_passthrough(input).unwrap();
+        assert!(output.contains(&codex_env_vars_line()));
+        assert!(!output.contains("env_vars = [\"OLD\"]"));
+    }
+
+    #[test]
+    fn upsert_codex_env_var_passthrough_returns_none_when_server_missing() {
+        let input = "[mcp_servers.other]\ncommand = 'foo'\n";
+        assert!(upsert_codex_env_var_passthrough(input).is_none());
     }
 }

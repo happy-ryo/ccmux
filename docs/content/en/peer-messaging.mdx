@@ -36,6 +36,8 @@ Peer delivery is asymmetric:
 - Claude Code uses MCP's experimental channel protocol and needs `--dangerously-load-development-channels server:renga-peers` at startup.
 - Codex uses the MCP registration installed by `renga mcp install --client codex`; once that exists, a plain `codex` launch is enough and incoming peer messages are drained with `check_messages`.
 
+Codex auto-nudge is optional. Set `RENGA_CODEX_AUTO_NUDGE=1` in the parent shell before launching `codex`; `renga mcp install --client codex` ensures that env var is passed through to the `renga-peers` MCP subprocess.
+
 renga gives you shortcuts so you do not have to type the Claude launch flag by hand.
 
 ### `Alt+P` — works in any pane
@@ -165,6 +167,10 @@ You launched Claude Code without `--dangerously-load-development-channels server
 ### A message sent to Codex seems to do nothing
 
 Codex is pull-based. The message is queued until Codex calls `check_messages`. Make sure the Codex prompt or workflow checks its inbox at turn start and at reasonable checkpoints during longer work.
+
+### Codex auto-nudge does not fire
+
+The feature is off by default. Re-run `renga mcp install --client codex` if needed so the MCP registration passes through `RENGA_CODEX_AUTO_NUDGE`, then launch `codex` from inside a renga pane with `RENGA_CODEX_AUTO_NUDGE=1` set in the parent shell.
 
 ### `send_keys` seems to do nothing
 
