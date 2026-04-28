@@ -481,7 +481,7 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
     if matches!(key.code, KeyCode::Esc)
         || (key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('c')))
     {
-        app.overlay = None;
+        app.suspend_overlay();
         app.mark_layout_change();
         return Ok(true);
     }
@@ -544,6 +544,7 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             commit_result = app.forward_paste_to_pty(&buffer);
             app.ws_mut().focused_pane_id = focused_before;
         }
+        app.clear_overlay_draft(target_pane);
         app.mark_layout_change();
         commit_result?;
         return Ok(true);

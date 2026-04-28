@@ -98,7 +98,12 @@ name = "renga"
 # directly readable, while `[Pasted text #…]` placeholders fall back
 # to an empty overlay so collapsed pasted content is never lost. Patch
 # bump because this is a bug fix on top of 0.18.2.
-version = "0.18.3"
+# 0.18.4 keeps per-pane IME overlay drafts across temporary close /
+# reopen cycles (#168): Esc / Ctrl+C now suspend the composition
+# buffer instead of discarding it, reopening restores the previous
+# draft on that pane, and commit / pane teardown clear the saved
+# draft. Patch bump because this is a bug fix on top of 0.18.3.
+version = "0.18.4"
 edition = "2021"
 description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
 

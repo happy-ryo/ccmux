@@ -191,7 +191,7 @@ overlay_catchup_ms = 0             # pure freeze, no periodic catch-up
 2. **Pane flicker stops.** While the overlay is open, renga freezes the pane underneath — Claude's thinking spinner and streaming tokens no longer force repaints that would flicker past your IME candidates. You can focus entirely on composing.
 3. **Progress stays visible.** Every 3 seconds, renga unfreezes for a single frame so you can see Claude's streamed output advance. Tune the interval with `--ime-overlay-catchup-ms`: `0` for pure freeze, `5000` if even 3 s feels busy.
 4. **Multi-line drafts first-class.** `Enter` inserts a newline. Press `Alt+Enter` (macOS `Option+Return`) to send the whole buffer, or `Ctrl+Enter` on Windows Terminal / wezterm / VS Code. Full keymap is in the next subsection.
-5. **Escape hatch.** `Esc` on the overlay closes it so you can use renga's pane-management shortcuts (`Ctrl+D` split, `Ctrl+Left/Right` focus cycle, etc.).
+5. **Temporary close is safe.** `Esc` / `Ctrl+C` closes the overlay so you can inspect the pane or use renga's pane-management shortcuts (`Ctrl+D` split, `Ctrl+Left/Right` focus cycle, etc.). Reopen the overlay on the same pane and the previous draft comes back.
 
 ### IME overlay keybindings
 
@@ -202,7 +202,7 @@ The overlay opens as a centered multi-line composition box. Host-terminal IME ca
 | `Enter` | Insert newline (also `Shift+Enter`) |
 | `Alt+Enter` | Send buffer to the pane and close (portable across all tier-1 terminals, incl. macOS `Option+Return` — see [macOS: Option as Meta](#macos-option-as-meta) if Option doesn't fire) |
 | `Ctrl+Enter` | Send buffer — alternative commit for Windows Terminal / wezterm / VS Code / most Linux terminals |
-| `Esc` / `Ctrl+C` | Cancel — closes the overlay and discards the buffer |
+| `Esc` / `Ctrl+C` | Close the overlay and keep the draft for the same pane; reopening restores it |
 | `←` `→` `↑` `↓` | Navigate |
 | `Home` / `End` | Start / end of current line |
 | `Ctrl+Home` / `Ctrl+End` | Start / end of whole buffer |
