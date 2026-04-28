@@ -247,6 +247,14 @@ renga mcp install --client codex   # Codex peer も使う場合
 
 同じ登録を複数回実行しても安全で、既に登録があれば内容を表示して止まります。renga をアップグレードしてバイナリのパスが変わったときだけ `--force` で上書きしてください。外したいときは `renga mcp uninstall --client ...`、今どう登録されているかは `renga mcp status --client ...` で確認できます。
 
+Codex では、既定の install は client CLI の正規登録経路を尊重しつつ、peer messaging に必要な最小限の `env_vars` passthrough だけを補正します。`check_messages` と `send_message` も auto-approve 寄りにしたい場合は、明示的に opt-in してください。
+
+```bash
+renga mcp install --client codex --codex-auto-approve-peer-tools
+```
+
+このフラグは `send_keys` や pane 操作系のような、より強いツールまでは自動承認しません。
+
 ### Claude Code / Codex をメッセージング対応で起動する
 
 配送方式は client ごとに違います。
@@ -328,6 +336,7 @@ _イベント監視:_
 - **相手に送ったメッセージが `<channel>` タグで表示されない** — 起動時のフラグ `--dangerously-load-development-channels server:renga-peers` を付け忘れています。`claude` と打つ代わりに `Alt+P` を使えばフラグ付きのコマンドが挿入されるので事故りにくくなります。
 - **Codex に送ったのに反応がない** — Codex は pull 型です。メッセージは `check_messages` が呼ばれるまで queue に残ります。Codex 側の prompt / workflow が turn 開始時と長作業の節目で `check_messages` を呼ぶ前提になっているか確認してください。
 - **Codex の auto-nudge が動かない** — 既定では無効です。`renga mcp install --client codex` を実行して `RENGA_CODEX_AUTO_NUDGE` の passthrough を入れた上で、renga のペイン内から `RENGA_CODEX_AUTO_NUDGE=1` を設定した親シェルで `codex` を起動してください。
+- **新しい Codex pane で `check_messages` / `send_message` の承認がまた出る** — Codex の承認は pane-local に振る舞うことがあります。`renga mcp install --client codex --codex-auto-approve-peer-tools` で安全な peer messaging 系の承認を事前設定できますが、Codex のバージョンや実行形態によっては、新しい pane で一度だけ warm-up 承認が必要です。
 - **`send_keys` が効いていないように見える** — `send_keys` は target ペインの PTY に生の入力バイトを書き込むだけで、帯域外の「承認」操作ではありません。まず `inspect_pane(target=..., lines=20)` で本当に入力待ちか確認し、レイアウトが動く運用ではフォーカス推測ではなく安定した pane `name` を target に使ってください。
 - **`poll_events` が想定より早く `events: []` を返す** — `types=[...]` フィルタは返却結果を絞るだけで、非一致イベントでも long-poll は解除されて `next_since` は前進します。返ってきた cursor でそのまま再 poll してください。`events_dropped` が来た場合だけ、1 回 `list_panes` で再同期すると安全です。
 - **renga をアップグレードしたら繋がらなくなった** — 登録されているバイナリのパスが古いです。`renga mcp install --client claude --force` や `renga mcp install --client codex --force` で今の `renga` に更新してください。
