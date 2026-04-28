@@ -53,7 +53,7 @@ const ENV_PANE_ID: &str = "RENGA_PANE_ID";
 pub(crate) const ENV_CLIENT_KIND: &str = "RENGA_PEER_CLIENT_KIND";
 const ENV_CODEX_AUTO_NUDGE: &str = "RENGA_CODEX_AUTO_NUDGE";
 const CODEX_AUTO_NUDGE_TEXT: &str =
-    "renga-peers has pending messages. Run check_messages, handle them, then resume.";
+    "renga-peers may have pending messages. Run check_messages; if it returns 0, this nudge is stale and can be ignored.";
 const CODEX_AUTO_NUDGE_COOLDOWN: Duration = Duration::from_secs(30);
 
 fn log_stderr(msg: &str) {
@@ -312,25 +312,113 @@ fn should_send_codex_auto_nudge(
             .is_none_or(|last| now.saturating_duration_since(last) >= CODEX_AUTO_NUDGE_COOLDOWN)
 }
 
-fn send_codex_auto_nudge(endpoint: &EndpointName, pane_id: usize) -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexAutoNudgeDelivery {
+    SubmitNow,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexAutoNudgeChunk {
+    data: String,
+    append_enter: bool,
+}
+
+fn codex_auto_nudge_chunks(delivery: CodexAutoNudgeDelivery) -> Vec<CodexAutoNudgeChunk> {
+    match delivery {
+        // Codex on Windows accepted the nudge only when the submit keys
+        // arrived as a second write after the text had already landed in
+        // the composer. Mirror that exact sequence here, but express the
+        // second step as a dedicated Enter so renga writes the same bytes
+        // as the higher-level send_keys path.
+        CodexAutoNudgeDelivery::SubmitNow => vec![
+            CodexAutoNudgeChunk {
+                data: CODEX_AUTO_NUDGE_TEXT.to_string(),
+                append_enter: false,
+            },
+            CodexAutoNudgeChunk {
+                data: "\r".to_string(),
+                append_enter: false,
+            },
+        ],
+    }
+}
+
+fn codex_auto_nudge_delivery_from_screen(screen_text: &str) -> CodexAutoNudgeDelivery {
+    // When Codex is busy its status bar may advertise "tab to queue
+    // message", but queueing the nudge defers `check_messages` until
+    // the current task ends. That makes simultaneous peer pings look
+    // flaky because only idle panes reply promptly. Always submit the
+    // nudge now so pull-based peers drain their inbox immediately.
+    let _ = screen_text;
+    CodexAutoNudgeDelivery::SubmitNow
+}
+
+fn detect_codex_auto_nudge_delivery(
+    endpoint: &EndpointName,
+    pane_id: usize,
+) -> CodexAutoNudgeDelivery {
     match client::send_request(
         endpoint,
-        &Request::Send {
+        &Request::Inspect {
             target: PaneRef::Id(pane_id),
-            data: CODEX_AUTO_NUDGE_TEXT.to_string(),
-            append_enter: true,
+            lines: Some(8),
+            include_cursor: false,
         },
     ) {
-        Ok(Response::Ok { .. }) => Ok(()),
-        Ok(Response::Err { message, code }) => Err(anyhow!(
-            "renga refused Codex auto-nudge: {}",
-            fmt_code(&message, &code)
-        )),
-        Ok(other) => Err(anyhow!(
-            "unexpected IPC response for Codex auto-nudge: {other:?}"
-        )),
-        Err(e) => Err(e).context("send Codex auto-nudge"),
+        Ok(Response::Ok { data }) => codex_auto_nudge_delivery_from_screen(
+            data.get("text").and_then(|v| v.as_str()).unwrap_or(""),
+        ),
+        Ok(other) => {
+            log_stderr(&format!(
+                "unexpected IPC response while probing Codex queue mode: {other:?}"
+            ));
+            CodexAutoNudgeDelivery::SubmitNow
+        }
+        Err(e) => {
+            log_stderr(&format!(
+                "failed to inspect Codex pane before auto-nudge: {e}"
+            ));
+            CodexAutoNudgeDelivery::SubmitNow
+        }
     }
+}
+
+fn send_codex_auto_nudge(endpoint: &EndpointName, pane_id: usize) -> Result<()> {
+    let delivery = detect_codex_auto_nudge_delivery(endpoint, pane_id);
+    let chunks = codex_auto_nudge_chunks(delivery);
+    let chunk_count = chunks.len();
+    for (idx, chunk) in chunks.into_iter().enumerate() {
+        match client::send_request(
+            endpoint,
+            &Request::Send {
+                target: PaneRef::Id(pane_id),
+                data: chunk.data,
+                append_enter: chunk.append_enter,
+            },
+        ) {
+            Ok(Response::Ok { .. }) => {}
+            Ok(Response::Err { message, code }) => {
+                return Err(anyhow!(
+                    "renga refused Codex auto-nudge: {}",
+                    fmt_code(&message, &code)
+                ));
+            }
+            Ok(other) => {
+                return Err(anyhow!(
+                    "unexpected IPC response for Codex auto-nudge: {other:?}"
+                ));
+            }
+            Err(e) => return Err(e).context("send Codex auto-nudge"),
+        }
+        if idx + 1 < chunk_count {
+            // Codex on Windows appears to collapse back-to-back PTY writes
+            // into a single "typed text" burst, which leaves the submit
+            // keys inert. A small gap makes the second write behave like a
+            // real follow-up keypress.
+            std::thread::sleep(Duration::from_millis(75));
+        }
+    }
+    Ok(())
 }
 
 // ── stdio JSON-RPC frame plumbing ─────────────────────────────
@@ -430,7 +518,11 @@ calling send_message with their from_id.\n\n"
         PeerClientKind::Codex => {
             "IMPORTANT: This client uses pull-based message receipt. Call check_messages at the start \
 of a turn and at reasonable checkpoints during longer work. If messages are waiting, respond \
-promptly with send_message before resuming your prior task.\n\n"
+promptly with send_message before resuming your prior task.\n\n\
+Treat the auto-nudge text as best-effort only: if the screen says there may be pending peer \
+messages but check_messages returns 0, the nudge is stale and can be ignored.\n\n\
+MCP approvals in Codex are pane-local. On a newly launched pane, the first check_messages and \
+send_message calls may need approval before peer messaging becomes reliable.\n\n"
         }
     };
     format!(
@@ -3535,6 +3627,44 @@ mod tests {
             Some(now - CODEX_AUTO_NUDGE_COOLDOWN),
             now
         ));
+    }
+
+    #[test]
+    fn codex_auto_nudge_delivery_submits_even_when_status_bar_mentions_queueing() {
+        let screen =
+            "\n• Working (48s • esc to interrupt)\n\n  tab to queue message68% context left\n";
+        assert_eq!(
+            codex_auto_nudge_delivery_from_screen(screen),
+            CodexAutoNudgeDelivery::SubmitNow
+        );
+    }
+
+    #[test]
+    fn codex_auto_nudge_delivery_submits_when_queue_hint_absent() {
+        let screen = "› ready for input\n\n  enter to send";
+        assert_eq!(
+            codex_auto_nudge_delivery_from_screen(screen),
+            CodexAutoNudgeDelivery::SubmitNow
+        );
+    }
+
+    #[test]
+    fn codex_auto_nudge_submit_path_uses_separate_enter_send() {
+        let chunks = codex_auto_nudge_chunks(CodexAutoNudgeDelivery::SubmitNow);
+        assert_eq!(
+            chunks,
+            vec![
+                CodexAutoNudgeChunk {
+                    data: CODEX_AUTO_NUDGE_TEXT.to_string(),
+                    append_enter: false,
+                },
+                CodexAutoNudgeChunk {
+                    data: "\r".to_string(),
+                    append_enter: false,
+                }
+            ],
+            "submit path should split text and CR into separate sends"
+        );
     }
 
     #[test]

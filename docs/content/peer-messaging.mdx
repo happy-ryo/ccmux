@@ -21,7 +21,9 @@ renga mcp install --client claude
 renga mcp install --client codex
 ```
 
-いま走っている `renga` バイナリを `renga-peers` という名前で、選択した client のユーザー設定に登録します。Claude では `claude mcp add-json`、Codex では `codex mcp add` を呼ぶだけなので、client 側の設定ファイル書式を renga が追う必要はありません。
+いま走っている `renga` バイナリを `renga-peers` という名前で、選択した client のユーザー設定に登録します。Claude では `claude mcp add-json`、Codex では `codex mcp add` を使って、まず client CLI 側の正規登録経路に載せます。
+
+Codex については、peer messaging に必要な env var passthrough を保つため、登録後に `~/.codex/config.toml` の `renga-peers` エントリを最小限だけ補正します。`check_messages` と `send_message` の auto-approve まで入れたい場合は、`--codex-auto-approve-peer-tools` を付けて明示的に opt-in してください。`send_keys` や pane 操作系までは自動承認しません。
 
 同じ登録を何度実行しても安全 (既に登録があれば内容を表示して止まる) で、renga をアップグレードしてバイナリのパスが変わったときだけ `--force` を付けて上書きしてください。
 
@@ -44,6 +46,10 @@ renga mcp status --client codex
 - Codex は `renga mcp install --client codex` で入れた MCP 登録を使います。そこで `RENGA_PEER_CLIENT_KIND=codex` が MCP サブプロセスに注入されるため、pane 側の起動は plain `codex` で足ります。受信は `check_messages` による pull です。
 
 Codex の auto-nudge は任意です。`codex` を起動する親シェルで `RENGA_CODEX_AUTO_NUDGE=1` を設定してください。`renga mcp install --client codex` を実行してあれば、その env var は `renga-peers` の MCP サブプロセスまで引き継がれます。
+
+<Callout type="warning">
+  Codex 側の peer messaging は、現状どうしても Claude より不安定です。理由は 2 つで、受信が `check_messages` ベースの pull 型であることと、MCP 承認が pane ごとで共有されないことです。`pending messages` の表示が stale になることもあるので、最終的な真実は常に `check_messages` の返り値を見てください。
+</Callout>
 
 Claude の起動フラグを毎回手で打たなくて済むように、renga 側から 2 つの経路を用意しています。
 
@@ -171,9 +177,27 @@ client が renga の外で起動されたか、renga ペインの環境変数を
 
 Codex は pull 型です。メッセージは `check_messages` が呼ばれるまで queue に残ります。Codex 側の prompt / workflow が turn 開始時と長作業の節目で `check_messages` を呼ぶ前提になっているか確認してください。
 
+### Codex の `pending messages` 表示が残るのに `check_messages` は 0 件
+
+Codex auto-nudge は queue 状態を常時同期するバナーではなく、`check_messages` を促す one-shot の入力です。Codex の履歴に残るので、受信箱を drain したあとでも画面上にはしばらく見えます。
+
+`check_messages` が 0 件なら、それは stale な nudge です。実 inbox 側は空なので、そのまま無視して構いません。
+
 ### Codex の auto-nudge が動かない
 
 この機能は既定で無効です。必要なら `renga mcp install --client codex` を再実行して `RENGA_CODEX_AUTO_NUDGE` の passthrough が入っている状態にし、renga のペイン内から `RENGA_CODEX_AUTO_NUDGE=1` を設定した親シェルで `codex` を起動してください。
+
+### 新しい Codex pane でまた承認が出る
+
+Codex の MCP 承認は pane ごとです。Claude Code のような「一度許可したら同じタブの別 pane にも伝播する」共有承認は前提にしていません。
+
+新しい Codex pane を立てた直後に 1 回だけ warm-up してください。
+
+1. その pane に peer message を 1 通送る
+2. `check_messages` の承認で `Always allow` を選ぶ
+3. 返信時の `send_message` の承認でも `Always allow` を選ぶ
+
+`renga mcp install --client codex --codex-auto-approve-peer-tools` はこの 2 つを事前設定しようとしますが、Codex 側のバージョンや実行形態によっては、新しい pane で一度だけ承認が必要なことがあります。
 
 ### `send_keys` が効いていないように見える
 

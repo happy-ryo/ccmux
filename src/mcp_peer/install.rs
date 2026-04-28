@@ -1,19 +1,21 @@
 //! `renga mcp install / uninstall / status` — thin wrappers around
 //! client MCP management commands.
 //!
-//! We intentionally do **not** edit Claude Code's or Codex's config
-//! files directly. Both CLIs already own their MCP configuration
-//! formats, so we delegate registration through `claude mcp ...` or
-//! `codex mcp ...` instead of tracking on-disk schema details here.
+//! We intentionally let each client CLI own the primary MCP
+//! registration path (`claude mcp ...` / `codex mcp ...`) rather than
+//! reimplementing their full on-disk schema here.
 //!
-//! The tradeoff is a hard dependency on the target client binary being
-//! on PATH. We surface a clear error in that case rather than silently
-//! falling back to file-editing.
+//! Codex currently needs a small post-registration patch to its
+//! `config.toml` so the `renga-peers` entry carries the required
+//! env-var passthrough. Optional approval defaults are kept behind an
+//! explicit CLI flag so the default install path stays close to the
+//! client CLI's own registration semantics while still failing clearly
+//! if the target client binary is missing from PATH.
 
 use std::ffi::{OsStr, OsString};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::fs;
 
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -27,11 +29,16 @@ const CODEX_PASSTHROUGH_ENV_VARS: &[&str] = &[
     "RENGA_TOKEN",
     "RENGA_CODEX_AUTO_NUDGE",
 ];
+const CODEX_AUTO_APPROVE_TOOLS: &[&str] = &["check_messages", "send_message"];
 
 /// Entry point from `main.rs` for the `renga mcp <action>` subcommand.
 pub fn run(action: &McpAction) -> Result<()> {
     match action {
-        McpAction::Install { force, client } => install(*force, *client),
+        McpAction::Install {
+            force,
+            client,
+            codex_auto_approve_peer_tools,
+        } => install(*force, *client, *codex_auto_approve_peer_tools),
         McpAction::Uninstall { client } => uninstall(*client),
         McpAction::Status { client } => status(*client),
     }
@@ -39,7 +46,10 @@ pub fn run(action: &McpAction) -> Result<()> {
 
 // ── install ────────────────────────────────────────────────────
 
-fn install(force: bool, client: McpClient) -> Result<()> {
+fn install(force: bool, client: McpClient, codex_auto_approve_peer_tools: bool) -> Result<()> {
+    if client != McpClient::Codex && codex_auto_approve_peer_tools {
+        bail!("--codex-auto-approve-peer-tools is only valid with --client codex");
+    }
     ensure_client_cli_available(client)?;
     let exe = current_renga_exe()?;
 
@@ -47,6 +57,9 @@ fn install(force: bool, client: McpClient) -> Result<()> {
         if !force {
             if client == McpClient::Codex {
                 ensure_codex_env_var_passthrough()?;
+                if codex_auto_approve_peer_tools {
+                    ensure_codex_auto_approve_peer_tools()?;
+                }
             }
             println!(
                 "{SERVER_NAME} is already registered in {} → {existing}\n\
@@ -64,7 +77,14 @@ fn install(force: bool, client: McpClient) -> Result<()> {
         McpClient::Codex => install_codex(&exe)?,
     }
 
-    println!("{}", install_success_message(client, &exe));
+    if client == McpClient::Codex && codex_auto_approve_peer_tools {
+        ensure_codex_auto_approve_peer_tools()?;
+    }
+
+    println!(
+        "{}",
+        install_success_message(client, &exe, codex_auto_approve_peer_tools)
+    );
     Ok(())
 }
 
@@ -107,7 +127,11 @@ fn install_codex(exe: &Path) -> Result<()> {
     Ok(())
 }
 
-fn install_success_message(client: McpClient, exe: &Path) -> String {
+fn install_success_message(
+    client: McpClient,
+    exe: &Path,
+    codex_auto_approve_peer_tools: bool,
+) -> String {
     match client {
         McpClient::Claude => format!(
             "Registered {SERVER_NAME} in Claude Code → {}\n\
@@ -121,8 +145,20 @@ fn install_success_message(client: McpClient, exe: &Path) -> String {
             "Registered {SERVER_NAME} in Codex → {}\n\
              Next: launch Codex from inside a renga pane. This registration \
              injects `{ENV_CLIENT_KIND}=codex`, so peer messages are received \
-             through `check_messages` instead of Claude channels.",
-            exe.display()
+             through `check_messages` instead of Claude channels.{}",
+            exe.display(),
+            if codex_auto_approve_peer_tools {
+                "\n\
+             renga also preconfigures Codex to auto-approve `check_messages` and \
+             `send_message` for this MCP server where supported.\n\
+             Note: Codex MCP approvals can still behave pane-locally in practice, \
+             so a newly launched pane may still need one warm-up approval."
+            } else {
+                "\n\
+             Re-run with `--codex-auto-approve-peer-tools` if you want renga to \
+             patch the Codex config entry so `check_messages` / `send_message` \
+             prompt less often."
+            }
         ),
     }
 }
@@ -306,6 +342,24 @@ fn ensure_codex_env_var_passthrough() -> Result<()> {
     Ok(())
 }
 
+fn ensure_codex_auto_approve_peer_tools() -> Result<()> {
+    let path = codex_config_path()?;
+    let current = fs::read_to_string(&path)
+        .with_context(|| format!("read Codex config at {}", path.display()))?;
+    let updated = upsert_codex_auto_approve_peer_tools(&current).ok_or_else(|| {
+        anyhow!(
+            "Codex config at {} does not contain an [{section}] section after registration",
+            path.display(),
+            section = codex_server_section_name()
+        )
+    })?;
+    if updated != current {
+        fs::write(&path, updated)
+            .with_context(|| format!("write Codex config at {}", path.display()))?;
+    }
+    Ok(())
+}
+
 fn codex_config_path() -> Result<PathBuf> {
     let home = dirs::home_dir()
         .ok_or_else(|| anyhow!("could not resolve the current user's home directory"))?;
@@ -314,6 +368,24 @@ fn codex_config_path() -> Result<PathBuf> {
 
 fn codex_server_section_name() -> String {
     format!("mcp_servers.{SERVER_NAME}")
+}
+
+fn codex_tool_section_name(tool: &str) -> String {
+    format!("{}.tools.{tool}", codex_server_section_name())
+}
+
+fn upsert_codex_auto_approve_peer_tools(src: &str) -> Option<String> {
+    let mut updated = src.to_string();
+    if !src
+        .lines()
+        .any(|line| line.trim() == format!("[{}]", codex_server_section_name()))
+    {
+        return None;
+    }
+    for tool in CODEX_AUTO_APPROVE_TOOLS {
+        updated = upsert_codex_tool_approval(&updated, tool, "approve");
+    }
+    Some(updated)
 }
 
 fn upsert_codex_env_var_passthrough(src: &str) -> Option<String> {
@@ -381,6 +453,76 @@ fn codex_env_vars_line() -> String {
             .collect::<Vec<_>>()
             .join(", ")
     )
+}
+
+fn upsert_codex_tool_approval(src: &str, tool: &str, approval_mode: &str) -> String {
+    let section = codex_tool_section_name(tool);
+    let header = format!("[{section}]");
+    let newline = if src.contains("\r\n") { "\r\n" } else { "\n" };
+    let had_trailing_newline = src.ends_with(newline);
+    let approval_line = format!("approval_mode = \"{approval_mode}\"");
+    let mut out: Vec<String> = Vec::new();
+    let mut in_section = false;
+    let mut found_section = false;
+    let mut wrote_approval = false;
+
+    for line in src.lines() {
+        let trimmed = line.trim();
+        if !in_section {
+            if trimmed == header {
+                in_section = true;
+                found_section = true;
+            }
+            out.push(line.to_string());
+            continue;
+        }
+
+        if trimmed.starts_with('[') {
+            if !wrote_approval {
+                while out.last().is_some_and(|line| line.trim().is_empty()) {
+                    out.pop();
+                }
+                out.push(approval_line.clone());
+                out.push(String::new());
+                wrote_approval = true;
+            }
+            in_section = false;
+            out.push(line.to_string());
+            continue;
+        }
+
+        if trimmed.starts_with("approval_mode") {
+            out.push(approval_line.clone());
+            wrote_approval = true;
+        } else {
+            out.push(line.to_string());
+        }
+    }
+
+    if found_section {
+        if in_section && !wrote_approval {
+            out.push(approval_line);
+        }
+        let mut rebuilt = out.join(newline);
+        if had_trailing_newline {
+            rebuilt.push_str(newline);
+        }
+        return rebuilt;
+    }
+
+    while out.last().is_some_and(|line| line.trim().is_empty()) {
+        out.pop();
+    }
+    if !out.is_empty() {
+        out.push(String::new());
+    }
+    out.push(header);
+    out.push(approval_line);
+    let mut rebuilt = out.join(newline);
+    if had_trailing_newline || !rebuilt.is_empty() {
+        rebuilt.push_str(newline);
+    }
+    rebuilt
 }
 
 fn is_codex_missing_entry(stderr: &str) -> bool {
@@ -581,5 +723,50 @@ mod tests {
     fn upsert_codex_env_var_passthrough_returns_none_when_server_missing() {
         let input = "[mcp_servers.other]\ncommand = 'foo'\n";
         assert!(upsert_codex_env_var_passthrough(input).is_none());
+    }
+
+    #[test]
+    fn upsert_codex_tool_approval_appends_missing_tool_section() {
+        let input = concat!(
+            "[mcp_servers.renga-peers]\n",
+            "command = 'renga'\n",
+            "args = [\"mcp-peer\"]\n"
+        );
+        let output = upsert_codex_tool_approval(input, "check_messages", "approve");
+        assert!(output.contains(
+            "[mcp_servers.renga-peers.tools.check_messages]\napproval_mode = \"approve\"\n"
+        ));
+    }
+
+    #[test]
+    fn upsert_codex_tool_approval_replaces_existing_value() {
+        let input = concat!(
+            "[mcp_servers.renga-peers.tools.send_message]\n",
+            "approval_mode = \"prompt\"\n"
+        );
+        let output = upsert_codex_tool_approval(input, "send_message", "approve");
+        assert!(output.contains("approval_mode = \"approve\""));
+        assert!(!output.contains("approval_mode = \"prompt\""));
+    }
+
+    #[test]
+    fn upsert_codex_auto_approve_peer_tools_adds_auto_approve_tool_sections() {
+        let input = concat!(
+            "[mcp_servers.renga-peers]\n",
+            "command = 'renga'\n",
+            "args = [\"mcp-peer\"]\n"
+        );
+        let output = upsert_codex_auto_approve_peer_tools(input).expect("server section");
+        assert!(output.contains("[mcp_servers.renga-peers.tools.check_messages]"));
+        assert!(output.contains("[mcp_servers.renga-peers.tools.send_message]"));
+    }
+
+    #[test]
+    fn install_rejects_codex_auto_approve_flag_for_non_codex_clients_before_cli_lookup() {
+        let err =
+            install(false, McpClient::Claude, true).expect_err("flag should be rejected early");
+        assert!(err
+            .to_string()
+            .contains("--codex-auto-approve-peer-tools is only valid with --client codex"));
     }
 }
