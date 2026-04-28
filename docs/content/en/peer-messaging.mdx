@@ -57,12 +57,36 @@ An explicit `--command "…"` overrides the auto-launch, so the role path is a d
 
 Exposed by the MCP server to each Claude pane:
 
+### Peer messaging
+
 | Tool | Effect |
 |---|---|
 | `list_peers(scope?)` | Lists other panes in the caller's renga tab. Caller excluded. `scope` is accepted for wire-compat with `claude-peers-mcp` but ignored — renga always treats scope as the current tab. |
 | `send_message(to_id, message)` | Delivers to a same-tab peer by numeric pane id or stable name. Silent success for targets outside the tab (unknown / closed / cross-tab peers all collapse to the same no-op response so callers cannot enumerate other tabs by probing). |
 | `check_messages` | Manual inbox drain. Channel push is the primary delivery path; this is a fallback for when you suspect a dropped push. |
 | `set_summary(text)` | v1 stub (accepted and ignored). `list_peers` surfaces pane `name` / `role` as the summary substitute; a real `set_summary` may land in v2. |
+
+### Pane control
+
+| Tool | Effect |
+|---|---|
+| `list_panes` | Lists every pane in the caller's tab with id, optional name / role, focus flag, cwd, and terminal geometry. |
+| `spawn_pane(direction, …)` | Splits a target pane. Optional `command`, `name`, `role`, `cwd`. A bare `command="claude"` (or `claude <args>`) is auto-upgraded to the `Alt+P` peer-enabled launch line so the new pane joins the `renga-peers` network without the caller having to remember `--dangerously-load-development-channels`. |
+| `spawn_claude_pane(direction, …)` | Higher-level convenience for launching Claude. Takes structured `permission_mode` / `model` / `args[]` fields instead of a free-form command string, always enables the peer channel, and keeps launch policy in renga. Reserved flags (`--dangerously-load-development-channels` / `--permission-mode` / `--model`) inside `args[]` are rejected with `invalid-params`. |
+| `close_pane(target)` | Closes a pane. Refuses with `last_pane` when it's the only pane of the only tab. |
+| `focus_pane(target)` | Moves keyboard focus inside the same tab. Use sparingly — yanking focus out from under the user is disruptive. |
+| `new_tab(…)` | Opens a brand-new tab with a fresh pane and switches focus to it. Accepts the same `cwd` option as `spawn_pane`, plus the same `claude` auto-upgrade when `command` starts with `claude`. |
+| `inspect_pane(target, …)` | Snapshots another pane's visible screen so an orchestrator can detect prompts, banners, or mode changes without asking the target Claude to describe itself. Text by default; `format="grid"` returns row-addressable JSON and `lines=N` trims to the last N rows. |
+| `send_keys(target, …)` | Sends raw PTY key input (`Enter`, `Esc`, arrows, `Ctrl+<letter>`, literal text, etc.) to another pane. Use this for interactive prompts or TUIs that cannot consume `send_message`. |
+| `set_pane_identity(target, name?, role?)` | Rename or (re)assign the stable `name` / `role` of an existing pane. Three-state fields: omit a key to keep, `null` to clear, a string to set. Rejects all-digit names and same-tab name collisions. Also exposed as `renga rename`. |
+
+### Event monitoring
+
+| Tool | Effect |
+|---|---|
+| `poll_events(timeout_ms?, since?, types?)` | Long-polls pane lifecycle events (`pane_started`, `pane_exited`, `events_dropped`) with a cursor-based API. Use this when an orchestrator needs to notice worker births / exits without polling the full pane list every turn. |
+
+Use `cwd` on `spawn_pane` / `new_tab` instead of embedding `cd <dir> && ...` inside `command`. That keeps path resolution structured and preserves the `claude` auto-upgrade behavior.
 
 ## Two-pane example
 
