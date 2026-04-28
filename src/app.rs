@@ -168,7 +168,8 @@ fn pane_screen_tail_lines(pane: &Pane) -> Option<Vec<String>> {
     let start_row = end_row
         .saturating_add(1)
         .saturating_sub(CODEX_APPEND_ENTER_SNAPSHOT_LINES as u16);
-    let mut lines = Vec::with_capacity(end_row.saturating_sub(start_row).saturating_add(1) as usize);
+    let mut lines =
+        Vec::with_capacity(end_row.saturating_sub(start_row).saturating_add(1) as usize);
     for row in start_row..=end_row {
         let mut line = String::with_capacity(cols as usize);
         for col in 0..cols {
