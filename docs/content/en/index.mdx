@@ -8,11 +8,12 @@
 
 ## Overview
 
-renga is a lightweight terminal multiplexer focused on running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions in parallel. It's a thin layer on top of PTYs with a vt100 emulator, offering split panes, tabs, and a file tree. Think of it as tmux shaped around the Claude Code workflow.
+renga is a lightweight terminal multiplexer focused on running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions in parallel. It's a thin layer on top of PTYs with a vt100 emulator, offering split panes, tabs, and a file tree. The differentiator is that same-tab Claude panes can join a built-in `renga-peers` MCP channel and use pane-control tools to launch, inspect, and coordinate each other. Think of it as tmux shaped around the Claude Code workflow.
 
 ## Highlights
 
 - Run multiple Claude Code sessions side-by-side in split panes
+- **Peer messaging + pane orchestration** — same-tab Claude panes can use `list_peers`, `send_message`, `spawn_claude_pane`, `inspect_pane`, `send_keys`, and `poll_events` via the built-in `renga-peers` MCP server
 - **Centered multi-line IME composition overlay** — `Alt+Enter` sends, `Enter` inserts a newline, the host IME candidate window anchors to the caret (renga-specific)
 - **Pane freeze + periodic catch-up** (`--ime-freeze-panes` + `--ime-overlay-catchup-ms`) silences caret flicker during IME composition (renga-specific)
 - File tree with syntax-highlighted preview
@@ -24,14 +25,18 @@ renga is a lightweight terminal multiplexer focused on running multiple [Claude 
 
 ```bash
 npm install -g @suisya-systems/renga
+renga mcp install
 renga
 ```
 
-Once running, type `claude` in the terminal pane to start Claude Code.
+Once running, press `Alt+P` in a pane to insert the peer-enabled Claude launch command. If you spawn a second Claude pane the same way, both panes join the same `renga-peers` network and can collaborate in-band.
+
+See [Getting Started](/en/getting-started) for first-run setup and [Peer Messaging](/en/peer-messaging) for the MCP tool surface.
 
 ## Key Features
 
 - [**Multi-pane splits**](/en/features#pane-management) — Vertical and horizontal, up to 16 panes
+- [**Peer messaging + pane control**](/en/peer-messaging) — Claude panes can talk to each other and control splits, worker launches, prompt responses, and lifecycle watching
 - [**IME composition overlay**](/en/features#ime-input-japanese--chinese--korean) — Centered multi-line, `Alt+Enter` to send, candidate-window anchor, optional pane freeze + catch-up
 - [**File tree + preview**](/en/features#file-tree) — Browse and preview files with syntax highlighting
 - [**Tab workspaces**](/en/features#tabs) — Independent workspaces per tab
