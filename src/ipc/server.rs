@@ -548,6 +548,13 @@ fn dispatch_request(req: Request, command_tx: &Sender<AppCommand>) -> Response {
             body,
             reply,
         }),
+        Request::PeerRegisterClient { pane_id, kind } => {
+            forward_unit(command_tx, |reply| AppCommand::PeerRegisterClient {
+                pane_id,
+                kind,
+                reply,
+            })
+        }
         Request::SetPaneIdentity { target, name, role } => {
             let (reply_tx, reply_rx) = oneshot::channel();
             if command_tx

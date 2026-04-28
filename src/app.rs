@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::layout::Rect;
 
 use crate::filetree::FileTree;
-use crate::ipc::{self, PaneInfo, PaneRef, PeerInfo};
+use crate::ipc::{self, PaneInfo, PaneRef, PeerClientKind, PeerInfo};
 use crate::layout_config::{DirectionSpec, LayoutConfig, LayoutNodeSpec};
 use crate::pane::{Pane, PointerAction, PointerButton};
 use crate::preview::Preview;
@@ -91,6 +91,13 @@ pub enum AppCommand {
         from_pane: usize,
         target: PaneRef,
         body: String,
+        reply: oneshot::Sender<std::result::Result<(), ipc::CodedError>>,
+    },
+    /// Publish the MCP client kind currently attached to a pane so
+    /// peer/pane listings can surface push-vs-pull receive behavior.
+    PeerRegisterClient {
+        pane_id: usize,
+        kind: PeerClientKind,
         reply: oneshot::Sender<std::result::Result<(), ipc::CodedError>>,
     },
     /// Rename or clear the `name` / `role` of an existing pane. See
@@ -584,6 +591,10 @@ pub struct App {
     pub version_info: crate::version_check::VersionInfo,
     // Claude Code JSONL monitoring
     pub claude_monitor: crate::claude_monitor::ClaudeMonitor,
+    /// Runtime metadata published by connected MCP peer subprocesses.
+    /// Keyed by pane id so `list_peers` / `list_panes` can surface
+    /// whether a pane is using Claude-style push or Codex-style poll.
+    peer_client_kinds: HashMap<usize, PeerClientKind>,
     // Reusable clipboard handle (lazy-initialized)
     clipboard: Option<arboard::Clipboard>,
     // Pane lifecycle event bus shared with IPC subscribers.
@@ -713,6 +724,7 @@ impl App {
                 info
             },
             claude_monitor: crate::claude_monitor::ClaudeMonitor::new(),
+            peer_client_kinds: HashMap::new(),
             clipboard: None,
             event_bus,
             ime_mode: crate::config::ImeMode::default(),
@@ -1615,6 +1627,7 @@ impl App {
             for pid in &pane_ids_in_tab {
                 self.saved_overlay_drafts.remove(pid);
                 self.claude_monitor.remove(*pid);
+                self.peer_client_kinds.remove(pid);
             }
         }
 
@@ -1945,6 +1958,7 @@ impl App {
 
         // Clean up claude monitor state for this pane.
         self.claude_monitor.remove(pane_id);
+        self.peer_client_kinds.remove(&pane_id);
 
         let ws = &mut self.workspaces[ws_index];
         let remaining_ids = ws.layout.collect_pane_ids();
@@ -3002,6 +3016,7 @@ impl App {
         for ws in &mut self.workspaces {
             ws.shutdown();
         }
+        self.peer_client_kinds.clear();
     }
 
     /// Drain any pending IPC commands and dispatch them. Safe to call
@@ -3036,6 +3051,7 @@ impl App {
                     let pane = ws.panes.get(&id);
                     let role = pane.and_then(|p| p.role.clone());
                     let cwd = pane.map(|p| p.cwd.to_string_lossy().to_string());
+                    let kind = self.peer_client_kinds.get(&id).copied();
                     let rect = rect_by_id.get(&id).copied().unwrap_or_default();
                     infos.push(PaneInfo {
                         id,
@@ -3047,6 +3063,8 @@ impl App {
                         width: rect.width,
                         height: rect.height,
                         cwd,
+                        kind,
+                        receive_mode: kind.map(|k| k.receive_mode()),
                     });
                 }
                 let _ = reply.send(infos);
@@ -3113,6 +3131,14 @@ impl App {
                 let result = self.handle_peer_send(from_pane, &target, body);
                 let _ = reply.send(result);
             }
+            AppCommand::PeerRegisterClient {
+                pane_id,
+                kind,
+                reply,
+            } => {
+                let result = self.handle_peer_register_client(pane_id, kind);
+                let _ = reply.send(result);
+            }
             AppCommand::SetPaneIdentity {
                 target,
                 name,
@@ -3160,6 +3186,12 @@ impl App {
                     name: name_by_id.get(&id).cloned(),
                     role: pane.and_then(|p| p.role.clone()),
                     cwd: pane.map(|p| p.cwd.to_string_lossy().to_string()),
+                    kind: self.peer_client_kinds.get(&id).copied(),
+                    receive_mode: self
+                        .peer_client_kinds
+                        .get(&id)
+                        .copied()
+                        .map(|k| k.receive_mode()),
                 }
             })
             .collect();
@@ -3200,13 +3232,31 @@ impl App {
             .iter()
             .find(|(_, id)| **id == from_pane)
             .map(|(n, _)| n.clone());
+        let from_kind = self.peer_client_kinds.get(&from_pane).copied();
         self.event_bus.emit(ipc::Event::PeerInbox {
             target_pane: target_id,
             from_pane,
             from_name,
+            from_kind,
             body,
             ts_ms: ipc::events::now_ms(),
         });
+        Ok(())
+    }
+
+    fn handle_peer_register_client(
+        &mut self,
+        pane_id: usize,
+        kind: PeerClientKind,
+    ) -> std::result::Result<(), ipc::CodedError> {
+        self.resolve_pane_across_workspaces(&PaneRef::Id(pane_id))
+            .ok_or_else(|| {
+                ipc::CodedError::new(
+                    ipc::err_code::PANE_NOT_FOUND,
+                    format!("pane {pane_id} not found for peer registration"),
+                )
+            })?;
+        self.peer_client_kinds.insert(pane_id, kind);
         Ok(())
     }
 
@@ -3332,6 +3382,12 @@ impl App {
             width: rect.width,
             height: rect.height,
             cwd: Some(pane.cwd.to_string_lossy().to_string()),
+            kind: self.peer_client_kinds.get(&pane_id).copied(),
+            receive_mode: self
+                .peer_client_kinds
+                .get(&pane_id)
+                .copied()
+                .map(|k| k.receive_mode()),
         })
     }
 

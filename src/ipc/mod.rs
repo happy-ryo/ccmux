@@ -169,6 +169,13 @@ pub enum Request {
         target: PaneRef,
         body: String,
     },
+    /// Publish the MCP client kind currently attached to a pane.
+    /// Sent by `renga mcp-peer` after startup so pane/peer listings can
+    /// expose whether the recipient supports push or pull delivery.
+    PeerRegisterClient {
+        pane_id: usize,
+        kind: PeerClientKind,
+    },
     /// Rename or (re)assign the stable `name` / `role` of an existing
     /// pane. Both fields use three-state semantics over the wire:
     ///
@@ -254,6 +261,31 @@ pub enum Direction {
     Horizontal,
 }
 
+/// Peer client type published by a pane's attached MCP subprocess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PeerClientKind {
+    Claude,
+    Codex,
+}
+
+impl PeerClientKind {
+    pub fn receive_mode(self) -> PeerReceiveMode {
+        match self {
+            PeerClientKind::Claude => PeerReceiveMode::Push,
+            PeerClientKind::Codex => PeerReceiveMode::Pull,
+        }
+    }
+}
+
+/// How a peer receives logical renga messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PeerReceiveMode {
+    Push,
+    Pull,
+}
+
 /// One entry in the `PeerList` response payload. Describes a single
 /// Claude-or-shell pane as a peer of the requesting pane. Scoped to
 /// the same workspace as the caller (tab isolation is enforced by the
@@ -270,6 +302,10 @@ pub struct PeerInfo {
     /// asking Claude can tell which repo a sibling pane is in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<PeerClientKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receive_mode: Option<PeerReceiveMode>,
 }
 
 /// One entry in the `List` response payload.
@@ -304,6 +340,10 @@ pub struct PaneInfo {
     /// pane's launch cwd.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<PeerClientKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receive_mode: Option<PeerReceiveMode>,
 }
 
 /// Server reply to one [`Request`].
@@ -528,6 +568,9 @@ pub enum Event {
         /// talking.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from_name: Option<String>,
+        /// Sender's registered peer client kind, if known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_kind: Option<PeerClientKind>,
         body: String,
         ts_ms: u64,
     },
@@ -790,6 +833,8 @@ mod tests {
             width: 0,
             height: 0,
             cwd: None,
+            kind: None,
+            receive_mode: None,
         };
         let s = serde_json::to_string(&info).unwrap();
         assert!(!s.contains("role"), "unexpected role field: {s}");
@@ -807,6 +852,8 @@ mod tests {
             width: 80,
             height: 24,
             cwd: Some("/home/user/project".into()),
+            kind: Some(PeerClientKind::Claude),
+            receive_mode: Some(PeerReceiveMode::Push),
         };
         let parsed: PaneInfo =
             serde_json::from_str(&serde_json::to_string(&info).unwrap()).unwrap();
@@ -825,6 +872,8 @@ mod tests {
             width: 120,
             height: 40,
             cwd: None,
+            kind: None,
+            receive_mode: None,
         };
         let s = serde_json::to_string(&info).unwrap();
         assert!(s.contains("\"x\":3"), "missing x: {s}");
@@ -1072,6 +1121,7 @@ mod tests {
             target_pane: 2,
             from_pane: 1,
             from_name: Some("leader".into()),
+            from_kind: Some(PeerClientKind::Claude),
             body: "ping".into(),
             ts_ms: 42,
         };
@@ -1085,6 +1135,7 @@ mod tests {
             target_pane: 5,
             from_pane: 6,
             from_name: None,
+            from_kind: None,
             body: "no name".into(),
             ts_ms: 1,
         };
