@@ -131,7 +131,7 @@ For alt-screen TUI panes, routing depends on whether the app enabled mouse repor
 
 On Windows with WezTerm / zellij / other third-party terminals, the host IME anchors its candidate window to the cursor, and fast-moving TUIs like Claude Code make that anchor jump around — JP input becomes unusable. (macOS native terminals and Windows Terminal don't reproduce the issue.)
 
-renga paints a **centered, multi-line composition overlay** that floats over the pane area to give the host IME a stable anchor, and commits the confirmed text to the pane via bracketed paste. Long prompts that span multiple lines can be drafted inside the overlay and sent in one shot.
+renga paints a **centered, multi-line composition overlay** that floats over the pane area to give the host IME a stable anchor, and commits the confirmed text to the pane via bracketed paste. Long prompts that span multiple lines can be drafted inside the overlay and sent in one shot. If you temporarily close the overlay to inspect the pane, reopening it on the same pane restores the previous draft.
 
 ![Centered overlay with the host IME candidate window docked inside it](/ime-overlay.png)
 
@@ -142,7 +142,7 @@ renga paints a **centered, multi-line composition overlay** that floats over the
 | `Enter` / `Shift+Enter` | Insert newline |
 | **`Alt+Enter`** | Send (works everywhere, including macOS `Option+Return`) |
 | `Ctrl+Enter` | Send (Windows Terminal / wezterm / VS Code and most Linux terminals) |
-| `Esc` / `Ctrl+C` | Cancel |
+| `Esc` / `Ctrl+C` | Close the overlay and keep the draft for that pane |
 | `←` `→` `↑` `↓` | Navigate |
 | `Home` / `End` | Start / end of current line |
 | `Ctrl+Home` / `Ctrl+End` | Start / end of whole buffer |
