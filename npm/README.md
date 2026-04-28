@@ -31,12 +31,13 @@ renga /path/to/project   # Launch in specified directory
 
 ## Features
 
-- Multi-pane terminal splits (vertical/horizontal)
+- Peer messaging between Claude panes via the built-in `renga-peers` MCP channel
+- Pane-control MCP tools (`spawn_claude_pane`, `set_pane_identity`, `new_tab`, `send_keys`, `inspect_pane`, ...)
+- Centered IME composition overlay for JP / CJK input with pane freeze + draft restore on reopen
+- Multi-pane splits, tab workspaces, and layout TOML
 - File tree sidebar with syntax-highlighted preview
-- Tab workspaces
 - Claude Code auto-detection (pane border turns orange)
 - Mouse support (click, drag resize, text selection)
-- Terminal scrollback (10,000 lines)
 - Cross-platform (Windows, macOS, Linux)
 
 ## Links
