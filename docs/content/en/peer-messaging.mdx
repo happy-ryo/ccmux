@@ -119,6 +119,19 @@ read src/app.rs::handle_split and summarise
 
 B recognises this as a peer request (from the tag source), executes, and replies by calling `send_message` back with `to_id=1`.
 
+The same orchestrator can stay in-band when the sibling pane stops at an interactive prompt:
+
+```
+> call inspect_pane with target="2" and lines=20
+# sees: "Allow this command? [y/N]"
+
+> call send_keys with target="2", text="y", enter=true
+# writes "y<Enter>" into pane 2's PTY
+
+> call poll_events with since="<prior next_since>" and types=["pane_started","pane_exited"]
+# waits for worker births/exits without re-running list_panes every turn
+```
+
 ## Delivery semantics
 
 - **In-memory, tab lifetime.** Inboxes vanish when the renga process exits. Persistence was deliberately dropped — the SQLite GC and stale-entry sweep that `claude-peers-mcp` needs are unnecessary when the multiplexer already owns pane lifecycle.
@@ -137,6 +150,18 @@ The MCP subprocess needs `RENGA_PANE_ID` in its env; that variable propagates PT
 ### Peer messages don't render as `<channel>` tags
 
 You launched Claude Code without `--dangerously-load-development-channels server:renga-peers`. Use `Alt+P` instead of typing `claude` directly — the flag is pre-filled for you.
+
+### `send_keys` seems to do nothing
+
+`send_keys` writes raw bytes to the target pane's PTY. It does not click a UI button or grant approval out-of-band, so if the pane is still streaming, has already exited, or is focused on a different prompt than you assumed, nothing useful will happen.
+
+Snapshot first with `inspect_pane(target=..., lines=20)` and send to a stable pane `name` when the layout is changing. That keeps you from racing pane focus or typing into the wrong worker.
+
+### `poll_events` returns `events: []` earlier than expected
+
+This is usually the `types=[...]` filter doing exactly what it says. A non-matching event can still wake the long-poll; `poll_events` then returns an empty `events` array but advances `next_since` past that event, so it will not be replayed.
+
+Loop with the returned `next_since` cursor. If you ever receive an `events_dropped` event, re-sync once with `list_panes` before continuing so your orchestrator has a fresh picture of the tab.
 
 ### `renga mcp install` fails
 
