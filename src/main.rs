@@ -42,7 +42,7 @@ fn main() -> Result<()> {
     //
     // `mcp-peer` and `mcp {install,uninstall,status}` are exceptions:
     // the first is a stdio MCP server (not an IPC request) and the
-    // second shells out to `claude mcp ...`. Route both directly to
+    // second shells out to a client MCP CLI. Route both directly to
     // their handlers before the shared IPC dispatcher.
     if let Some(cmd) = cli.command.as_ref() {
         match cmd {

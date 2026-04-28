@@ -1,75 +1,73 @@
-//! `renga mcp install / uninstall / status` — thin wrappers around the
-//! `claude` CLI's MCP management commands.
+//! `renga mcp install / uninstall / status` — thin wrappers around
+//! client MCP management commands.
 //!
-//! We intentionally do **not** edit Claude Code's config files
-//! directly. Claude Code stores MCP servers alongside unrelated user
-//! settings and its on-disk schema has moved before; using `claude mcp
-//! add-json` etc. delegates format ownership to Claude Code itself and
-//! keeps us out of the business of tracking its config evolution.
+//! We intentionally do **not** edit Claude Code's or Codex's config
+//! files directly. Both CLIs already own their MCP configuration
+//! formats, so we delegate registration through `claude mcp ...` or
+//! `codex mcp ...` instead of tracking on-disk schema details here.
 //!
-//! The tradeoff is a hard dependency on the `claude` binary being on
-//! PATH. We surface a clear error in that case rather than silently
-//! falling back to file-editing: the user installed renga with MCP
-//! features, so Claude Code being available is a reasonable
-//! expectation to assert.
+//! The tradeoff is a hard dependency on the target client binary being
+//! on PATH. We surface a clear error in that case rather than silently
+//! falling back to file-editing.
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::cli::McpAction;
+use super::ENV_CLIENT_KIND;
+use crate::cli::{McpAction, McpClient};
 
 const SERVER_NAME: &str = "renga-peers";
 
 /// Entry point from `main.rs` for the `renga mcp <action>` subcommand.
 pub fn run(action: &McpAction) -> Result<()> {
     match action {
-        McpAction::Install { force } => install(*force),
-        McpAction::Uninstall => uninstall(),
-        McpAction::Status => status(),
+        McpAction::Install { force, client } => install(*force, *client),
+        McpAction::Uninstall { client } => uninstall(*client),
+        McpAction::Status { client } => status(*client),
     }
 }
 
 // ── install ────────────────────────────────────────────────────
 
-fn install(force: bool) -> Result<()> {
-    ensure_claude_cli_available()?;
+fn install(force: bool, client: McpClient) -> Result<()> {
+    ensure_client_cli_available(client)?;
     let exe = current_renga_exe()?;
 
-    // Validate the exe path can even be registered BEFORE we touch
-    // any existing state. If we did this after `remove_silent()` on
-    // the --force path, a non-UTF-8 path would leave the user with
-    // neither the old registration nor a new one. Refuse early so
-    // the existing entry stays intact when we can't replace it.
+    if let Some(existing) = find_existing_entry(client)? {
+        if !force {
+            println!(
+                "{SERVER_NAME} is already registered in {} → {existing}\n\
+                 Re-run with `renga mcp install --client {client} --force` to overwrite with: {}",
+                client_display_name(client),
+                exe.display()
+            );
+            return Ok(());
+        }
+        remove_silent(client)?;
+    }
+
+    match client {
+        McpClient::Claude => install_claude(&exe)?,
+        McpClient::Codex => install_codex(&exe)?,
+    }
+
+    println!("{}", install_success_message(client, &exe));
+    Ok(())
+}
+
+fn install_claude(exe: &Path) -> Result<()> {
     let exe_str = exe.to_str().ok_or_else(|| {
         anyhow!(
-            "renga binary path is not valid UTF-8 ({}); cannot register as an MCP command. \
-             Move the binary to a UTF-8 path and re-run `renga mcp install`.",
+            "renga binary path is not valid UTF-8 ({}); cannot register as a Claude MCP command. \
+             Move the binary to a UTF-8 path and re-run `renga mcp install --client claude`.",
             exe.display()
         )
     })?;
 
-    if let Some(existing) = find_existing_entry()? {
-        if !force {
-            println!(
-                "renga-peers is already registered → {existing}\n\
-                 Re-run with `renga mcp install --force` to overwrite with: {exe_str}"
-            );
-            return Ok(());
-        }
-        // Force path: drop the old entry first so `add-json` doesn't error
-        // on the name already being taken.
-        remove_silent()?;
-    }
-
-    let payload = serde_json::json!({
-        "type": "stdio",
-        "command": exe_str,
-        "args": ["mcp-peer"],
-    });
-    let payload_str = serde_json::to_string(&payload).context("serialize mcp config payload")?;
-
+    let payload_str = claude_payload(exe_str)?;
     let status = Command::new("claude")
         .args([
             "mcp",
@@ -84,54 +82,97 @@ fn install(force: bool) -> Result<()> {
     if !status.success() {
         bail!("`claude mcp add-json` exited with status {status}");
     }
-
-    println!(
-        "Registered {SERVER_NAME} → {exe_str}\n\
-         Next: launch Claude Code with \
-         `claude --dangerously-load-development-channels server:{SERVER_NAME}` \
-         from inside a renga pane (or press Alt+P in a pane to insert the \
-         same command)."
-    );
     Ok(())
+}
+
+fn install_codex(exe: &Path) -> Result<()> {
+    let status = Command::new("codex")
+        .args(codex_add_args(exe))
+        .status()
+        .context("spawn `codex mcp add`")?;
+    if !status.success() {
+        bail!("`codex mcp add` exited with status {status}");
+    }
+    Ok(())
+}
+
+fn install_success_message(client: McpClient, exe: &Path) -> String {
+    match client {
+        McpClient::Claude => format!(
+            "Registered {SERVER_NAME} in Claude Code → {}\n\
+             Next: launch Claude Code with \
+             `claude --dangerously-load-development-channels server:{SERVER_NAME}` \
+             from inside a renga pane (or press Alt+P in a pane to insert the \
+             same command).",
+            exe.display()
+        ),
+        McpClient::Codex => format!(
+            "Registered {SERVER_NAME} in Codex → {}\n\
+             Next: launch Codex from inside a renga pane. This registration \
+             injects `{ENV_CLIENT_KIND}=codex`, so peer messages are received \
+             through `check_messages` instead of Claude channels.",
+            exe.display()
+        ),
+    }
 }
 
 // ── uninstall ──────────────────────────────────────────────────
 
-fn uninstall() -> Result<()> {
-    ensure_claude_cli_available()?;
-    if find_existing_entry()?.is_none() {
-        println!("{SERVER_NAME} is not registered; nothing to do.");
+fn uninstall(client: McpClient) -> Result<()> {
+    ensure_client_cli_available(client)?;
+    if find_existing_entry(client)?.is_none() {
+        println!(
+            "{SERVER_NAME} is not registered in {}; nothing to do.",
+            client_display_name(client)
+        );
         return Ok(());
     }
-    remove_silent()?;
-    println!("Removed {SERVER_NAME} from Claude Code's MCP config.");
+    remove_silent(client)?;
+    println!(
+        "Removed {SERVER_NAME} from {} MCP config.",
+        client_display_name(client)
+    );
     Ok(())
 }
 
-fn remove_silent() -> Result<()> {
-    let status = Command::new("claude")
-        .args(["mcp", "remove", SERVER_NAME, "--scope", "user"])
-        .status()
-        .context("spawn `claude mcp remove`")?;
+fn remove_silent(client: McpClient) -> Result<()> {
+    let status = match client {
+        McpClient::Claude => Command::new("claude")
+            .args(["mcp", "remove", SERVER_NAME, "--scope", "user"])
+            .status()
+            .context("spawn `claude mcp remove`")?,
+        McpClient::Codex => Command::new("codex")
+            .args(["mcp", "remove", SERVER_NAME])
+            .status()
+            .context("spawn `codex mcp remove`")?,
+    };
     if !status.success() {
-        bail!("`claude mcp remove` exited with status {status}");
+        let cmd = match client {
+            McpClient::Claude => "`claude mcp remove`",
+            McpClient::Codex => "`codex mcp remove`",
+        };
+        bail!("{cmd} exited with status {status}");
     }
     Ok(())
 }
 
 // ── status ─────────────────────────────────────────────────────
 
-fn status() -> Result<()> {
-    ensure_claude_cli_available()?;
-    match find_existing_entry()? {
+fn status(client: McpClient) -> Result<()> {
+    ensure_client_cli_available(client)?;
+    match find_existing_entry(client)? {
         Some(line) => {
-            println!("{SERVER_NAME} is registered:\n  {line}");
+            println!(
+                "{SERVER_NAME} is registered in {}:\n{line}",
+                client_display_name(client)
+            );
             Ok(())
         }
         None => {
             println!(
-                "{SERVER_NAME} is NOT registered.\n\
-                 Run `renga mcp install` to register it."
+                "{SERVER_NAME} is NOT registered in {}.\n\
+                 Run `renga mcp install --client {client}` to register it.",
+                client_display_name(client)
             );
             Ok(())
         }
@@ -140,31 +181,39 @@ fn status() -> Result<()> {
 
 // ── helpers ────────────────────────────────────────────────────
 
-fn ensure_claude_cli_available() -> Result<()> {
-    // `claude --version` exits fast and is non-destructive.
-    let probe = Command::new("claude").arg("--version").output();
+fn ensure_client_cli_available(client: McpClient) -> Result<()> {
+    let binary = client_binary(client);
+    let probe = Command::new(binary).arg("--version").output();
     match probe {
         Ok(out) if out.status.success() => Ok(()),
         Ok(out) => Err(anyhow!(
-            "`claude` is on PATH but `claude --version` failed: {}",
+            "`{binary}` is on PATH but `{binary} --version` failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         )),
         Err(e) => Err(anyhow!(
-            "`claude` CLI not found on PATH ({e}). Install Claude Code first, \
-             or add it to PATH, then re-run `renga mcp install / uninstall / status`."
+            "`{binary}` CLI not found on PATH ({e}). Install {} first, \
+             or add it to PATH, then re-run `renga mcp install / uninstall / status --client {client}`.",
+            client_display_name(client)
         )),
     }
 }
 
 fn current_renga_exe() -> Result<PathBuf> {
     std::env::current_exe()
-        .context("resolve path to the running renga binary (needed for mcp_servers.json)")
+        .context("resolve path to the running renga binary (needed for client MCP registration)")
+}
+
+fn find_existing_entry(client: McpClient) -> Result<Option<String>> {
+    match client {
+        McpClient::Claude => find_existing_claude_entry(),
+        McpClient::Codex => find_existing_codex_entry(),
+    }
 }
 
 /// Run `claude mcp list` and return the line mentioning our server, if
 /// any. `claude mcp list` output is human-readable text, not JSON, so
 /// we grep rather than parse structurally.
-fn find_existing_entry() -> Result<Option<String>> {
+fn find_existing_claude_entry() -> Result<Option<String>> {
     let out = Command::new("claude")
         .args(["mcp", "list"])
         .output()
@@ -182,4 +231,114 @@ fn find_existing_entry() -> Result<Option<String>> {
         }
     }
     Ok(None)
+}
+
+fn find_existing_codex_entry() -> Result<Option<String>> {
+    let out = Command::new("codex")
+        .args(["mcp", "get", SERVER_NAME, "--json"])
+        .output()
+        .context("spawn `codex mcp get`")?;
+    if out.status.success() {
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if stdout.is_empty() {
+            return Ok(Some("<empty codex registration output>".to_string()));
+        }
+        return Ok(Some(stdout));
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if is_codex_missing_entry(&stderr) {
+        return Ok(None);
+    }
+    bail!("`codex mcp get` failed: {stderr}");
+}
+
+fn claude_payload(exe_str: &str) -> Result<String> {
+    serde_json::to_string(&serde_json::json!({
+        "type": "stdio",
+        "command": exe_str,
+        "args": ["mcp-peer"],
+    }))
+    .context("serialize Claude MCP config payload")
+}
+
+fn codex_add_args(exe: &Path) -> Vec<OsString> {
+    vec![
+        OsString::from("mcp"),
+        OsString::from("add"),
+        OsString::from(SERVER_NAME),
+        OsString::from("--env"),
+        OsString::from(format!("{ENV_CLIENT_KIND}=codex")),
+        OsString::from("--"),
+        exe.as_os_str().to_owned(),
+        OsString::from("mcp-peer"),
+    ]
+}
+
+fn is_codex_missing_entry(stderr: &str) -> bool {
+    stderr.contains(&format!("No MCP server named '{SERVER_NAME}' found."))
+}
+
+fn client_binary(client: McpClient) -> &'static str {
+    match client {
+        McpClient::Claude => "claude",
+        McpClient::Codex => "codex",
+    }
+}
+
+fn client_display_name(client: McpClient) -> &'static str {
+    match client {
+        McpClient::Claude => "Claude Code",
+        McpClient::Codex => "Codex",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_payload_uses_stdio_command_shape() {
+        let payload = claude_payload("C:/Program Files/renga/renga.exe").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(
+            parsed,
+            serde_json::json!({
+                "type": "stdio",
+                "command": "C:/Program Files/renga/renga.exe",
+                "args": ["mcp-peer"],
+            })
+        );
+    }
+
+    #[test]
+    fn codex_add_args_includes_pull_client_env() {
+        let args = codex_add_args(Path::new("C:/Program Files/renga/renga.exe"));
+        let rendered: Vec<String> = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "mcp",
+                "add",
+                SERVER_NAME,
+                "--env",
+                "RENGA_PEER_CLIENT_KIND=codex",
+                "--",
+                "C:/Program Files/renga/renga.exe",
+                "mcp-peer",
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_missing_entry_detection_matches_cli_message() {
+        assert!(is_codex_missing_entry(
+            "Error: No MCP server named 'renga-peers' found."
+        ));
+        assert!(!is_codex_missing_entry(
+            "Error: failed to load configuration"
+        ));
+    }
 }

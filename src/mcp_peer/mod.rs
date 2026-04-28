@@ -50,7 +50,7 @@ use crate::ipc::{
 const SERVER_NAME: &str = "renga-peers";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ENV_PANE_ID: &str = "RENGA_PANE_ID";
-const ENV_CLIENT_KIND: &str = "RENGA_PEER_CLIENT_KIND";
+pub(crate) const ENV_CLIENT_KIND: &str = "RENGA_PEER_CLIENT_KIND";
 
 fn log_stderr(msg: &str) {
     eprintln!("[renga-mcp-peer] {msg}");
