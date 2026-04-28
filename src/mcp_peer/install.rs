@@ -10,7 +10,7 @@
 //! on PATH. We surface a clear error in that case rather than silently
 //! falling back to file-editing.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -68,7 +68,7 @@ fn install_claude(exe: &Path) -> Result<()> {
     })?;
 
     let payload_str = claude_payload(exe_str)?;
-    let status = Command::new("claude")
+    let status = client_command(McpClient::Claude)?
         .args([
             "mcp",
             "add-json",
@@ -86,7 +86,7 @@ fn install_claude(exe: &Path) -> Result<()> {
 }
 
 fn install_codex(exe: &Path) -> Result<()> {
-    let status = Command::new("codex")
+    let status = client_command(McpClient::Codex)?
         .args(codex_add_args(exe))
         .status()
         .context("spawn `codex mcp add`")?;
@@ -137,11 +137,11 @@ fn uninstall(client: McpClient) -> Result<()> {
 
 fn remove_silent(client: McpClient) -> Result<()> {
     let status = match client {
-        McpClient::Claude => Command::new("claude")
+        McpClient::Claude => client_command(McpClient::Claude)?
             .args(["mcp", "remove", SERVER_NAME, "--scope", "user"])
             .status()
             .context("spawn `claude mcp remove`")?,
-        McpClient::Codex => Command::new("codex")
+        McpClient::Codex => client_command(McpClient::Codex)?
             .args(["mcp", "remove", SERVER_NAME])
             .status()
             .context("spawn `codex mcp remove`")?,
@@ -183,7 +183,10 @@ fn status(client: McpClient) -> Result<()> {
 
 fn ensure_client_cli_available(client: McpClient) -> Result<()> {
     let binary = client_binary(client);
-    let probe = Command::new(binary).arg("--version").output();
+    let probe = client_command(client).and_then(|mut cmd| {
+        cmd.arg("--version");
+        cmd.output().context("spawn client `--version` probe")
+    });
     match probe {
         Ok(out) if out.status.success() => Ok(()),
         Ok(out) => Err(anyhow!(
@@ -214,7 +217,7 @@ fn find_existing_entry(client: McpClient) -> Result<Option<String>> {
 /// any. `claude mcp list` output is human-readable text, not JSON, so
 /// we grep rather than parse structurally.
 fn find_existing_claude_entry() -> Result<Option<String>> {
-    let out = Command::new("claude")
+    let out = client_command(McpClient::Claude)?
         .args(["mcp", "list"])
         .output()
         .context("spawn `claude mcp list`")?;
@@ -234,7 +237,7 @@ fn find_existing_claude_entry() -> Result<Option<String>> {
 }
 
 fn find_existing_codex_entry() -> Result<Option<String>> {
-    let out = Command::new("codex")
+    let out = client_command(McpClient::Codex)?
         .args(["mcp", "get", SERVER_NAME, "--json"])
         .output()
         .context("spawn `codex mcp get`")?;
@@ -292,6 +295,80 @@ fn client_display_name(client: McpClient) -> &'static str {
     }
 }
 
+fn client_command(client: McpClient) -> Result<Command> {
+    let path = resolve_client_binary(client)?;
+    if cfg!(windows) && is_cmd_script(&path) {
+        let mut cmd = Command::new("cmd");
+        cmd.arg("/C").arg(path);
+        return Ok(cmd);
+    }
+    Ok(Command::new(path))
+}
+
+fn resolve_client_binary(client: McpClient) -> Result<PathBuf> {
+    let binary = client_binary(client);
+    find_binary_on_path(binary).ok_or_else(|| {
+        anyhow!(
+            "`{binary}` CLI not found on PATH (program not found). Install {} first, \
+             or add it to PATH, then re-run `renga mcp install / uninstall / status --client {client}`.",
+            client_display_name(client)
+        )
+    })
+}
+
+fn find_binary_on_path(binary: &str) -> Option<PathBuf> {
+    let binary_path = Path::new(binary);
+    if binary_path.components().count() > 1 || binary_path.is_absolute() {
+        return is_launchable_file(binary_path).then(|| binary_path.to_path_buf());
+    }
+
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        for candidate in candidate_filenames(binary_path.as_os_str()) {
+            let full = dir.join(&candidate);
+            if is_launchable_file(&full) {
+                return Some(full);
+            }
+        }
+    }
+    None
+}
+
+fn candidate_filenames(binary: &OsStr) -> Vec<OsString> {
+    #[cfg(windows)]
+    {
+        let path = Path::new(binary);
+        if path.extension().is_some() {
+            return vec![binary.to_os_string()];
+        }
+
+        let mut names = Vec::with_capacity(5);
+        for ext in [".exe", ".com", ".cmd", ".bat"] {
+            let mut candidate = binary.to_os_string();
+            candidate.push(ext);
+            names.push(candidate);
+        }
+        names.push(binary.to_os_string());
+        names
+    }
+
+    #[cfg(not(windows))]
+    {
+        vec![binary.to_os_string()]
+    }
+}
+
+fn is_launchable_file(path: &Path) -> bool {
+    path.is_file()
+}
+
+fn is_cmd_script(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .map(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat"))
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,5 +417,27 @@ mod tests {
         assert!(!is_codex_missing_entry(
             "Error: failed to load configuration"
         ));
+    }
+
+    #[test]
+    fn candidate_filenames_prioritize_windows_launchable_extensions() {
+        let rendered: Vec<String> = candidate_filenames(OsStr::new("codex"))
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        #[cfg(windows)]
+        assert_eq!(
+            rendered,
+            vec!["codex.exe", "codex.com", "codex.cmd", "codex.bat", "codex",]
+        );
+        #[cfg(not(windows))]
+        assert_eq!(rendered, vec!["codex"]);
+    }
+
+    #[test]
+    fn cmd_script_detection_matches_batch_extensions() {
+        assert!(is_cmd_script(Path::new("C:/Users/example/codex.cmd")));
+        assert!(is_cmd_script(Path::new("C:/Users/example/codex.BAT")));
+        assert!(!is_cmd_script(Path::new("C:/Users/example/codex.exe")));
     }
 }
