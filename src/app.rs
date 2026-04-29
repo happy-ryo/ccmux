@@ -23,8 +23,11 @@ mod workspace_state;
 pub(crate) use self::app_state::CLAUDE_PEER_LAUNCH_CMD;
 pub use self::app_state::{App, AppCommand, AppEvent};
 use self::codex_peer::{
-    codex_prompt_allows_peer_nudge_on_screen, format_codex_peer_message, screen_tail_lines,
     write_input_to_pane, CodexPeerNotificationState, PendingCodexPeerDelivery,
+};
+#[cfg(test)]
+use self::codex_peer::{
+    codex_prompt_allows_peer_nudge_on_screen, format_codex_peer_message, screen_tail_lines,
     PendingCodexPeerMessage,
 };
 pub(crate) use self::keyboard_input::key_event_to_bytes_pub;
@@ -33,8 +36,10 @@ use self::layout_ops::{
     default_command_for_role, dir_name, resolve_optional_cwd, strip_verbatim_prefix,
 };
 pub use self::layout_tree::{LayoutNode, SplitDirection};
+#[cfg(test)]
 use self::pointer_input::{mouse_forward_disabled, pane_local_coords, pane_local_coords_clamped};
 pub use self::selection::{SelectionTarget, TextSelection};
+#[cfg(test)]
 use self::workspace_state::resolve_pane_ref_impl;
 pub use self::workspace_state::{DragTarget, FocusTarget, Workspace};
 use crate::filetree::FileTree;
