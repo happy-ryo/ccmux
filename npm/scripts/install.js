@@ -252,7 +252,7 @@ async function main() {
     console.log(`${BLUE}██║  ██║███████╗██║ ╚████║╚██████╔╝██║  ██║${RESET}`);
     console.log(`${BLUE}╚═╝  ╚═╝╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝${RESET}`);
     console.log('');
-    console.log(`${DIM}  Claude Code Multiplexer v${VERSION}${RESET}`);
+    console.log(`${DIM}  AI-native terminal for agent teams v${VERSION}${RESET}`);
     console.log(`${DIM}  Run 'renga' to start.${RESET}`);
     console.log('');
   } catch (err) {

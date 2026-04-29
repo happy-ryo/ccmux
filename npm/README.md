@@ -1,8 +1,8 @@
 # @suisya-systems/renga
 
-A terminal multiplexer purpose-built for running multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions side-by-side — Claude-aware pane detection, peer messaging between Claude panes via a built-in MCP channel, and an IME-aware composition overlay for JP/CJK input.
+An AI-native terminal for orchestrating multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and Codex agents in one workspace — mixed-client peer messaging, pane orchestration via MCP, and an IME-aware composition overlay for JP/CJK input.
 
-For people running 2+ Claude Code instances in parallel (orchestrator + workers, side-by-side comparisons, etc.). If you only ever run one Claude at a time, the value over a plain terminal is small.
+For people already running 2+ coding agents in parallel. If you only ever run one agent at a time, the value over a plain terminal is small.
 
 ## Install
 
@@ -31,8 +31,8 @@ renga /path/to/project   # Launch in specified directory
 
 ## Features
 
-- Peer messaging between Claude panes via the built-in `renga-peers` MCP channel
-- Pane-control MCP tools (`spawn_claude_pane`, `set_pane_identity`, `new_tab`, `send_keys`, `inspect_pane`, ...)
+- Mixed-client peer messaging between Claude Code and Codex panes via the built-in `renga-peers` MCP channel
+- Pane-control MCP tools (`spawn_claude_pane`, `spawn_codex_pane`, `set_pane_identity`, `new_tab`, `send_keys`, `inspect_pane`, ...)
 - Centered IME composition overlay for JP / CJK input with pane freeze + draft restore on reopen
 - Multi-pane splits, tab workspaces, and layout TOML
 - File tree sidebar with syntax-highlighted preview
@@ -42,12 +42,15 @@ renga /path/to/project   # Launch in specified directory
 
 ## Links
 
+- [Landing Page](https://suisya-systems.github.io/renga/)
+- [Docs](https://suisya-systems.github.io/renga/docs)
 - [GitHub](https://github.com/suisya-systems/renga)
 - [Full README (with peer messaging, IME overlay, keybindings, configuration)](https://github.com/suisya-systems/renga#readme)
+- [claude-org reference stack built on renga](https://github.com/suisya-systems/claude-org)
 
 ## History
 
-renga was originally derived from [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) and has since evolved independently — peer messaging, IME overlay, layout TOML, and the bilingual UX layer are renga-specific. See [`BRANCHING.md`](https://github.com/suisya-systems/renga/blob/main/BRANCHING.md) for the divergence policy.
+renga was originally derived from [Shin-sibainu/ccmux](https://github.com/Shin-sibainu/ccmux) and has since evolved independently — the AI-agent peer network, mixed-client orchestration flow, IME overlay, layout TOML, and the bilingual UX layer are renga-specific. See [`BRANCHING.md`](https://github.com/suisya-systems/renga/blob/main/BRANCHING.md) for the divergence policy.
 
 ## License
 

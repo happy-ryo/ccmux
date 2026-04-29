@@ -3,7 +3,11 @@ use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "renga", version, about = "Claude Code Multiplexer")]
+#[command(
+    name = "renga",
+    version,
+    about = "AI-native terminal for multi-agent coding"
+)]
 pub struct Cli {
     /// Subcommands talk to an already-running renga instance over IPC.
     /// When absent, renga launches as a TUI (using the flags below).

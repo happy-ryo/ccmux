@@ -12,6 +12,15 @@ renga is a terminal where the panes know they are AI agents. Splits, tabs, and f
 
 The target use case is **agent orchestration** — a "secretary" pane dispatching tasks to "worker" panes, sub-agents comparing approaches in parallel, a long-running session reaching out to a sibling for a quick lookup, or a mixed Claude/Codex tab where each client is used for what it is best at. If you only ever run one agent at a time, renga's value over your current terminal is small. If you run several, the peer channel and the AI-aware pane model are the point.
 
+### Standalone or as part of a stack
+
+renga works in two valid modes:
+
+- **Standalone** — use it directly as an AI-native terminal for coordinating multiple Claude Code / Codex panes locally.
+- **As Layer 3 under [`claude-org`](https://github.com/suisya-systems/claude-org)** — use it as the execution fabric beneath a higher-level operating model with Lead / Dispatcher / Curator / Worker roles, per-task working-directory boundaries, narrow permission contracts, knowledge curation, and organization suspend / resume.
+
+That distinction matters for positioning. On its own, renga is a sharp substrate for local multi-agent work. Combined with `claude-org`, it becomes part of a fuller local AgentOps stack. The right mental model is: **renga is the execution fabric; claude-org is the reference operating system built on top of it.**
+
 ### Positioning vs. tmux / zellij
 
 | | tmux / zellij | renga |
