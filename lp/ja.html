@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>renga — Claude Code Multiplexer</title>
+    <title>renga — AI ネイティブなエージェント用ターミナル</title>
     <meta
       name="description"
-      content="Claude Code を複数同時に動かすために作られた、ターミナルマルチプレクサ。Claude pane 同士の peer メッセージング、IME 対応 overlay、単一 Rust バイナリ。"
+      content="Claude Code と Codex を含む複数エージェントを 1 つのワークスペースで協調させる AI ネイティブなターミナル。mixed-client peer messaging、ペインオーケストレーション、IME 対応 overlay、単一 Rust バイナリ。"
     />
     <link rel="alternate" hreflang="en" href="./index.html" />
     <link rel="alternate" hreflang="ja" href="./ja.html" />
@@ -144,6 +144,20 @@
         color: var(--border);
         margin: 0 6px;
       }
+      .stack-note {
+        margin: 0 0 28px;
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(217, 119, 87, 0.08);
+      }
+      .stack-note strong {
+        color: var(--fg);
+      }
+      .stack-note p {
+        margin: 0;
+        font-size: 0.92rem;
+      }
       /* 狭いビューポート用: diff テーブルの「印」列が rem 固定幅
          なので、150 % root ではスマホ画面で feature 列を圧迫する。
          640 px 以下でテーブル本体の font-size と印列の幅を控えめ
@@ -166,11 +180,24 @@
       <h1>renga</h1>
       <p class="tagline">
         <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a>
-        を複数同時に動かすために作られた、ターミナルマルチプレクサ。
-        ペイン同士を MCP チャネルで繋ぐ peer メッセージング、
-        日本語 / CJK 入力に対応した IME composition overlay、単一 Rust バイナリ。
-        Claude Code を 2 つ以上並列で回す開発者向けの道具です。
+        と Codex を含む複数のコーディングエージェントを 1 つの
+        ワークスペースで協調させる、AI ネイティブなターミナル。
+        mixed-client peer messaging、MCP によるペイン
+        オーケストレーション、日本語 / CJK 入力に対応した IME
+        composition overlay、単一 Rust バイナリ。すでに 2 つ以上の
+        コーディングエージェントを並列運用している開発者向けです。
       </p>
+      <div class="stack-note">
+        <p>
+          <strong>単体でも使えますが、参照スタックの Layer 3 にもなります。</strong>
+          renga は単体で AI ネイティブなターミナルとして使える一方、
+          <a href="https://github.com/suisya-systems/claude-org">claude-org</a>
+          の下では Layer 3 の execution fabric として機能します。
+          そこでは Lead / Dispatcher / Curator / Worker の役割分担、
+          タスクごとのディレクトリ境界、組織全体の suspend / resume
+          を持つ、より厳密な運用モデルを支えます。
+        </p>
+      </div>
 
       <figure class="hero">
         <img
@@ -190,7 +217,13 @@
       <p>
         renga はもともと
         <a href="https://github.com/Shin-sibainu/ccmux">Shin-sibainu/ccmux</a>
-        から派生したプロジェクトですが、現在は独立した本流として開発しています。peer メッセージング、IME overlay、layout TOML、日英バイリンガル UX などはすべて renga 側で書き足したものです。
+        から派生したプロジェクトですが、現在は独立した本流として開発しています。AI エージェント向け peer network、mixed-client オーケストレーション、IME overlay、layout TOML、日英バイリンガル UX などはすべて renga 側で書き足したものです。
+      </p>
+
+      <p>
+        スタック全体をひとことで言うなら、
+        <strong>renga が execution fabric、claude-org がその上の reference operating system</strong>
+        です。
       </p>
 
       <pre><code>$ npm install -g @suisya-systems/renga</code></pre>
@@ -284,10 +317,9 @@ $ npm install -g @suisya-systems/renga</code></pre>
         <tbody>
           <tr>
             <td>
-              同じタブに並べた Claude Code 同士のメッセージング
+              同じタブに並べた Claude Code / Codex 間の mixed-client メッセージング
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                <code>renga mcp install</code> で MCP サーバを登録すると、同じタブにいる Claude Code 同士が <code>list_peers</code> で相手を見つけて <code>send_message</code> でメッセージを送り合えるようになる。届いたメッセージは受信側に <code>&lt;channel source="renga-peers"&gt;</code> タグで入るので、ユーザー入力とは区別して扱える。
-                <code>Alt+P</code> で起動コマンドを入力行に挿入。
+                <code>renga mcp install --client ...</code> で Claude Code と Codex に MCP サーバを登録できる。Claude 側は push 型の <code>&lt;channel source="renga-peers"&gt;</code> で受け取り、Codex 側は pane-local nudge を受けて <code>check_messages</code> で本文を読む。peer のスコープは cwd 推定ではなく renga タブそのもの。
               </span>
             </td>
             <td class="mark">—</td>
@@ -295,9 +327,9 @@ $ npm install -g @suisya-systems/renga</code></pre>
           </tr>
           <tr>
             <td>
-              Claude Code から MCP 経由でペイン操作 + オーケストレーション
+              エージェント会話の中から MCP 経由でペイン操作 + オーケストレーション
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                同じ <code>renga mcp install</code> で <code>list_panes</code> / <code>spawn_pane</code> / <code>spawn_claude_pane</code> / <code>close_pane</code> / <code>focus_pane</code> / <code>new_tab</code> / <code>inspect_pane</code> / <code>send_keys</code> / <code>set_pane_identity</code> / <code>poll_events</code> が使えるようになり、Claude が会話から離れずにペイン分割・相方 Claude の起動・別ペイン画面の確認・対話プロンプトへの応答・ワーカー名付け・ペイン寿命監視まで自分でできる。<code>command="claude"</code> を渡せば <code>Alt+P</code> と同じメッセージング対応の起動コマンドに自動書き換えするので、新しく立ち上げた Claude も peer ネットワークに最初から繋がる。
+                同じ MCP 面で <code>list_panes</code> / <code>spawn_pane</code> / <code>spawn_claude_pane</code> / <code>spawn_codex_pane</code> / <code>close_pane</code> / <code>focus_pane</code> / <code>new_tab</code> / <code>inspect_pane</code> / <code>send_keys</code> / <code>set_pane_identity</code> / <code>poll_events</code> が使える。これによりオーケストレーター役の agent が、会話から離れずにワーカー起動、別ペイン画面の確認、対話プロンプト応答、ワーカー名付け、寿命監視まで進められる。
               </span>
             </td>
             <td class="mark">—</td>

@@ -1,7 +1,7 @@
 {
   "name": "@suisya-systems/renga",
-  "version": "0.18.4",
-  "description": "Claude Code Multiplexer (fork, formerly ccmux-fork) — manage multiple Claude Code instances in TUI split panes",
+  "version": "0.18.5",
+  "description": "AI-native terminal for orchestrating multiple Claude Code and Codex agents in one workspace",
   "bin": {
     "renga": "bin/cli.js"
   },
@@ -9,10 +9,16 @@
     "postinstall": "node scripts/install.js"
   },
   "keywords": [
+    "ai",
+    "agent",
+    "agent-orchestration",
     "claude",
     "claude-code",
+    "codex",
+    "mcp",
     "terminal",
     "multiplexer",
+    "terminal-multiplexer",
     "tui",
     "pane",
     "split",
@@ -27,7 +33,10 @@
     "type": "git",
     "url": "https://github.com/suisya-systems/renga"
   },
-  "homepage": "https://github.com/suisya-systems/renga",
+  "bugs": {
+    "url": "https://github.com/suisya-systems/renga/issues"
+  },
+  "homepage": "https://suisya-systems.github.io/renga/",
   "os": [
     "win32",
     "darwin",

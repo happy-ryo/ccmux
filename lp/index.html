@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>renga — Claude Code Multiplexer</title>
+    <title>renga — AI-Native Terminal for Agent Teams</title>
     <meta
       name="description"
-      content="A terminal multiplexer purpose-built for running multiple Claude Code instances side-by-side. Peer messaging between Claude panes, IME-aware composition overlay, single Rust binary."
+      content="An AI-native terminal for orchestrating multiple Claude Code and Codex agents in one workspace. Mixed-client peer messaging, pane orchestration, IME-aware composition overlay, single Rust binary."
     />
     <link rel="alternate" hreflang="en" href="./index.html" />
     <link rel="alternate" hreflang="ja" href="./ja.html" />
@@ -146,6 +146,20 @@
         color: var(--border);
         margin: 0 6px;
       }
+      .stack-note {
+        margin: 0 0 28px;
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(217, 119, 87, 0.08);
+      }
+      .stack-note strong {
+        color: var(--fg);
+      }
+      .stack-note p {
+        margin: 0;
+        font-size: 0.92rem;
+      }
       /* Narrow viewports: the diff table's "mark" columns use a
          fixed rem width, so at 150 % root they crowd the feature
          column on phones. Dial the table's own font-size and the
@@ -169,13 +183,24 @@
       </nav>
       <h1>renga</h1>
       <p class="tagline">
-        A terminal multiplexer purpose-built for running multiple
+        An AI-native terminal for orchestrating multiple
         <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a>
-        sessions side-by-side. Peer messaging between Claude panes via a
-        built-in MCP channel, an IME-aware composition overlay for JP/CJK
-        input, and a single Rust binary. Aimed at developers running 2+
-        Claude Code instances in parallel.
+        and Codex agents in one workspace. Mixed-client peer messaging,
+        pane orchestration via MCP, an IME-aware composition overlay for
+        JP/CJK input, and a single Rust binary. Built for developers who
+        already work with 2+ coding agents in parallel.
       </p>
+      <div class="stack-note">
+        <p>
+          <strong>Use it standalone or under a reference stack.</strong>
+          renga works on its own as an AI-native terminal, and it also
+          serves as Layer 3 beneath
+          <a href="https://github.com/suisya-systems/claude-org">claude-org</a>,
+          where it becomes the execution fabric for a stricter operating
+          model with Lead / Dispatcher / Curator / Worker roles,
+          per-task directory boundaries, and organization suspend / resume.
+        </p>
+      </div>
 
       <figure class="hero">
         <img
@@ -197,8 +222,14 @@
       <p>
         renga was originally derived from
         <a href="https://github.com/Shin-sibainu/ccmux">Shin-sibainu/ccmux</a>
-        and is now developed independently — peer messaging, the IME overlay,
-        layout TOMLs, and the bilingual UX layer are all renga-specific work.
+        and is now developed independently. The AI-agent peer network,
+        mixed-client orchestration flow, IME overlay, layout TOMLs, and
+        bilingual UX layer are all renga-specific work.
+      </p>
+
+      <p>
+        The simple way to frame the stack is:
+        <strong>renga is the execution fabric; claude-org is the reference operating system built on top of it.</strong>
       </p>
 
       <pre><code>$ npm install -g @suisya-systems/renga</code></pre>
@@ -298,10 +329,9 @@ $ npm install -g @suisya-systems/renga</code></pre>
         <tbody>
           <tr>
             <td>
-              Peer messaging between Claude Code panes in the same tab
+              Mixed-client peer messaging between Claude Code and Codex panes in the same tab
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                <code>renga mcp install</code> registers a stdio MCP server; same-tab Claude Code instances discover each other via <code>list_peers</code> and exchange messages via <code>send_message</code>. Peer messages arrive as <code>&lt;channel source="renga-peers"&gt;</code> tags, distinct from user input.
-                <code>Alt+P</code> inserts the peer-enabled launch command into the focused pane.
+                <code>renga mcp install --client ...</code> registers the MCP server for Claude Code and Codex. Claude peers receive push-style <code>&lt;channel source="renga-peers"&gt;</code> messages; Codex peers get pane-local nudges and read the queued body with <code>check_messages</code>. The peer scope is the renga tab itself, not a guessed cwd / PID heuristic.
               </span>
             </td>
             <td class="mark">—</td>
@@ -309,9 +339,9 @@ $ npm install -g @suisya-systems/renga</code></pre>
           </tr>
           <tr>
             <td>
-              MCP pane control + orchestration from inside Claude Code
+              MCP pane control + orchestration from inside agent conversations
               <br /><span style="color: var(--muted); font-size: 0.85em;">
-                Same <code>renga mcp install</code> exposes <code>list_panes</code>, <code>spawn_pane</code>, <code>spawn_claude_pane</code>, <code>close_pane</code>, <code>focus_pane</code>, <code>new_tab</code>, <code>inspect_pane</code>, <code>send_keys</code>, <code>set_pane_identity</code>, and <code>poll_events</code> so a Claude instance can split the layout, launch a sibling Claude, inspect another pane's screen, answer an interactive prompt, rename workers, and watch pane lifecycle changes — without the user leaving the conversation. A bare <code>command="claude"</code> is auto-upgraded to the <code>Alt+P</code> peer-enabled launch, so new Claude panes join the peer network automatically.
+                The same MCP surface exposes <code>list_panes</code>, <code>spawn_pane</code>, <code>spawn_claude_pane</code>, <code>spawn_codex_pane</code>, <code>close_pane</code>, <code>focus_pane</code>, <code>new_tab</code>, <code>inspect_pane</code>, <code>send_keys</code>, <code>set_pane_identity</code>, and <code>poll_events</code> so an orchestrator agent can grow the team, inspect another pane's screen, answer an interactive prompt, rename workers, and track lifecycle changes without dropping to manual shell glue.
               </span>
             </td>
             <td class="mark">—</td>

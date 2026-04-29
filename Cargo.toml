@@ -103,9 +103,15 @@ name = "renga"
 # buffer instead of discarding it, reopening restores the previous
 # draft on that pane, and commit / pane teardown clear the saved
 # draft. Patch bump because this is a bug fix on top of 0.18.3.
-version = "0.18.4"
+# 0.18.5 refreshes the public-facing positioning copy across README,
+# landing page, docs metadata, npm package metadata, and installer /
+# CLI strings so the project is presented consistently as an
+# AI-native terminal for multi-agent coding rather than only as a
+# Claude-only multiplexer. Patch bump because this is packaging /
+# messaging work, not a behavior change in the binary itself.
+version = "0.18.5"
 edition = "2021"
-description = "Claude Code Multiplexer — manage multiple Claude Code instances in TUI panes"
+description = "AI-native terminal for orchestrating multiple Claude Code and Codex agents in one workspace"
 
 [dependencies]
 ratatui = "0.30"

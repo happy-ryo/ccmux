@@ -7,19 +7,19 @@ import './globals.css'
 const siteUrl = 'https://suisya-systems.github.io/renga/docs'
 
 export const metadata = {
-  title: 'renga — Claude Code Multiplexer',
-  description: 'A terminal multiplexer purpose-built for running multiple Claude Code instances side-by-side. Peer messaging between Claude panes, IME-aware composition overlay, single Rust binary.',
+  title: 'renga — AI-Native Terminal for Agent Teams',
+  description: 'An AI-native terminal for orchestrating multiple Claude Code and Codex agents in one workspace. Mixed-client peer messaging, pane orchestration, IME-aware composition overlay, single Rust binary.',
   openGraph: {
-    title: 'renga — Claude Code Multiplexer',
-    description: 'Run multiple Claude Code sessions side-by-side. Peer messaging between Claude panes, IME-aware overlay, file tree, syntax-highlighted preview. Single Rust binary.',
+    title: 'renga — AI-Native Terminal for Agent Teams',
+    description: 'Run Claude Code and Codex side by side with mixed-client peer messaging, pane orchestration, an IME-aware overlay, file tree, and syntax-highlighted preview.',
     url: siteUrl,
     siteName: 'renga',
     type: 'website',
   },
   twitter: {
     card: 'summary',
-    title: 'renga — Claude Code Multiplexer',
-    description: 'Run multiple Claude Code sessions side-by-side with peer messaging and an IME-aware overlay.',
+    title: 'renga — AI-Native Terminal for Agent Teams',
+    description: 'Run Claude Code and Codex side by side with mixed-client peer messaging and an IME-aware overlay.',
   },
 }
 
