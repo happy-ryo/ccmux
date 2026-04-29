@@ -518,6 +518,7 @@ fn flush_paste_buffer(app: &mut app::App, buffer: &mut Vec<u8>) -> Result<()> {
     let focused_id = app.ws().focused_pane_id;
     if let Some(pane) = app.ws_mut().panes.get_mut(&focused_id) {
         pane.scroll_reset();
+        pane.clear_codex_transcript_overlay_hint();
         if buffer.len() > 6 {
             if pane.is_bracketed_paste_enabled() {
                 let mut data = Vec::with_capacity(buffer.len() + 12);
@@ -536,4 +537,37 @@ fn flush_paste_buffer(app: &mut app::App, buffer: &mut Vec<u8>) -> Result<()> {
     }
     buffer.clear();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::flush_paste_buffer;
+    use crate::app::App;
+
+    #[test]
+    fn flush_paste_buffer_clears_codex_transcript_overlay_hint() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let focused_id = app.ws().focused_pane_id;
+        let pane = app
+            .ws_mut()
+            .panes
+            .get_mut(&focused_id)
+            .expect("focused pane exists");
+        pane.set_codex_transcript_overlay_hint_for_test(true);
+
+        let mut buffer = b"x".to_vec();
+        flush_paste_buffer(&mut app, &mut buffer).expect("flush succeeds");
+
+        let pane = app
+            .ws()
+            .panes
+            .get(&focused_id)
+            .expect("focused pane exists");
+        assert!(
+            !pane.codex_transcript_overlay_hint_for_test(),
+            "typing/paste flush must clear transcript fallback state"
+        );
+        assert!(buffer.is_empty(), "flush should consume the buffered input");
+        app.shutdown();
+    }
 }
