@@ -448,9 +448,7 @@ impl Pane {
             screen.mouse_protocol_encoding(),
             codex_hint,
         );
-        let Some((mode, encoding)) = mouse else {
-            return None;
-        };
+        let (mode, encoding) = mouse?;
 
         let allowed = mouse_action_allowed(mode, action);
 
