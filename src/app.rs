@@ -1362,11 +1362,19 @@ impl App {
                     return Ok(true);
                 }
 
-                let snapshot = self
-                    .ws()
-                    .panes
-                    .get(&focused_id)
-                    .and_then(crate::input::overlay::snapshot_visible_input);
+                // Visible-input bootstrap is Claude-specific. Codex
+                // panes use a different composer layout, and trying to
+                // "steal" their draft into the IME overlay corrupts the
+                // handoff instead of preserving it.
+                let snapshot = (!self
+                    .pane_expects_codex_peer_delivery(self.active_tab, focused_id))
+                .then(|| {
+                    self.ws()
+                        .panes
+                        .get(&focused_id)
+                        .and_then(crate::input::overlay::snapshot_visible_input)
+                })
+                .flatten();
 
                 if snapshot.as_ref().is_some_and(|snapshot| {
                     crate::input::overlay::visible_input_contains_claude_paste_placeholder(
@@ -4683,6 +4691,56 @@ mod tests {
         assert!(
             overlay.buffer.is_empty(),
             "paste-placeholder prompts should fall back to the legacy empty overlay"
+        );
+        assert_eq!(overlay.cursor, 0);
+    }
+
+    #[test]
+    fn hotkey_mode_bootstraps_visible_claude_input_into_overlay() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+        let pane = app
+            .ws_mut()
+            .panes
+            .get_mut(&pane_id)
+            .expect("focused pane exists");
+        let mut parser = pane.parser.lock().unwrap_or_else(|e| e.into_inner());
+        parser.process(b"\x1b[2J\x1b[H> draft text\x1b[1;12H");
+        drop(parser);
+
+        let open = KeyEvent::new(KeyCode::Char(';'), KeyModifiers::CONTROL);
+        let consumed = app.handle_key_event(open).expect("open overlay");
+
+        assert!(consumed);
+        let overlay = app.overlay.as_ref().expect("overlay opened");
+        assert_eq!(overlay.target_pane, pane_id);
+        assert_eq!(overlay.buffer, "draft text");
+        assert_eq!(overlay.cursor, "draft text".chars().count());
+    }
+
+    #[test]
+    fn hotkey_mode_skips_visible_input_bootstrap_for_codex_peer() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+        app.peer_client_kinds.insert(pane_id, PeerClientKind::Codex);
+        let pane = app
+            .ws_mut()
+            .panes
+            .get_mut(&pane_id)
+            .expect("focused pane exists");
+        let mut parser = pane.parser.lock().unwrap_or_else(|e| e.into_inner());
+        parser.process(b"\x1b[2J\x1b[H\xE2\x80\xBA typed draft\x1b[1;14H");
+        drop(parser);
+
+        let open = KeyEvent::new(KeyCode::Char(';'), KeyModifiers::CONTROL);
+        let consumed = app.handle_key_event(open).expect("open overlay");
+
+        assert!(consumed);
+        let overlay = app.overlay.as_ref().expect("overlay opened");
+        assert_eq!(overlay.target_pane, pane_id);
+        assert!(
+            overlay.buffer.is_empty(),
+            "Codex peer panes should not copy the visible composer into the IME overlay"
         );
         assert_eq!(overlay.cursor, 0);
     }
