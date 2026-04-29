@@ -2990,14 +2990,14 @@ impl App {
             // Pane content area starts one cell inside the border.
             let local_col = col.saturating_sub(rect.x).saturating_sub(1);
             let local_row = row.saturating_sub(rect.y).saturating_sub(1);
+            let codex_hint = self.pane_expects_codex_peer_delivery(self.active_tab, pane_id);
 
             let bytes = if disable_forward {
                 None
             } else {
-                self.ws()
-                    .panes
-                    .get(&pane_id)
-                    .and_then(|p| p.wheel_forward_bytes(scroll_down, local_col, local_row))
+                self.ws().panes.get(&pane_id).and_then(|p| {
+                    p.wheel_forward_bytes(codex_hint, scroll_down, local_col, local_row)
+                })
             };
 
             if let Some(data) = bytes {
@@ -3042,7 +3042,13 @@ impl App {
             None => return false,
         };
         let bytes = self.ws().panes.get(&pane_id).and_then(|p| {
-            p.click_forward_bytes(button, PointerAction::Press, local_col, local_row)
+            p.click_forward_bytes(
+                self.pane_expects_codex_peer_delivery(self.active_tab, pane_id),
+                button,
+                PointerAction::Press,
+                local_col,
+                local_row,
+            )
         });
         let Some(data) = bytes else {
             return false;
@@ -3078,7 +3084,15 @@ impl App {
             .workspaces
             .get(ws_idx)
             .and_then(|ws| ws.panes.get(&pane_id))
-            .and_then(|p| p.click_forward_bytes(button, action, local_col, local_row));
+            .and_then(|p| {
+                p.click_forward_bytes(
+                    self.pane_expects_codex_peer_delivery(ws_idx, pane_id),
+                    button,
+                    action,
+                    local_col,
+                    local_row,
+                )
+            });
         let Some(data) = bytes else {
             return;
         };
@@ -3107,6 +3121,7 @@ impl App {
         let focused_id = self.ws().focused_pane_id;
         if let Some(pane) = self.ws_mut().panes.get_mut(&focused_id) {
             pane.scroll_reset();
+            pane.clear_codex_transcript_overlay_hint();
             if pane.is_bracketed_paste_enabled() {
                 let mut data = Vec::with_capacity(text.len() + 12);
                 data.extend_from_slice(b"\x1b[200~");
@@ -3125,6 +3140,7 @@ impl App {
         let focused_id = self.ws().focused_pane_id;
         if let Some(pane) = self.ws_mut().panes.get_mut(&focused_id) {
             pane.scroll_reset();
+            pane.clear_codex_transcript_overlay_hint();
             if let Some(bytes) = key_event_to_bytes(&key) {
                 pane.write_input(&bytes)?;
             }
@@ -5736,6 +5752,89 @@ mod tests {
                 .map(|q| q.len()),
             Some(1),
             "multiple queued inbox messages should share a single pane-local nudge"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn pane_expects_codex_peer_delivery_accepts_registered_codex_without_title() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+        if let Some(pane) = app.ws_mut().panes.get_mut(&pane_id) {
+            *pane.title.lock().unwrap() = String::new();
+        }
+        assert!(
+            !app.pane_expects_codex_peer_delivery(app.active_tab, pane_id),
+            "blank title with no registration should not look like Codex"
+        );
+
+        app.peer_client_kinds.insert(pane_id, PeerClientKind::Codex);
+        assert!(
+            app.pane_expects_codex_peer_delivery(app.active_tab, pane_id),
+            "registered Codex peer must count even when OSC title detection never fired"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn pane_expects_codex_peer_delivery_accepts_pending_codex_startup() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+        if let Some(pane) = app.ws_mut().panes.get_mut(&pane_id) {
+            *pane.title.lock().unwrap() = String::new();
+            pane.pending_startup = Some(b"codex --model gpt-5\n".to_vec());
+        }
+
+        assert!(
+            app.pane_expects_codex_peer_delivery(app.active_tab, pane_id),
+            "queued codex startup should count before MCP registration lands"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn forward_key_to_pty_clears_codex_transcript_overlay_hint() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+        app.ws_mut()
+            .panes
+            .get_mut(&pane_id)
+            .expect("focused pane exists")
+            .set_codex_transcript_overlay_hint_for_test(true);
+
+        app.forward_key_to_pty(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))
+            .expect("forward key");
+
+        assert!(
+            !app.ws()
+                .panes
+                .get(&pane_id)
+                .expect("focused pane exists")
+                .codex_transcript_overlay_hint_for_test(),
+            "direct PTY key forwarding must clear transcript fallback state"
+        );
+        app.shutdown();
+    }
+
+    #[test]
+    fn forward_paste_to_pty_clears_codex_transcript_overlay_hint() {
+        let mut app = App::new(40, 80).expect("App::new");
+        let pane_id = app.ws().focused_pane_id;
+        app.ws_mut()
+            .panes
+            .get_mut(&pane_id)
+            .expect("focused pane exists")
+            .set_codex_transcript_overlay_hint_for_test(true);
+
+        app.forward_paste_to_pty("hello").expect("forward paste");
+
+        assert!(
+            !app.ws()
+                .panes
+                .get(&pane_id)
+                .expect("focused pane exists")
+                .codex_transcript_overlay_hint_for_test(),
+            "direct PTY paste forwarding must clear transcript fallback state"
         );
         app.shutdown();
     }

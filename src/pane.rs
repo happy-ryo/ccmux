@@ -4,11 +4,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
 use crate::app::AppEvent;
+
+const MOUSE_PROTOCOL_CACHE_TTL: Duration = Duration::from_secs(2);
+
+#[derive(Copy, Clone)]
+struct CachedMouseProtocol {
+    mode: vt100::MouseProtocolMode,
+    encoding: vt100::MouseProtocolEncoding,
+    seen_at: Instant,
+}
 
 /// A terminal pane wrapping a PTY and vt100 parser.
 pub struct Pane {
@@ -47,6 +57,22 @@ pub struct Pane {
     /// etc.). Sticky: only refreshed by detection, never expired
     /// or auto-cleared. Default `None` until the first detection.
     pub claude_caret_cache: Mutex<Option<(u16, u16)>>,
+    /// Cache the last non-`None` mouse reporting mode we actually saw
+    /// from the child PTY. Codex appears to transiently redraw without
+    /// the live vt100 state always surfacing the mode on every frame,
+    /// so mouse forwarding reuses this cache for a short TTL rather
+    /// than guessing a protocol from scratch.
+    mouse_protocol_cache: Arc<Mutex<Option<CachedMouseProtocol>>>,
+    /// DECSET 1007 ("alternate scroll mode") is not tracked by vt100
+    /// 0.16, but terminals still use it to map wheel events to
+    /// Up/Down arrow keys even on the main screen. Track the latest
+    /// value from the raw PTY stream so Codex can get the same
+    /// fallback behavior it gets outside renga.
+    alternate_scroll_mode: Arc<AtomicBool>,
+    /// Best-effort local latch for Codex's transcript overlay
+    /// (`Ctrl+T`). Wheel fallback opens it once, then keeps using
+    /// transcript navigation keys until normal typing resumes.
+    codex_transcript_overlay_hint: Arc<AtomicBool>,
     /// Free-form label for tools/humans. Unlike the name (registered in
     /// `Workspace.pane_names` as the unique IPC key), `role` may repeat
     /// and may be absent. Surfaced via `renga list`.
@@ -135,6 +161,11 @@ impl Pane {
         let prompt_seen_clone = Arc::clone(&prompt_seen);
         let claude_seen = Arc::new(AtomicBool::new(false));
         let claude_seen_clone = Arc::clone(&claude_seen);
+        let mouse_protocol_cache = Arc::new(Mutex::new(None));
+        let mouse_protocol_cache_clone = Arc::clone(&mouse_protocol_cache);
+        let alternate_scroll_mode = Arc::new(AtomicBool::new(false));
+        let alternate_scroll_mode_clone = Arc::clone(&alternate_scroll_mode);
+        let codex_transcript_overlay_hint = Arc::new(AtomicBool::new(false));
         let reader_handle = thread::spawn(move || {
             pty_reader_thread(
                 reader,
@@ -143,6 +174,8 @@ impl Pane {
                 scrollback_clone,
                 prompt_seen_clone,
                 claude_seen_clone,
+                mouse_protocol_cache_clone,
+                alternate_scroll_mode_clone,
                 id,
                 event_tx,
             );
@@ -165,6 +198,9 @@ impl Pane {
             prompt_seen,
             claude_seen,
             claude_caret_cache: Mutex::new(None),
+            mouse_protocol_cache,
+            alternate_scroll_mode,
+            codex_transcript_overlay_hint,
             role: None,
             exit_event_emitted: false,
         };
@@ -304,6 +340,7 @@ impl Pane {
     ///   `scroll_down` and walks the vt100 scrollback.
     pub fn wheel_forward_bytes(
         &self,
+        codex_hint: bool,
         scroll_down: bool,
         local_col: u16,
         local_row: u16,
@@ -311,8 +348,13 @@ impl Pane {
         let parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
         let screen = parser.screen();
         let alt = screen.alternate_screen();
-        let mode = screen.mouse_protocol_mode();
-        let encoding = screen.mouse_protocol_encoding();
+        let scrollback = screen.scrollback();
+        let is_codex = codex_hint || self.is_codex_running();
+        let mouse = self.effective_mouse_protocol(
+            screen.mouse_protocol_mode(),
+            screen.mouse_protocol_encoding(),
+            codex_hint,
+        );
 
         // Decision order matters: an app that enabled mouse reporting
         // expects the wheel even if it hasn't entered the alt screen.
@@ -324,27 +366,45 @@ impl Pane {
         // - mouse reporting on  → encode wheel report in the app's
         //   chosen protocol (works for both in-place TUIs like Claude
         //   /tui and classic alt-screen TUIs like vim).
+        // - Codex with a recently-observed mouse mode but a transient
+        //   live `None` state → reuse that cached mode for a short TTL
+        //   (same "sticky for UI stability" idea as Claude's caret
+        //   tracking, but bounded so an intentional mouse-off toggle
+        //   still wins quickly).
         // - mouse reporting off + alt screen → xterm-style arrow
         //   fallback so `less` and friends still move their cursor.
+        // - Codex on the main screen with zero host scrollback →
+        //   transcript-overlay fallback. First wheel opens the
+        //   transcript (`Ctrl+T`), later wheels use overlay-native
+        //   arrow scrolling until normal typing resumes.
         // - mouse reporting off + normal screen → None, let the caller
         //   scroll vt100 scrollback (normal shell history).
-        match mode {
-            vt100::MouseProtocolMode::None => {
-                if alt {
-                    Some(if scroll_down {
-                        b"\x1b[B".to_vec()
-                    } else {
-                        b"\x1b[A".to_vec()
-                    })
-                } else {
-                    None
-                }
-            }
-            _ => {
+        match mouse {
+            Some((_, encoding)) => {
                 let button: u8 = if scroll_down { 65 } else { 64 };
                 Some(encode_mouse_wheel_report(
                     button, local_col, local_row, encoding,
                 ))
+            }
+            None => {
+                if should_use_arrow_wheel_fallback(
+                    alt || self.alternate_scroll_mode.load(Ordering::Relaxed),
+                    is_codex,
+                ) {
+                    Some(encode_arrow_wheel_fallback(scroll_down))
+                } else if should_use_codex_main_screen_wheel_fallback(
+                    is_codex,
+                    alt,
+                    self.alternate_scroll_mode.load(Ordering::Relaxed),
+                    scrollback,
+                ) {
+                    Some(encode_codex_transcript_wheel_fallback(
+                        scroll_down,
+                        self.mark_codex_transcript_overlay_hint(),
+                    ))
+                } else {
+                    None
+                }
             }
         }
     }
@@ -375,6 +435,7 @@ impl Pane {
     ///   different path that we haven't wired yet.
     pub fn click_forward_bytes(
         &self,
+        codex_hint: bool,
         button: PointerButton,
         action: PointerAction,
         local_col: u16,
@@ -382,18 +443,14 @@ impl Pane {
     ) -> Option<Vec<u8>> {
         let parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
         let screen = parser.screen();
-        let mode = screen.mouse_protocol_mode();
-        let encoding = screen.mouse_protocol_encoding();
+        let mouse = self.effective_mouse_protocol(
+            screen.mouse_protocol_mode(),
+            screen.mouse_protocol_encoding(),
+            codex_hint,
+        );
+        let (mode, encoding) = mouse?;
 
-        let allowed = match (mode, action) {
-            (vt100::MouseProtocolMode::None, _) => false,
-            (vt100::MouseProtocolMode::Press, PointerAction::Press) => true,
-            (vt100::MouseProtocolMode::Press, _) => false,
-            (vt100::MouseProtocolMode::PressRelease, PointerAction::Drag) => false,
-            (vt100::MouseProtocolMode::PressRelease, _) => true,
-            (vt100::MouseProtocolMode::ButtonMotion, _) => true,
-            (vt100::MouseProtocolMode::AnyMotion, _) => true,
-        };
+        let allowed = mouse_action_allowed(mode, action);
 
         if !allowed {
             return None;
@@ -429,6 +486,53 @@ impl Pane {
         } else {
             false
         }
+    }
+
+    fn effective_mouse_protocol(
+        &self,
+        mode: vt100::MouseProtocolMode,
+        encoding: vt100::MouseProtocolEncoding,
+        codex_hint: bool,
+    ) -> Option<(vt100::MouseProtocolMode, vt100::MouseProtocolEncoding)> {
+        resolve_mouse_protocol(
+            mode,
+            encoding,
+            codex_hint || self.is_codex_running(),
+            self.cached_mouse_protocol(),
+        )
+    }
+
+    fn cached_mouse_protocol(
+        &self,
+    ) -> Option<(vt100::MouseProtocolMode, vt100::MouseProtocolEncoding)> {
+        let cache = self
+            .mouse_protocol_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let cached = (*cache)?;
+        (cached.seen_at.elapsed() <= MOUSE_PROTOCOL_CACHE_TTL)
+            .then_some((cached.mode, cached.encoding))
+    }
+
+    pub(crate) fn clear_codex_transcript_overlay_hint(&self) {
+        self.codex_transcript_overlay_hint
+            .store(false, Ordering::Relaxed);
+    }
+
+    fn mark_codex_transcript_overlay_hint(&self) -> bool {
+        self.codex_transcript_overlay_hint
+            .swap(true, Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_codex_transcript_overlay_hint_for_test(&self, active: bool) {
+        self.codex_transcript_overlay_hint
+            .store(active, Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn codex_transcript_overlay_hint_for_test(&self) -> bool {
+        self.codex_transcript_overlay_hint.load(Ordering::Relaxed)
     }
 
     /// Sticky check: has Claude ever been observed running in this
@@ -624,6 +728,61 @@ fn mouse_button_legacy_cb(button: PointerButton, action: PointerAction) -> u8 {
     base.saturating_add(32)
 }
 
+fn resolve_mouse_protocol(
+    mode: vt100::MouseProtocolMode,
+    encoding: vt100::MouseProtocolEncoding,
+    allow_cached_fallback: bool,
+    cached: Option<(vt100::MouseProtocolMode, vt100::MouseProtocolEncoding)>,
+) -> Option<(vt100::MouseProtocolMode, vt100::MouseProtocolEncoding)> {
+    match mode {
+        vt100::MouseProtocolMode::None if allow_cached_fallback => cached,
+        vt100::MouseProtocolMode::None => None,
+        _ => Some((mode, encoding)),
+    }
+}
+
+fn should_use_arrow_wheel_fallback(alt_like: bool, is_codex: bool) -> bool {
+    alt_like && !is_codex
+}
+
+fn should_use_codex_main_screen_wheel_fallback(
+    is_codex: bool,
+    alt_screen: bool,
+    alt_scroll_mode: bool,
+    scrollback: usize,
+) -> bool {
+    is_codex && !alt_screen && !alt_scroll_mode && scrollback == 0
+}
+
+fn encode_arrow_wheel_fallback(scroll_down: bool) -> Vec<u8> {
+    let seq = if scroll_down { b"\x1b[B" } else { b"\x1b[A" };
+    let mut out = Vec::with_capacity(seq.len() * 3);
+    for _ in 0..3 {
+        out.extend_from_slice(seq);
+    }
+    out
+}
+
+fn encode_codex_transcript_wheel_fallback(scroll_down: bool, transcript_active: bool) -> Vec<u8> {
+    if transcript_active {
+        encode_arrow_wheel_fallback(scroll_down)
+    } else {
+        vec![0x14]
+    }
+}
+
+fn mouse_action_allowed(mode: vt100::MouseProtocolMode, action: PointerAction) -> bool {
+    match (mode, action) {
+        (vt100::MouseProtocolMode::None, _) => false,
+        (vt100::MouseProtocolMode::Press, PointerAction::Press) => true,
+        (vt100::MouseProtocolMode::Press, _) => false,
+        (vt100::MouseProtocolMode::PressRelease, PointerAction::Drag) => false,
+        (vt100::MouseProtocolMode::PressRelease, _) => true,
+        (vt100::MouseProtocolMode::ButtonMotion, _) => true,
+        (vt100::MouseProtocolMode::AnyMotion, _) => true,
+    }
+}
+
 /// Encode a mouse-wheel report for the given xterm protocol encoding.
 ///
 /// `button` is the xterm button code (64 = wheel up, 65 = wheel down).
@@ -680,6 +839,20 @@ fn encode_utf8_coord(out: &mut Vec<u8>, coord: u16) {
     }
 }
 
+fn detect_alternate_scroll_toggle(data: &[u8]) -> Option<bool> {
+    let enable = b"\x1b[?1007h";
+    let disable = b"\x1b[?1007l";
+    let mut last = None;
+    for i in 0..data.len() {
+        if data[i..].starts_with(enable) {
+            last = Some(true);
+        } else if data[i..].starts_with(disable) {
+            last = Some(false);
+        }
+    }
+    last
+}
+
 /// Background thread that reads PTY output and feeds it to vt100 parser.
 #[allow(clippy::too_many_arguments)]
 fn pty_reader_thread(
@@ -689,6 +862,8 @@ fn pty_reader_thread(
     scrollback_count: Arc<std::sync::atomic::AtomicUsize>,
     prompt_seen: Arc<AtomicBool>,
     claude_seen: Arc<AtomicBool>,
+    mouse_protocol_cache: Arc<Mutex<Option<CachedMouseProtocol>>>,
+    alternate_scroll_mode: Arc<AtomicBool>,
     pane_id: usize,
     event_tx: Sender<AppEvent>,
 ) {
@@ -697,6 +872,7 @@ fn pty_reader_thread(
     // so the buffer cannot grow without bound.
     const TAIL_CAP: usize = 256;
     let mut tail: Vec<u8> = Vec::with_capacity(TAIL_CAP * 2);
+    let mut control_tail: Vec<u8> = Vec::with_capacity(64);
 
     let mut buf = [0u8; 4096];
     loop {
@@ -759,8 +935,29 @@ fn pty_reader_thread(
                     }
                 }
 
+                control_tail.extend_from_slice(data);
+                if control_tail.len() > 64 {
+                    let drop = control_tail.len() - 64;
+                    control_tail.drain(..drop);
+                }
+                if let Some(enabled) = detect_alternate_scroll_toggle(&control_tail) {
+                    alternate_scroll_mode.store(enabled, Ordering::Relaxed);
+                }
+
                 let mut parser = parser.lock().unwrap_or_else(|e| e.into_inner());
                 parser.process(data);
+                let screen = parser.screen();
+                let mode = screen.mouse_protocol_mode();
+                if !matches!(mode, vt100::MouseProtocolMode::None) {
+                    let mut cache = mouse_protocol_cache
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    *cache = Some(CachedMouseProtocol {
+                        mode,
+                        encoding: screen.mouse_protocol_encoding(),
+                        seen_at: Instant::now(),
+                    });
+                }
                 drop(parser);
                 let _ = event_tx.send(AppEvent::PtyOutput(pane_id));
             }
@@ -1133,6 +1330,115 @@ mod tests {
         // row=100 -> 1-origin 101, +32 = 133 (0x85), 2-byte UTF-8
         assert_eq!(bytes[5], 0xC2);
         assert_eq!(bytes[6], 0x85);
+    }
+
+    #[test]
+    fn missing_mouse_mode_can_reuse_recent_codex_cache() {
+        assert_eq!(
+            resolve_mouse_protocol(
+                vt100::MouseProtocolMode::None,
+                vt100::MouseProtocolEncoding::Default,
+                true,
+                Some((
+                    vt100::MouseProtocolMode::PressRelease,
+                    vt100::MouseProtocolEncoding::Sgr,
+                ))
+            ),
+            Some((
+                vt100::MouseProtocolMode::PressRelease,
+                vt100::MouseProtocolEncoding::Sgr,
+            ))
+        );
+        assert!(mouse_action_allowed(
+            vt100::MouseProtocolMode::PressRelease,
+            PointerAction::Press,
+        ));
+        assert!(mouse_action_allowed(
+            vt100::MouseProtocolMode::PressRelease,
+            PointerAction::Release,
+        ));
+    }
+
+    #[test]
+    fn missing_mouse_mode_stays_disabled_without_recent_cache() {
+        assert_eq!(
+            resolve_mouse_protocol(
+                vt100::MouseProtocolMode::None,
+                vt100::MouseProtocolEncoding::Sgr,
+                false,
+                Some((
+                    vt100::MouseProtocolMode::PressRelease,
+                    vt100::MouseProtocolEncoding::Sgr,
+                ))
+            ),
+            None
+        );
+        assert!(!mouse_action_allowed(
+            vt100::MouseProtocolMode::None,
+            PointerAction::Press,
+        ));
+    }
+
+    #[test]
+    fn detects_alternate_scroll_enable_and_disable() {
+        assert_eq!(detect_alternate_scroll_toggle(b"\x1b[?1007h"), Some(true));
+        assert_eq!(detect_alternate_scroll_toggle(b"\x1b[?1007l"), Some(false));
+    }
+
+    #[test]
+    fn detects_last_alternate_scroll_toggle_in_mixed_stream() {
+        assert_eq!(
+            detect_alternate_scroll_toggle(b"abc\x1b[?1007hdef\x1b[?1007lghi"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn codex_skips_arrow_wheel_fallback_even_in_alt_scroll_context() {
+        assert!(!should_use_arrow_wheel_fallback(true, true));
+        assert!(should_use_arrow_wheel_fallback(true, false));
+        assert!(!should_use_arrow_wheel_fallback(false, false));
+    }
+
+    #[test]
+    fn codex_main_screen_without_scrollback_uses_transcript_fallback() {
+        assert!(should_use_codex_main_screen_wheel_fallback(
+            true, false, false, 0
+        ));
+        assert_eq!(
+            encode_codex_transcript_wheel_fallback(false, false),
+            b"\x14"
+        );
+        assert_eq!(
+            encode_codex_transcript_wheel_fallback(false, true),
+            b"\x1b[A\x1b[A\x1b[A"
+        );
+        assert_eq!(
+            encode_codex_transcript_wheel_fallback(true, true),
+            b"\x1b[B\x1b[B\x1b[B"
+        );
+    }
+
+    #[test]
+    fn generic_arrow_wheel_fallback_stays_line_oriented() {
+        assert_eq!(encode_arrow_wheel_fallback(false), b"\x1b[A\x1b[A\x1b[A");
+        assert_eq!(encode_arrow_wheel_fallback(true), b"\x1b[B\x1b[B\x1b[B");
+    }
+
+    #[test]
+    fn codex_main_screen_with_scrollback_stays_on_host_path() {
+        assert!(!should_use_codex_main_screen_wheel_fallback(
+            true, false, false, 2
+        ));
+        assert!(!should_use_codex_main_screen_wheel_fallback(
+            false, false, false, 0
+        ));
+        assert!(!should_use_codex_main_screen_wheel_fallback(
+            true, true, false, 0
+        ));
+        assert!(!should_use_codex_main_screen_wheel_fallback(
+            true, false, true, 0
+        ));
     }
 
     #[test]
