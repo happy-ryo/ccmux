@@ -22,14 +22,12 @@ mod workspace_state;
 
 pub(crate) use self::app_state::CLAUDE_PEER_LAUNCH_CMD;
 pub use self::app_state::{App, AppCommand, AppEvent};
-use self::codex_peer::{
-    write_input_to_pane, CodexPeerNotificationState, PendingCodexPeerDelivery,
-};
 #[cfg(test)]
 use self::codex_peer::{
     codex_prompt_allows_peer_nudge_on_screen, format_codex_peer_message, screen_tail_lines,
     PendingCodexPeerMessage,
 };
+use self::codex_peer::{write_input_to_pane, CodexPeerNotificationState, PendingCodexPeerDelivery};
 pub(crate) use self::keyboard_input::key_event_to_bytes_pub;
 use self::keyboard_input::{extract_preview_selected_text, extract_selected_text};
 use self::layout_ops::{
