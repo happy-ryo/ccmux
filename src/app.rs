@@ -144,9 +144,7 @@ enum PendingCodexPeerDelivery {
     SubmitAt(Instant),
 }
 
-fn pane_screen_tail_lines(pane: &Pane) -> Option<Vec<String>> {
-    let parser = pane.parser.lock().ok()?;
-    let screen = parser.screen();
+fn screen_tail_lines(screen: &vt100::Screen) -> Vec<String> {
     let (rows, cols) = screen.size();
     let (cursor_row, _) = screen.cursor_position();
     let mut last_content_row = None;
@@ -179,14 +177,15 @@ fn pane_screen_tail_lines(pane: &Pane) -> Option<Vec<String>> {
         }
         lines.push(line.trim_end().to_string());
     }
-    Some(lines)
+    lines
 }
 
-fn pane_screen_has_visible_text(pane: &Pane) -> bool {
-    let Ok(parser) = pane.parser.lock() else {
-        return false;
-    };
-    let screen = parser.screen();
+fn pane_screen_tail_lines(pane: &Pane) -> Option<Vec<String>> {
+    let parser = pane.parser.lock().ok()?;
+    Some(screen_tail_lines(parser.screen()))
+}
+
+fn screen_has_visible_text(screen: &vt100::Screen) -> bool {
     let (rows, cols) = screen.size();
     for row in 0..rows {
         for col in 0..cols {
@@ -200,11 +199,14 @@ fn pane_screen_has_visible_text(pane: &Pane) -> bool {
     false
 }
 
-fn codex_prompt_allows_peer_nudge(pane: &Pane) -> Option<bool> {
+fn pane_screen_has_visible_text(pane: &Pane) -> bool {
     let Ok(parser) = pane.parser.lock() else {
-        return None;
+        return false;
     };
-    let screen = parser.screen();
+    screen_has_visible_text(parser.screen())
+}
+
+fn codex_prompt_allows_peer_nudge_on_screen(screen: &vt100::Screen) -> Option<bool> {
     if screen.hide_cursor() {
         return Some(false);
     }
@@ -250,6 +252,13 @@ fn codex_prompt_allows_peer_nudge(pane: &Pane) -> Option<bool> {
         return Some(false);
     }
     Some(true)
+}
+
+fn codex_prompt_allows_peer_nudge(pane: &Pane) -> Option<bool> {
+    let Ok(parser) = pane.parser.lock() else {
+        return None;
+    };
+    codex_prompt_allows_peer_nudge_on_screen(parser.screen())
 }
 
 fn codex_peer_screen_tail(pane: &Pane) -> Option<String> {
@@ -6182,52 +6191,29 @@ mod tests {
     }
 
     #[test]
-    fn flush_pending_codex_peer_messages_uses_recent_content_on_tall_codex_screens() {
-        let mut app = App::new(120, 120).expect("App::new");
-        let sender_id = app.ws().focused_pane_id;
-        let sibling_id = app
-            .handle_split(
-                &ipc::PaneRef::Focused,
-                ipc::Direction::Vertical,
-                None,
-                None,
-                None,
-                None,
-            )
-            .expect("split succeeds");
-        app.peer_client_kinds
-            .insert(sibling_id, PeerClientKind::Codex);
-        app.handle_focus(&ipc::PaneRef::Id(sender_id))
-            .expect("refocus sender");
-        app.handle_peer_send(
-            sender_id,
-            &ipc::PaneRef::Id(sibling_id),
-            "hello codex".to_string(),
-        )
-        .expect("peer send");
+    fn codex_prompt_allows_peer_nudge_uses_recent_content_on_tall_screens() {
+        let mut parser = vt100::Parser::new(120, 120, 0);
+        parser.process(
+            b"\x1b[?25h\x1b[2J\x1b[H\
+              Tip: NEW: JavaScript REPL is now available in /experimental.\n\
+              \n\
+              \n\
+              \xE2\x80\xBA Summarize recent commits\n\
+              \n\
+                gpt-5.4 high\x1b[4;3H",
+        );
 
-        {
-            let pane = app.ws_mut().panes.get_mut(&sibling_id).expect("pane");
-            let mut parser = pane.parser.lock().unwrap();
-            parser.process(
-                b"\x1b[?25h\x1b[2J\x1b[H\
-                  Tip: NEW: JavaScript REPL is now available in /experimental.\n\
-                  \n\
-                  \n\
-                  \xE2\x80\xBA Summarize recent commits\n\
-                  \n\
-                    gpt-5.4 high\x1b[4;3H",
-            );
-        }
-
-        app.flush_pending_codex_peer_messages();
-        assert!(matches!(
-            app.pending_codex_peer_messages
-                .get(&sibling_id)
-                .and_then(|q| q.front()),
-            Some(PendingCodexPeerDelivery::SubmitAt(_))
-        ));
-        app.shutdown();
+        let screen = parser.screen();
+        let tail = screen_tail_lines(screen).join("\n").to_ascii_lowercase();
+        assert!(
+            tail.contains("summarize recent commits"),
+            "tail snapshot should stay anchored to the recent Codex prompt"
+        );
+        assert_eq!(
+            codex_prompt_allows_peer_nudge_on_screen(screen),
+            Some(true),
+            "recent Codex prompt on a tall screen should allow the peer nudge"
+        );
     }
 
     #[test]
