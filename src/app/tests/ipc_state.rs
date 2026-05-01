@@ -543,3 +543,164 @@ fn app_command_channel_sends_and_receives() {
         other => panic!("unexpected command: {other:?}"),
     }
 }
+
+#[test]
+fn handle_set_summary_sets_and_reads_back_via_list() {
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_id = app.ws().focused_pane_id;
+
+    let info = app
+        .handle_set_summary(pane_id, "drafting design doc".into())
+        .expect("set summary succeeds");
+    assert_eq!(info.id, pane_id);
+    assert_eq!(info.summary.as_deref(), Some("drafting design doc"));
+    assert_eq!(
+        app.ws()
+            .panes
+            .get(&pane_id)
+            .and_then(|p| p.summary.clone())
+            .as_deref(),
+        Some("drafting design doc")
+    );
+
+    // List response must surface the summary so list_panes / list_peers
+    // round-trips it to peers.
+    let (reply_tx, reply_rx) = oneshot::channel();
+    app.handle_app_command(AppCommand::List { reply: reply_tx });
+    let infos = reply_rx.recv().expect("list reply");
+    let entry = infos
+        .iter()
+        .find(|p| p.id == pane_id)
+        .expect("pane in list");
+    assert_eq!(entry.summary.as_deref(), Some("drafting design doc"));
+    app.shutdown();
+}
+
+#[test]
+fn handle_set_summary_overwrites_previous_value() {
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_id = app.ws().focused_pane_id;
+
+    app.handle_set_summary(pane_id, "first".into()).unwrap();
+    let info = app
+        .handle_set_summary(pane_id, "second".into())
+        .expect("overwrite succeeds");
+    assert_eq!(info.summary.as_deref(), Some("second"));
+    app.shutdown();
+}
+
+#[test]
+fn handle_set_summary_empty_clears() {
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_id = app.ws().focused_pane_id;
+
+    app.handle_set_summary(pane_id, "before".into()).unwrap();
+    let info = app
+        .handle_set_summary(pane_id, String::new())
+        .expect("clear succeeds");
+    assert!(info.summary.is_none());
+    assert!(app.ws().panes.get(&pane_id).unwrap().summary.is_none());
+    app.shutdown();
+}
+
+#[test]
+fn handle_set_summary_rejects_oversized_input() {
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_id = app.ws().focused_pane_id;
+
+    // 257 ASCII chars (one over the cap).
+    let too_long = "x".repeat(257);
+    let err = app
+        .handle_set_summary(pane_id, too_long)
+        .expect_err("oversized summary must be rejected");
+    assert_eq!(err.code, Some(ipc::err_code::SUMMARY_TOO_LONG));
+    // Pre-call state is preserved (no partial write).
+    assert!(app.ws().panes.get(&pane_id).unwrap().summary.is_none());
+    app.shutdown();
+}
+
+#[test]
+fn handle_set_summary_accepts_exactly_max_length() {
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_id = app.ws().focused_pane_id;
+
+    // 256 chars is on the boundary — must succeed.
+    let at_cap = "x".repeat(256);
+    let info = app
+        .handle_set_summary(pane_id, at_cap.clone())
+        .expect("exactly-cap summary must be accepted");
+    assert_eq!(info.summary.as_deref(), Some(at_cap.as_str()));
+    app.shutdown();
+}
+
+#[test]
+fn handle_set_summary_caps_on_chars_not_bytes() {
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_id = app.ws().focused_pane_id;
+
+    // 256 multi-byte Japanese chars is well over 256 bytes (UTF-8 = 3
+    // bytes per char). Must still be accepted because the cap is on
+    // chars(), not byte length.
+    let multibyte = "あ".repeat(256);
+    assert!(multibyte.len() > 256, "precondition: more bytes than chars");
+    let info = app
+        .handle_set_summary(pane_id, multibyte.clone())
+        .expect("256 multi-byte chars must be accepted");
+    assert_eq!(info.summary.as_deref(), Some(multibyte.as_str()));
+    app.shutdown();
+}
+
+#[test]
+fn handle_set_summary_repeated_calls_are_stable() {
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_id = app.ws().focused_pane_id;
+
+    // Hammer the handler back-to-back to check that nothing leaks
+    // (mutation order, lock state, etc.).
+    for i in 0..5 {
+        let info = app
+            .handle_set_summary(pane_id, format!("iter-{i}"))
+            .expect("set succeeds");
+        assert_eq!(info.summary.as_deref(), Some(format!("iter-{i}").as_str()));
+    }
+    app.shutdown();
+}
+
+#[test]
+fn handle_set_summary_unknown_pane_is_rejected() {
+    let mut app = App::new(40, 80).expect("App::new");
+    let err = app
+        .handle_set_summary(9999, "x".into())
+        .expect_err("unknown pane must fail");
+    assert_eq!(err.code, Some(ipc::err_code::PANE_NOT_FOUND));
+    app.shutdown();
+}
+
+#[test]
+fn handle_peer_list_surfaces_summary() {
+    // Two panes; only the second has a summary set. handle_peer_list
+    // (called from the *first* pane's perspective) must include the
+    // second pane's summary on its PeerInfo entry.
+    let mut app = App::new(40, 80).expect("App::new");
+    let a_id = app.ws().focused_pane_id;
+    let b_id = app
+        .handle_split(
+            &ipc::PaneRef::Focused,
+            ipc::Direction::Vertical,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("split");
+    app.handle_set_summary(b_id, "running tests".into())
+        .expect("set on b");
+
+    let peers = app.handle_peer_list(a_id).expect("peer list from a");
+    let b_entry = peers.iter().find(|p| p.id == b_id).expect("b in peers");
+    assert_eq!(b_entry.summary.as_deref(), Some("running tests"));
+    // a is not in its own peer list, but spot-check that no spurious
+    // summary appears on the empty side either.
+    assert!(peers.iter().all(|p| p.id != a_id));
+    app.shutdown();
+}

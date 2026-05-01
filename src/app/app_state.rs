@@ -98,6 +98,15 @@ pub enum AppCommand {
         role: Option<Option<String>>,
         reply: oneshot::Sender<std::result::Result<PaneInfo, ipc::CodedError>>,
     },
+    /// Set or clear the summary string of a specific pane. Used by the
+    /// MCP `set_summary` tool — `pane_id` is the caller pane resolved
+    /// from `RENGA_PANE_ID`. Returns the updated [`PaneInfo`] so the
+    /// caller can confirm without a separate `List` round-trip.
+    SetSummary {
+        pane_id: usize,
+        summary: String,
+        reply: oneshot::Sender<std::result::Result<PaneInfo, ipc::CodedError>>,
+    },
 }
 
 /// Events dispatched within the app.

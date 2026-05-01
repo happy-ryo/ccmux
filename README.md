@@ -305,7 +305,7 @@ _Peer messaging:_
 | `list_peers` | Lists other panes in the caller's tab. Caller is excluded. |
 | `send_message(to_id, message)` | Delivers to a same-tab peer by numeric id or stable name. Silent no-op for targets outside the tab — callers cannot enumerate other tabs. |
 | `check_messages` | Drain queued peer messages waiting for this client. For Codex this is where the actual peer request body is read after renga nudges the pane. |
-| `set_summary` | v1 stub. renga uses pane name / role as the summary substitute. |
+| `set_summary(summary)` | Set or clear the calling pane's 1-2 sentence summary. Surfaced on every `list_panes` / `list_peers` entry. Empty string clears; max 256 chars (`[summary_too_long]`). |
 
 _Pane control (same tab, except `new_tab`):_
 

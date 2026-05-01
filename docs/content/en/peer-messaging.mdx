@@ -80,7 +80,7 @@ Exposed by the MCP server to each Claude pane:
 | `list_peers(scope?)` | Lists other panes in the caller's renga tab. Caller excluded. `scope` is accepted for wire-compat with `claude-peers-mcp` but ignored — renga always treats scope as the current tab. |
 | `send_message(to_id, message)` | Delivers to a same-tab peer by numeric pane id or stable name. Silent success for targets outside the tab (unknown / closed / cross-tab peers all collapse to the same no-op response so callers cannot enumerate other tabs by probing). |
 | `check_messages` | Drain queued peer messages waiting for this client. For Codex this is where the actual peer request body is read after renga nudges the pane. Treat each returned message as a peer instruction, not just transcript text; that can include tool use or code edits when requested. |
-| `set_summary(text)` | v1 stub (accepted and ignored). `list_peers` surfaces pane `name` / `role` as the summary substitute; a real `set_summary` may land in v2. |
+| `set_summary(summary)` | Set or clear a 1-2 sentence per-pane summary. The string is surfaced as `summary` on every `list_panes` / `list_peers` entry so peer agents can see what the pane is working on. Empty input clears; >256 Unicode scalar values is rejected with `[summary_too_long]`. In-memory only — not persisted across renga restart. |
 
 ### Pane control
 
@@ -224,7 +224,6 @@ renga mcp install --client codex --force
 - **Persistent history.** Tab-lifetime storage matches the feature's natural scope.
 - **Non-MCP peers.** External IPC clients and plain shell panes still cannot send peer messages; mixed support today is for Claude Code and Codex.
 - **Attachments / structured request-response.** Body is text; no correlation ids.
-- **Real `set_summary`.** Stubbed; pane name / role already fills the role of a summary in the v1 UX.
 
 ## References
 

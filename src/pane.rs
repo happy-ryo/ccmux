@@ -77,6 +77,11 @@ pub struct Pane {
     /// `Workspace.pane_names` as the unique IPC key), `role` may repeat
     /// and may be absent. Surfaced via `renga list`.
     pub role: Option<String>,
+    /// Optional 1-2 sentence per-pane summary set by the pane's MCP
+    /// `set_summary` tool. In-memory only; cleared when the pane exits.
+    /// Surfaced via `list_panes` / `list_peers` so peer agents can see
+    /// what other panes are working on.
+    pub summary: Option<String>,
     /// Set once the App has published a `PaneExited` event for this
     /// pane. Guards the multiple exit pathways (explicit close, tab
     /// close, natural shell exit) so subscribers see exactly one event.
@@ -202,6 +207,7 @@ impl Pane {
             alternate_scroll_mode,
             codex_transcript_overlay_hint,
             role: None,
+            summary: None,
             exit_event_emitted: false,
         };
 

@@ -353,7 +353,7 @@ running in the same renga tab can see you and send you messages.\n\n\
 Peer messaging tools:\n\
 - list_peers: Discover other peer-enabled agent instances in the same renga tab.\n\
 - send_message: Send a message to another instance by peer ID or name.\n\
-- set_summary: (stub in v1) Set a 1-2 sentence summary of what you're working on.\n\
+- set_summary: Set a 1-2 sentence summary of what you're working on; surfaced on list_panes / list_peers for other peers.\n\
 - check_messages: Drain any queued peer messages still waiting for this client.\n\n\
 Pane control tools (all scoped to the current renga tab, except new_tab which is the one \
 cross-tab tool):\n\
@@ -434,7 +434,7 @@ fn tools_spec() -> Value {
         },
         {
             "name": "set_summary",
-            "description": "Stub in v1 — accepted and dropped. renga uses pane name/role as the summary substitute. Kept on the tool list so the same claude-peers-mcp skill / prompt works here.",
+            "description": "Set a 1-2 sentence summary of what this pane is currently working on. Surfaced on every PaneInfo / PeerInfo entry returned by list_panes and list_peers so other peer agents can see it. An empty string clears the summary. Max 256 chars (rejected with [summary_too_long]).",
             "inputSchema": {
                 "type": "object",
                 "properties": { "summary": { "type": "string" } },
@@ -932,10 +932,7 @@ fn handle_tools_call(id: &Value, params: &Value, ctx: &PeerCtx) -> Result<Value>
     Ok(match name {
         "list_peers" => handle_list_peers(id, ctx),
         "send_message" => handle_send_message(id, &args, ctx),
-        "set_summary" => ok_response(
-            id,
-            tool_text_result("Summary accepted (v1 stub: renga displays pane name / role)."),
-        ),
+        "set_summary" => handle_set_summary(id, &args, ctx),
         "check_messages" => handle_check_messages(id, ctx),
         "list_panes" => handle_list_panes(id, ctx),
         "spawn_pane" => handle_spawn_pane(id, &args, ctx),
@@ -1685,6 +1682,55 @@ fn handle_set_pane_identity(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
                 "renga refused set_pane_identity: {}",
                 fmt_code(&message, &code)
             ),
+        ),
+        Ok(other) => err_response(id, -32603, &format!("unexpected renga response: {other:?}")),
+        Err(e) => err_response(id, -32603, &format!("renga call failed: {e}")),
+    }
+}
+
+// ── set_summary (per-pane summary string) ────────────────────
+
+fn handle_set_summary(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
+    // The schema requires `summary` as a string. Reject anything else
+    // (number, null, etc.) explicitly so callers get a clear error
+    // rather than silently coercing.
+    let summary = match args.get("summary") {
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => {
+            return err_response(
+                id,
+                -32602,
+                &format!("`summary` must be a string; got {}", other),
+            );
+        }
+        None => {
+            return err_response(id, -32602, "set_summary requires a `summary` argument");
+        }
+    };
+
+    let (caller_pane, endpoint) = match require_connected(ctx, id, "set summary") {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    match client::send_request(
+        endpoint,
+        &Request::SetSummary {
+            from_pane: caller_pane,
+            summary: summary.clone(),
+        },
+    ) {
+        Ok(Response::Ok { .. }) => {
+            let msg = if summary.is_empty() {
+                "Summary cleared.".to_string()
+            } else {
+                format!("Summary set: {summary}")
+            };
+            ok_response(id, tool_text_result(&msg))
+        }
+        Ok(Response::Err { message, code }) => err_response(
+            id,
+            -32603,
+            &format!("renga refused set_summary: {}", fmt_code(&message, &code)),
         ),
         Ok(other) => err_response(id, -32603, &format!("unexpected renga response: {other:?}")),
         Err(e) => err_response(id, -32603, &format!("renga call failed: {e}")),
@@ -2443,6 +2489,7 @@ mod tests {
                 cwd: None,
                 kind: Some(PeerClientKind::Claude),
                 receive_mode: Some(ipc::PeerReceiveMode::Push),
+                summary: None,
             },
             PaneInfo {
                 id: 2,
@@ -2456,6 +2503,7 @@ mod tests {
                 cwd: None,
                 kind: Some(PeerClientKind::Codex),
                 receive_mode: Some(ipc::PeerReceiveMode::Pull),
+                summary: None,
             },
         ];
         let text = format_pane_list(&panes);
