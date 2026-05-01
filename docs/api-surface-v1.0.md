@@ -81,10 +81,25 @@ shared `app_timeout` / `shutting_down` / `internal` set.
 |---|---|---|
 | `summary` | string | yes |
 
-**v1.0 contract**: input shape is frozen; the tool is **implemented** in v1.0
-(no longer a stub). The implementation work is tracked in a follow-up issue
-(see PR description); from a wire perspective the input/output shape declared
-here is the frozen contract regardless of implementation timing.
+**v1.0 contract**: input shape is frozen; the tool is **implemented and
+shipped in v1.0** (no longer a stub).
+
+**Behavior**: the summary string is stored on the calling pane (resolved
+from `RENGA_PANE_ID`) and surfaced as `summary` on every `PaneInfo` /
+`PeerInfo` entry returned by `list_panes` and `list_peers`. Storage is
+in-memory only — does not persist across renga restarts.
+
+- An empty string clears the summary (round-trips to `Option::None` /
+  omitted key on the wire).
+- Repeated calls overwrite the previous value with the latest.
+- Maximum length is 256 Unicode scalar values (`chars()`, not bytes);
+  oversized input is rejected with `[summary_too_long]` before any
+  state mutation.
+- Pane exit drops the summary alongside the rest of the pane state.
+
+Errors via `[code]`: `summary_too_long`, plus the shared
+`pane_not_found` / `pane_vanished` / `app_timeout` / `shutting_down` /
+`internal` set.
 
 ### 1.4 `check_messages` — stable
 
@@ -384,6 +399,7 @@ Server budgets: 5 s `APP_REPLY_TIMEOUT` (server → app event loop) +
 | `peer_send` | `from_pane: usize`, `target: PaneRef`, `body: string` | Cross-tab silently no-ops (Q5). |
 | `peer_register_client` | `pane_id: usize`, `kind: claude\|codex` | Posted by `renga mcp-peer` on startup. |
 | `set_pane_identity` | `target: PaneRef`, `name?`, `role?` (three-state: missing / null / value) | Uses serde `double_option`. |
+| `set_summary` | `from_pane: usize`, `summary: string` | Empty `summary` clears. >256 `chars` rejected with `summary_too_long`. |
 
 `PaneRef` = `{ id: usize } | { name: string } | "focused"`.
 
@@ -400,7 +416,7 @@ Server budgets: 5 s `APP_REPLY_TIMEOUT` (server → app event loop) +
 
 `PaneInfo` payload (used by `list` data, `set_pane_identity` ok data, embedded
 in `peer_list` data):
-`{ id, name?, role?, focused, x, y, width, height, cwd?, kind?, receive_mode? }`.
+`{ id, name?, role?, focused, x, y, width, height, cwd?, kind?, receive_mode?, summary? }`.
 
 `PeerInfo` = `PaneInfo` minus the focused flag and geometry (purposefully
 hidden from cross-pane callers).
@@ -509,6 +525,7 @@ these as `[<code>] <human message>` in JSON-RPC error message strings.
 | `cwd_invalid` | `split`, `new_tab` | `cwd` missing or not a directory. Pre-mutation rejection — no half-mutated layout. |
 | `name_in_use` | `split`, `new_tab`, `set_pane_identity` | Another pane in the same tab holds the requested name. |
 | `name_invalid` | `split`, `new_tab`, `set_pane_identity` | Name empty / all-digits / non-`[A-Za-z0-9_-]`. |
+| `summary_too_long` | `set_summary` | Summary input exceeds 256 Unicode scalar values. Pre-mutation rejection. |
 
 ### 5.2 JSON-RPC numeric codes (Q9)
 
@@ -590,13 +607,13 @@ minor release.
 
 | Section | Count |
 |---|---|
-| MCP tools (§1) | 15 (14 active + `set_summary`) |
+| MCP tools (§1) | 15 |
 | CLI top-level flags (§2.1) | 11 |
 | CLI IPC subcommands (§2.2) | 13 |
 | Env vars (§2.3) | 6 |
-| IPC `Request` variants (§3.3) | 13 |
+| IPC `Request` variants (§3.3) | 14 |
 | IPC `Response` variants (§3.4) | 4 |
 | IPC `Event` variants (§3.5) | 5 |
-| Error codes (§5.1) | 13 |
+| Error codes (§5.1) | 14 |
 | Config schema sections (§4.1) | 2 |
 | Layout TOML node types (§4.2) | 2 |

@@ -27,11 +27,12 @@ rules in [`docs/semver-policy.md`](./docs/semver-policy.md).
 
 ### Changed
 
-- **`set_summary` is no longer a no-op stub.** The input shape is unchanged;
-  the tool now persists and surfaces a per-pane summary. (Implementation
-  tracked as a follow-up; the wire contract in
-  `docs/api-surface-v1.0.md` is the freeze target regardless of when the
-  implementation lands.)
+- **`set_summary` is now implemented (was stub).** The input shape is
+  unchanged; the tool now stores a per-pane summary string in-memory and
+  surfaces it as `summary` on every `PaneInfo` / `PeerInfo` returned by
+  `list_panes` / `list_peers`. Empty input clears the summary; input
+  longer than 256 Unicode scalar values is rejected with the new
+  `[summary_too_long]` error code. Closes #202.
 
 ### Documentation
 

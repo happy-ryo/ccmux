@@ -83,7 +83,7 @@ Codex ワーカーを会話の中から増やしたい場合は、`spawn_codex_p
 | `list_peers(scope?)` | 同じ renga タブにいる他のペインを返します。自分自身は除外。`scope` は claude-peers-mcp との互換のため受け取りますが、renga では常にタブ単位なので中身は見ません。 |
 | `send_message(to_id, message)` | 同じタブにいる相手にメッセージを送ります。数字の id でも、ペインに付けた名前 (stable name) でも指定可能。別タブ宛や存在しない id 宛は「成功として返すが何も配送しない」挙動にしているので、送信側から他タブのペインを id 探索で列挙する攻撃は成立しません。 |
 | `check_messages` | queued peer message を drain します。Codex では renga の nudge を受けたあとに、実際の peer 本文をここから読みます。返ってきた各メッセージは「ただの文字列」ではなく、必要なら tool 実行やコード編集まで含む peer 指示として扱ってください。 |
-| `set_summary(text)` | v1 では受け取るだけで保存しません。`list_peers` ではペイン名と役割 (role) を summary の代わりに返しているので実質不要になっています。本格的な実装は v2 の検討事項。 |
+| `set_summary(summary)` | 呼び出したペインの 1〜2 文サマリーを設定 / クリア。`list_panes` / `list_peers` の各エントリに `summary` フィールドとして含まれ、ピア間で「今何をしているか」を共有できます。空文字列でクリア、最大 256 Unicode scalar values (`[summary_too_long]` で reject)。renga プロセス内のメモリ保持のみで再起動では消えます。 |
 
 ### ペイン操作
 
@@ -230,7 +230,6 @@ renga mcp install --client codex --force
 - **履歴の永続化** — タブの寿命と同期する形で十分なので、SQLite などは入れていません。
 - **MCP 以外の peer** — mixed support は現状 Claude Code と Codex 向けです。renga 外部の IPC クライアントや普通のシェルペインは相手として登場しません。
 - **添付ファイル / 構造化リクエスト・レスポンス** — body はテキストのみで、相関 id もありません。必要になれば v1.1 で追加します。
-- **`set_summary` の本格実装** — 現状 stub です。ペイン名と役割で十分機能しているので v2 送りにしています。
 
 ## 参考
 

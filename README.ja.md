@@ -310,7 +310,7 @@ _ペインメッセージング:_
 | `list_peers` | 同じ renga タブにいる他のペインを返す。自分自身は除外。 |
 | `send_message(to_id, message)` | 同じタブの相方にメッセージを送る。数字の id でも、ペインに付けた名前でも指定可能。別タブ宛は何も配送せず成功として返す (他タブのペインを id 探索で列挙されないようにするため)。 |
 | `check_messages` | この client 向けに残っている queued peer message を drain する。Codex では renga の nudge を受けたあとに実際の peer 本文をここから読む。 |
-| `set_summary` | v1 では受け付けるだけで保存しない。renga はペイン名と役割 (role) を代わりに使います。 |
+| `set_summary(summary)` | 呼び出したペインの 1〜2 文サマリーを設定 / クリア。`list_panes` / `list_peers` の各エントリで配信されます。空文字列でクリア、最大 256 文字 (`[summary_too_long]`)。 |
 
 _ペイン操作 (`new_tab` を除き同一タブ内):_
 

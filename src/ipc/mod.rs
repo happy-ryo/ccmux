@@ -208,6 +208,20 @@ pub enum Request {
         )]
         role: Option<Option<String>>,
     },
+    /// Set or clear the per-pane summary string. The summary is
+    /// surfaced on `PaneInfo.summary` / `PeerInfo.summary` so other
+    /// peer agents can read what this pane is working on.
+    ///
+    /// Wire contract:
+    /// - `summary == ""` clears the existing value (round-trips to
+    ///   `Option::None` on the server side).
+    /// - Strings longer than 256 Unicode scalar values (`chars()`)
+    ///   are rejected with `summary_too_long` before any state
+    ///   mutation. The cap is in `chars`, not bytes, so multi-byte
+    ///   scripts get the same effective ceiling as ASCII.
+    /// - `from_pane` is the caller's own pane id, taken from
+    ///   `RENGA_PANE_ID` by the MCP peer subprocess.
+    SetSummary { from_pane: usize, summary: String },
 }
 
 /// Serde helper for the "missing / null / value" three-state pattern
@@ -306,6 +320,12 @@ pub struct PeerInfo {
     pub kind: Option<PeerClientKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receive_mode: Option<PeerReceiveMode>,
+    /// Optional pane-authored summary set via the MCP `set_summary`
+    /// tool. Absent until the pane calls the tool; cleared when the
+    /// pane sets it to an empty string. In-memory only — does not
+    /// survive renga restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// One entry in the `List` response payload.
@@ -344,6 +364,9 @@ pub struct PaneInfo {
     pub kind: Option<PeerClientKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receive_mode: Option<PeerReceiveMode>,
+    /// Optional pane-authored summary; see [`PeerInfo::summary`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// Server reply to one [`Request`].
@@ -444,6 +467,10 @@ pub mod err_code {
     /// since digit strings are interpreted as numeric ids by
     /// `PaneRef::Name` resolution).
     pub const NAME_INVALID: &str = "name_invalid";
+    /// `SetSummary` was passed a `summary` string longer than the
+    /// per-pane cap (256 Unicode scalar values). The caller should
+    /// either truncate the summary or send an empty string to clear.
+    pub const SUMMARY_TOO_LONG: &str = "summary_too_long";
 }
 
 /// App-side error carrying a free-form message plus an optional
@@ -835,6 +862,7 @@ mod tests {
             cwd: None,
             kind: None,
             receive_mode: None,
+            summary: None,
         };
         let s = serde_json::to_string(&info).unwrap();
         assert!(!s.contains("role"), "unexpected role field: {s}");
@@ -854,6 +882,7 @@ mod tests {
             cwd: Some("/home/user/project".into()),
             kind: Some(PeerClientKind::Claude),
             receive_mode: Some(PeerReceiveMode::Push),
+            summary: None,
         };
         let parsed: PaneInfo =
             serde_json::from_str(&serde_json::to_string(&info).unwrap()).unwrap();
@@ -874,6 +903,7 @@ mod tests {
             cwd: None,
             kind: None,
             receive_mode: None,
+            summary: None,
         };
         let s = serde_json::to_string(&info).unwrap();
         assert!(s.contains("\"x\":3"), "missing x: {s}");
@@ -1127,6 +1157,78 @@ mod tests {
         };
         let parsed: Event = serde_json::from_str(&serde_json::to_string(&ev).unwrap()).unwrap();
         assert_eq!(parsed, ev);
+    }
+
+    #[test]
+    fn set_summary_request_roundtrips() {
+        let r = Request::SetSummary {
+            from_pane: 7,
+            summary: "drafting design doc".into(),
+        };
+        assert_eq!(roundtrip(&r), r);
+    }
+
+    #[test]
+    fn set_summary_empty_string_roundtrips() {
+        // Empty string is the documented "clear" form; must survive
+        // the wire as-is so the App handler can detect it.
+        let r = Request::SetSummary {
+            from_pane: 1,
+            summary: String::new(),
+        };
+        assert_eq!(roundtrip(&r), r);
+    }
+
+    #[test]
+    fn pane_info_omits_summary_when_none() {
+        // additive serde: clients on old protocol must not see a new
+        // `summary: null` key — `skip_serializing_if = Option::is_none`
+        // guarantees omission.
+        let info = PaneInfo {
+            id: 1,
+            name: None,
+            role: None,
+            focused: false,
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            cwd: None,
+            kind: None,
+            receive_mode: None,
+            summary: None,
+        };
+        let s = serde_json::to_string(&info).unwrap();
+        assert!(!s.contains("summary"), "must omit summary key: {s}");
+    }
+
+    #[test]
+    fn pane_info_includes_summary_when_set() {
+        let info = PaneInfo {
+            id: 1,
+            name: None,
+            role: None,
+            focused: false,
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            cwd: None,
+            kind: None,
+            receive_mode: None,
+            summary: Some("hello".into()),
+        };
+        let s = serde_json::to_string(&info).unwrap();
+        assert!(s.contains("\"summary\":\"hello\""), "{s}");
+    }
+
+    #[test]
+    fn pane_info_deserializes_legacy_payload_without_summary() {
+        // Old servers that don't emit `summary` must still deserialize.
+        // Guards the additive-change promise from semver-policy.md.
+        let raw = r#"{"id":1,"focused":false,"x":0,"y":0,"width":0,"height":0}"#;
+        let info: PaneInfo = serde_json::from_str(raw).unwrap();
+        assert!(info.summary.is_none());
     }
 
     #[test]
