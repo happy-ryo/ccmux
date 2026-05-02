@@ -264,7 +264,7 @@ fn render_ime_overlay(app: &mut App, frame: &mut Frame, area: Rect) {
         ),
     ]);
     let hint = Line::from(Span::styled(
-        " Alt+Enter send \u{00b7} Enter newline \u{00b7} Esc cancel ",
+        " Alt+Enter send \u{00b7} Enter newline \u{00b7} Ctrl+U clear \u{00b7} Esc cancel ",
         Style::default().fg(TEXT_DIM),
     ));
     let block = Block::default()
