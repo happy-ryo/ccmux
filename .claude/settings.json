@@ -8,7 +8,7 @@
           {
             "type": "command",
             "if": "Bash(gh pr create*)",
-            "command": "cmd=$(jq -r '.tool_input.command'); if echo \"$cmd\" | grep -qE -- '--repo[[:space:]]+Shin-sibainu/ccmux'; then echo 'Blocked: PR target is upstream Shin-sibainu/ccmux. Add --repo happy-ryo/ccmux --base main explicitly. Per CLAUDE.md, upstream PRs require explicit user authorization.' >&2; exit 2; fi; if ! echo \"$cmd\" | grep -qE -- '--repo[[:space:]]+happy-ryo/ccmux'; then echo 'Blocked: gh pr create without --repo defaults to upstream Shin-sibainu/ccmux. Add --repo happy-ryo/ccmux --base main explicitly. Per CLAUDE.md, upstream PRs require explicit user authorization.' >&2; exit 2; fi"
+            "command": "cmd=$(jq -r '.tool_input.command'); if echo \"$cmd\" | grep -qE -- '--repo[[:space:]]+Shin-sibainu/ccmux'; then echo 'Blocked: PR target is upstream Shin-sibainu/ccmux. Add --repo suisya-systems/renga --base main explicitly. Per CLAUDE.md, upstream PRs require explicit user authorization.' >&2; exit 2; fi; if ! echo \"$cmd\" | grep -qE -- '--repo[[:space:]]+suisya-systems/renga'; then echo 'Blocked: gh pr create without --repo defaults to upstream Shin-sibainu/ccmux. Add --repo suisya-systems/renga --base main explicitly. Per CLAUDE.md, upstream PRs require explicit user authorization.' >&2; exit 2; fi"
           }
         ]
       }

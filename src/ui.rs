@@ -678,8 +678,14 @@ fn render_single_pane(
     frame: &mut Frame,
     area: Rect,
 ) {
-    let is_claude = pane.is_claude_running();
-    let is_codex = pane.is_codex_running();
+    // Cosmetic indicators (border accent, pane label) consume the
+    // sticky `*_ever_seen()` latches, not the live title check —
+    // Claude and Codex both rewrite their OSC titles to in-flight
+    // task summaries that frequently drop the literal client name,
+    // which would otherwise flip the indicators off mid-session
+    // even though the client is still interactive. See issue #209.
+    let is_claude = pane.claude_ever_seen();
+    let is_codex = pane.codex_ever_seen();
     let client_accent = if is_claude {
         Some(ACCENT_CLAUDE)
     } else if is_codex {
@@ -1531,7 +1537,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
         .ws()
         .panes
         .get(&focused_id)
-        .is_some_and(|p| p.is_claude_running());
+        .is_some_and(|p| p.claude_ever_seen());
 
     let mut right_spans = Vec::new();
 

@@ -48,6 +48,15 @@ pub struct Pane {
     /// current foreground app (e.g. `shell_accepts_command_injection`
     /// gating `Alt+P`).
     pub claude_seen: Arc<AtomicBool>,
+    /// Codex equivalent of `claude_seen`. Latches on the first OSC
+    /// title that mentions "codex" and never resets, so cosmetic
+    /// indicators (border accent, pane label, tab title decoration)
+    /// keep identifying the pane as Codex even when Codex rewrites
+    /// its title to a task-specific summary that drops the literal
+    /// substring. Foreground-app gating (mouse protocol resolution,
+    /// codex_peer detection) still uses the live `is_codex_running()`
+    /// signal — see issue #209 for the cosmetic-vs-foreground split.
+    pub codex_seen: Arc<AtomicBool>,
     /// Cache of the most recently *detected* Claude caret cell on
     /// this pane: `(host_row, host_col)` in vt100 screen coords —
     /// already shifted to land on Claude's inverse-video marker.
@@ -166,6 +175,8 @@ impl Pane {
         let prompt_seen_clone = Arc::clone(&prompt_seen);
         let claude_seen = Arc::new(AtomicBool::new(false));
         let claude_seen_clone = Arc::clone(&claude_seen);
+        let codex_seen = Arc::new(AtomicBool::new(false));
+        let codex_seen_clone = Arc::clone(&codex_seen);
         let mouse_protocol_cache = Arc::new(Mutex::new(None));
         let mouse_protocol_cache_clone = Arc::clone(&mouse_protocol_cache);
         let alternate_scroll_mode = Arc::new(AtomicBool::new(false));
@@ -179,6 +190,7 @@ impl Pane {
                 scrollback_clone,
                 prompt_seen_clone,
                 claude_seen_clone,
+                codex_seen_clone,
                 mouse_protocol_cache_clone,
                 alternate_scroll_mode_clone,
                 id,
@@ -202,6 +214,7 @@ impl Pane {
             pending_startup: None,
             prompt_seen,
             claude_seen,
+            codex_seen,
             claude_caret_cache: Mutex::new(None),
             mouse_protocol_cache,
             alternate_scroll_mode,
@@ -483,9 +496,12 @@ impl Pane {
     }
 
     /// Check if Codex is running in this pane (by current window
-    /// title). Unlike Claude we do not currently need a sticky latch:
-    /// this is used only for UI affordances such as pane labeling and
-    /// border color, not caret placement or command-injection gating.
+    /// title). This is the live signal — it flips back to `false`
+    /// the moment Codex exits or rewrites the title to something
+    /// that doesn't contain "codex". Use this for foreground-app
+    /// gating (mouse protocol resolution, codex_peer fallback) and
+    /// `codex_ever_seen()` for cosmetic indicators that must
+    /// survive Codex's transient task-name title rewrites (#209).
     pub fn is_codex_running(&self) -> bool {
         if let Ok(t) = self.title.lock() {
             title_mentions_client(&t, "codex")
@@ -557,6 +573,21 @@ impl Pane {
     /// signal still get one via `is_claude_running()`.
     pub fn claude_ever_seen(&self) -> bool {
         self.claude_seen.load(Ordering::Relaxed)
+    }
+
+    /// Sticky check: has Codex ever been observed running in this
+    /// pane (by OSC title)? Latches on first match and never resets.
+    /// Mirrors `claude_ever_seen()` and exists for the same reason —
+    /// Codex CLI rewrites its window title to reflect the in-flight
+    /// task, frequently dropping the literal "codex" substring, which
+    /// would otherwise flip the cosmetic indicators (border accent,
+    /// pane label, tab title decoration) off mid-session. See #209.
+    ///
+    /// Foreground-app gating (mouse protocol resolution,
+    /// `pane_expects_codex_peer_delivery` fallback) still calls
+    /// `is_codex_running()` so it sees the honest current state.
+    pub fn codex_ever_seen(&self) -> bool {
+        self.codex_seen.load(Ordering::Relaxed)
     }
 
     /// Whether it is safe to synthesize a shell command line into this
@@ -868,6 +899,7 @@ fn pty_reader_thread(
     scrollback_count: Arc<std::sync::atomic::AtomicUsize>,
     prompt_seen: Arc<AtomicBool>,
     claude_seen: Arc<AtomicBool>,
+    codex_seen: Arc<AtomicBool>,
     mouse_protocol_cache: Arc<Mutex<Option<CachedMouseProtocol>>>,
     alternate_scroll_mode: Arc<AtomicBool>,
     pane_id: usize,
@@ -918,8 +950,12 @@ fn pty_reader_thread(
                     // and the literal "claude" frequently drops out)
                     // do not flip `is_claude_running()` to false and
                     // hide the hardware caret. See `Pane::claude_seen`.
-                    if new_title.to_lowercase().contains("claude") {
+                    let lower = new_title.to_lowercase();
+                    if lower.contains("claude") {
                         claude_seen.store(true, Ordering::Relaxed);
+                    }
+                    if lower.contains("codex") {
+                        codex_seen.store(true, Ordering::Relaxed);
                     }
                     if let Ok(mut t) = title.lock() {
                         *t = new_title;

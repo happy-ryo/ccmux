@@ -363,8 +363,17 @@ impl App {
     }
 
     pub(crate) fn pane_expects_codex_peer_delivery(&self, ws_index: usize, pane_id: usize) -> bool {
-        if self.peer_client_kinds.get(&pane_id) == Some(&PeerClientKind::Codex) {
-            return true;
+        // Registration is authoritative when present. Without this
+        // short-circuit a Claude-registered pane whose current OSC
+        // title transiently contains the substring "codex" (very
+        // common for orchestration workers debugging Codex-related
+        // issues) would fall through to the title heuristic and be
+        // mis-classified as a Codex recipient — see issue #209's
+        // discussion of the related #208 regression.
+        match self.peer_client_kinds.get(&pane_id) {
+            Some(PeerClientKind::Codex) => return true,
+            Some(PeerClientKind::Claude) => return false,
+            None => {}
         }
         self.workspaces[ws_index]
             .panes
