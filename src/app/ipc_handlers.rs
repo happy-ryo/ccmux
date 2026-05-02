@@ -18,6 +18,7 @@ impl App {
                     let cwd = pane.map(|p| p.cwd.to_string_lossy().to_string());
                     let kind = self.peer_client_kinds.get(&id).copied();
                     let rect = rect_by_id.get(&id).copied().unwrap_or_default();
+                    let summary = pane.and_then(|p| p.summary.clone());
                     infos.push(PaneInfo {
                         id,
                         name: name_by_id.get(&id).cloned(),
@@ -30,6 +31,7 @@ impl App {
                         cwd,
                         kind,
                         receive_mode: kind.map(|k| k.receive_mode()),
+                        summary,
                     });
                 }
                 let _ = reply.send(infos);
@@ -113,6 +115,14 @@ impl App {
                 let result = self.handle_set_pane_identity(&target, name, role);
                 let _ = reply.send(result);
             }
+            AppCommand::SetSummary {
+                pane_id,
+                summary,
+                reply,
+            } => {
+                let result = self.handle_set_summary(pane_id, summary);
+                let _ = reply.send(result);
+            }
         }
     }
 
@@ -154,6 +164,7 @@ impl App {
                         .get(&id)
                         .copied()
                         .map(|k| k.receive_mode()),
+                    summary: pane.and_then(|p| p.summary.clone()),
                 }
             })
             .collect();
@@ -261,6 +272,84 @@ impl App {
                 .get(&pane_id)
                 .copied()
                 .map(|k| k.receive_mode()),
+            summary: pane.summary.clone(),
+        })
+    }
+
+    /// Set or clear the per-pane summary published by the MCP
+    /// `set_summary` tool. Empty input clears; >256-`chars` input is
+    /// rejected before any mutation. Returns the updated [`PaneInfo`]
+    /// so the caller can confirm.
+    pub(crate) fn handle_set_summary(
+        &mut self,
+        pane_id: usize,
+        summary: String,
+    ) -> std::result::Result<PaneInfo, ipc::CodedError> {
+        // Cap on `chars()` (Unicode scalar values), not bytes — gives
+        // multi-byte scripts the same effective ceiling as ASCII.
+        const MAX_SUMMARY_CHARS: usize = 256;
+        if summary.chars().count() > MAX_SUMMARY_CHARS {
+            return Err(ipc::CodedError::new(
+                ipc::err_code::SUMMARY_TOO_LONG,
+                format!(
+                    "summary is {} chars; max is {MAX_SUMMARY_CHARS}",
+                    summary.chars().count()
+                ),
+            ));
+        }
+        let (ws_idx, pane_id) = self
+            .resolve_pane_across_workspaces(&PaneRef::Id(pane_id))
+            .ok_or_else(|| {
+                ipc::CodedError::new(
+                    ipc::err_code::PANE_NOT_FOUND,
+                    format!("caller pane {pane_id} not found in any workspace"),
+                )
+            })?;
+        let ws = &mut self.workspaces[ws_idx];
+        let pane = ws.panes.get_mut(&pane_id).ok_or_else(|| {
+            ipc::CodedError::new(ipc::err_code::PANE_VANISHED, "pane vanished mid-update")
+        })?;
+        // Empty string clears the summary (round-trips to None on the
+        // wire so callers see "no summary" via skip_serializing_if).
+        pane.summary = if summary.is_empty() {
+            None
+        } else {
+            Some(summary)
+        };
+        self.dirty = true;
+
+        let ws = &self.workspaces[ws_idx];
+        let name_for_pane = ws
+            .pane_names
+            .iter()
+            .find(|(_, &id)| id == pane_id)
+            .map(|(n, _)| n.clone());
+        let pane = ws.panes.get(&pane_id).ok_or_else(|| {
+            ipc::CodedError::new(ipc::err_code::PANE_VANISHED, "pane vanished mid-update")
+        })?;
+        let rect = ws
+            .last_pane_rects
+            .iter()
+            .find(|(id, _)| *id == pane_id)
+            .map(|(_, r)| *r)
+            .unwrap_or_default();
+        Ok(PaneInfo {
+            id: pane_id,
+            name: name_for_pane,
+            role: pane.role.clone(),
+            focused: ws.focused_pane_id == pane_id,
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            cwd: Some(pane.cwd.to_string_lossy().to_string()),
+            kind: self.peer_client_kinds.get(&pane_id).copied(),
+            receive_mode: self
+                .peer_client_kinds
+                .get(&pane_id)
+                .copied()
+                .map(|k| k.receive_mode()),
+            summary: pane.summary.clone(),
         })
     }
 

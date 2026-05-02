@@ -305,7 +305,7 @@ _Peer messaging:_
 | `list_peers` | Lists other panes in the caller's tab. Caller is excluded. |
 | `send_message(to_id, message)` | Delivers to a same-tab peer by numeric id or stable name. Silent no-op for targets outside the tab — callers cannot enumerate other tabs. |
 | `check_messages` | Drain queued peer messages waiting for this client. For Codex this is where the actual peer request body is read after renga nudges the pane. |
-| `set_summary` | v1 stub. renga uses pane name / role as the summary substitute. |
+| `set_summary(summary)` | Set or clear the calling pane's 1-2 sentence summary. Surfaced on every `list_panes` / `list_peers` entry. Empty string clears; max 256 chars (`[summary_too_long]`). |
 
 _Pane control (same tab, except `new_tab`):_
 
@@ -437,6 +437,16 @@ src/
 - Per-PTY reader threads with mpsc channel to main event loop
 - OSC 7 detection for automatic cd tracking
 - Dirty-flag rendering for minimal CPU usage when idle
+
+## Stability
+
+renga is approaching its v1.0 API freeze. The contract that v1.0 promises to
+keep stable — across MCP tools, CLI, IPC, and config/layout/env — is defined
+in [`docs/api-surface-v1.0.md`](./docs/api-surface-v1.0.md). The semver rules
+that govern breaking and additive changes are in
+[`docs/semver-policy.md`](./docs/semver-policy.md). Pre-1.0 releases (`0.y.z`)
+do not yet make these promises; downstream tooling that wants the freeze
+guarantees should pin to `>= 1.0`.
 
 ## Tech Stack
 
