@@ -109,6 +109,68 @@ fn hotkey_mode_bootstraps_visible_claude_input_into_overlay() {
 }
 
 #[test]
+fn ctrl_u_clears_overlay_buffer() {
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_id = app.ws().focused_pane_id;
+    let mut state = crate::input::overlay::OverlayState::new(pane_id);
+    for ch in "hello\nworld".chars() {
+        state.insert_char(ch);
+    }
+    app.overlay = Some(state);
+
+    let ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+    let consumed = crate::input::overlay::handle_overlay_key(&mut app, ctrl_u)
+        .expect("handle_overlay_key Ctrl+U");
+
+    assert!(consumed, "Ctrl+U must be consumed by the overlay handler");
+    let overlay = app.overlay.as_ref().expect("overlay still open");
+    assert!(overlay.buffer.is_empty(), "Ctrl+U should clear the buffer");
+    assert_eq!(overlay.cursor, 0, "cursor should reset to 0 after clear");
+}
+
+#[test]
+fn ctrl_shift_u_also_clears_overlay_buffer() {
+    // Some terminals report Ctrl+U with the Shift bit still set
+    // when the user happens to be holding Shift, and the handler
+    // treats both 'u' and 'U' as the same chord — verify that path.
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_id = app.ws().focused_pane_id;
+    let mut state = crate::input::overlay::OverlayState::new(pane_id);
+    for ch in "draft".chars() {
+        state.insert_char(ch);
+    }
+    app.overlay = Some(state);
+
+    let ctrl_shift_u = KeyEvent::new(
+        KeyCode::Char('U'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+    let consumed = crate::input::overlay::handle_overlay_key(&mut app, ctrl_shift_u)
+        .expect("handle_overlay_key Ctrl+Shift+U");
+
+    assert!(consumed);
+    let overlay = app.overlay.as_ref().expect("overlay still open");
+    assert!(overlay.buffer.is_empty());
+    assert_eq!(overlay.cursor, 0);
+}
+
+#[test]
+fn ctrl_u_on_empty_overlay_is_a_noop() {
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_id = app.ws().focused_pane_id;
+    app.overlay = Some(crate::input::overlay::OverlayState::new(pane_id));
+
+    let ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+    let consumed = crate::input::overlay::handle_overlay_key(&mut app, ctrl_u)
+        .expect("handle_overlay_key Ctrl+U on empty");
+
+    assert!(consumed, "Ctrl+U must always be consumed by the overlay");
+    let overlay = app.overlay.as_ref().expect("overlay still open");
+    assert!(overlay.buffer.is_empty());
+    assert_eq!(overlay.cursor, 0);
+}
+
+#[test]
 fn hotkey_mode_skips_visible_input_bootstrap_for_codex_peer() {
     let mut app = App::new(40, 80).expect("App::new");
     let pane_id = app.ws().focused_pane_id;

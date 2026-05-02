@@ -58,6 +58,12 @@ impl OverlayState {
         self.cursor += 1;
     }
 
+    /// Clear the entire composition buffer and reset the cursor.
+    pub fn clear(&mut self) {
+        self.buffer.clear();
+        self.cursor = 0;
+    }
+
     /// Backspace: remove the char left of the cursor.
     pub fn backspace(&mut self) {
         if self.cursor == 0 {
@@ -570,6 +576,19 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             }
         }
         KeyCode::Char(c) => {
+            // Ctrl+U clears the entire draft (not just the current
+            // line). The binding is borrowed from readline's
+            // "discard" muscle memory but the semantics here are
+            // whole-buffer. Handled before the generic Ctrl/Alt
+            // swallow below so the chord actually reaches us.
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT)
+                && (c == 'u' || c == 'U')
+            {
+                overlay.clear();
+                app.dirty = true;
+                return Ok(true);
+            }
             if key
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
