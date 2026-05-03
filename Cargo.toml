@@ -9,10 +9,10 @@ name = "renga"
 # last is a user-visible behavior change for anyone who opens the
 # IME overlay, hence the minor bump rather than a patch.
 # 0.9.0 ships per-tab peer messaging between Claude Code panes (#97 /
-# #104): `ccmux mcp install` registers a stdio MCP server, `Alt+P`
-# inserts the peer-enabled launch command, and `ccmux split --role
+# #104): `renga mcp install` registers a stdio MCP server, `Alt+P`
+# inserts the peer-enabled launch command, and `renga split --role
 # claude` auto-launches Claude Code with the channel flag. The new
-# keybinding and the user-visible `ccmux mcp` subcommand tree are why
+# keybinding and the user-visible `renga mcp` subcommand tree are why
 # this is a minor bump.
 # 0.10.0 centers on macOS Alt-key ergonomics:
 # - #107 documents the per-terminal Option=Meta setup (WezTerm /
@@ -21,9 +21,9 @@ name = "renga"
 # - #108 adds a first-launch banner on macOS that surfaces the same
 #   setup hint at runtime and links to the README anchor, dismissed
 #   by any key or a 20 s timeout and persisted via a zero-byte
-#   marker at `~/.config/ccmux/.macos_tip_dismissed`. Two new
+#   marker at `~/.config/renga/.macos_tip_dismissed`. Two new
 #   override flags (`--no-macos-tip` / `--show-macos-tip`) and the
-#   `CCMUX_NO_MACOS_TIP` env var are the user-visible surface. The
+#   `RENGA_NO_MACOS_TIP` env var are the user-visible surface. The
 #   landing page (`lp/index.html` / `lp/ja.html`) also grows a
 #   dedicated "macOS setup: Option as Meta" section so visitors can
 #   read the configuration before installing.
@@ -42,17 +42,17 @@ name = "renga"
 # (#112). Overlay-open dimensions are visible behavior so this is a
 # minor bump, not a patch.
 # 0.13.0 brings the peer MCP pane-control tool suite and the Alt+P
-# claude auto-upgrade (#114): the `ccmux-peers` MCP server gains
+# claude auto-upgrade (#114): the `renga-peers` MCP server gains
 # `spawn_pane` / `close_pane` / `focus_pane` / `list_panes` / `new_tab`
 # so orchestrators can manage the layout without shelling out, and any
 # bare `claude` command the MCP is asked to run is rewritten to the
 # peer-enabled form so the spawned instance joins the channel. The new
 # tools and the implicit rewrite are visible behavior for anyone using
 # the MCP, hence the minor bump.
-# 0.14.0 closes Epic #119: the `ccmux-peers` MCP grows three more
+# 0.14.0 closes Epic #119: the `renga-peers` MCP grows three more
 # tools so downstream orchestrators can drop every remaining
-# `Bash(ccmux *)` permission. `inspect_pane` (#116 / #121) exposes
-# `ccmux inspect` screen snapshots with a text or grid rendering;
+# `Bash(renga *)` permission. `inspect_pane` (#116 / #121) exposes
+# `renga inspect` screen snapshots with a text or grid rendering;
 # `poll_events` (#117 / #120) surfaces pane lifecycle events
 # (pane_started / pane_exited / events_dropped) via a cursor-based
 # long-poll with an optional `types` filter; `send_keys` (#118 /
@@ -79,11 +79,11 @@ name = "renga"
 # cursor is actually hidden; new regression test covers the gating
 # helper. Patch bump — pure bug fix on top of 0.15.1.
 # 0.16.0 adds structured cwd support to pane creation APIs (#135 / #140):
-# spawn_pane / new_tab / ccmux split / ccmux new-tab / layout TOML all accept
+# spawn_pane / new_tab / renga split / renga new-tab / layout TOML all accept
 # an optional `cwd` field, PaneInfo.cwd is surfaced by list_panes, and invalid
 # cwd fails with err_code::CWD_INVALID before any layout mutation. Minor bump
 # because it's a new API surface, not a bug fix.
-# 0.17.0 adds set_pane_identity MCP tool and ccmux rename CLI (#136 / #142)
+# 0.17.0 adds set_pane_identity MCP tool and renga rename CLI (#136 / #142)
 # for renaming / (re)assigning name / role on existing panes. Minor bump
 # because it's a new API surface, not a bug fix.
 # 0.18.0 adds spawn_claude_pane MCP tool (#137 / #144) for structured
@@ -129,7 +129,7 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 # 2.4.2 removes the `CannotUnwind` guard from `exsync_op`. On 2.4.0 a
-# Win32 write failure during IPC — normal when a `ccmux events` client
+# Win32 write failure during IPC — normal when a `renga events` client
 # disconnects ahead of the 30 s heartbeat — propagated via `?` before
 # the guard's `.end()` ran, so its `Drop` aborted the whole TUI via
 # `std::process::abort()` / `__fastfail`. Silent death, no panic. Pin
