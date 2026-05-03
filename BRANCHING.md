@@ -43,7 +43,7 @@ gh pr create --base main
 
 ### 上流から cherry-pick する (任意・必要時のみ)
 
-定期的な「上流 sync」は行いません。renga と ccmux はもう独立した実装系列です。
+定期的な「上流 sync」は行いません。renga と upstream ccmux はもう独立した実装系列です。
 ただし、上流に明らかに有用なバグ修正や小さな改善があれば、その単発 commit を選んで取り込むことはあります。
 
 ```bash
