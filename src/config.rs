@@ -23,7 +23,7 @@ pub struct Config {
 /// Top-level UI settings. Currently only carries the language pick;
 /// future display-affecting options (theme overrides, etc.) can hang
 /// off the same section.
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
     /// UI language for status bar hints and preview error messages.
@@ -33,6 +33,21 @@ pub struct UiConfig {
     /// `[ime] mode` convention is lowercase and we don't want a fat-
     /// finger to fail the whole config parse silently.
     pub lang: crate::i18n::UiLang,
+    /// Main event-loop target rate. This drives the crossterm poll
+    /// timeout used while the TUI is idle, so higher values reduce
+    /// input latency and make animations smoother at the cost of more
+    /// wakeups. `0` is clamped to [`MIN_UI_FPS`] so a bad config or
+    /// CLI override never turns into a busy-spin.
+    pub fps: u16,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            lang: crate::i18n::UiLang::Auto,
+            fps: DEFAULT_UI_FPS,
+        }
+    }
 }
 
 /// IME overlay settings. See Issue #39 for the full mode design;
@@ -88,6 +103,14 @@ impl Default for ImeConfig {
 /// periodic repaint becomes a near-continuous storm that defeats the
 /// point of freezing in the first place.
 pub const MIN_OVERLAY_CATCHUP_MS: u64 = 100;
+
+/// Default main-loop rate used for ordinary event polling.
+pub const DEFAULT_UI_FPS: u16 = 30;
+
+/// Lower bound for user-provided FPS overrides. `0` is treated as a
+/// fat-finger rather than meaning "unlimited", because the latter
+/// would degrade into a busy loop.
+pub const MIN_UI_FPS: u16 = 1;
 
 /// How Ctrl+; behaves in a focused pane.
 ///
@@ -203,6 +226,7 @@ impl Config {
         freeze_panes_on_overlay: Option<bool>,
         overlay_catchup_ms: Option<u64>,
         ui_lang: Option<crate::i18n::UiLang>,
+        ui_fps: Option<u16>,
     ) {
         if let Some(mode) = ime_mode {
             self.ime.mode = mode;
@@ -216,11 +240,17 @@ impl Config {
         if let Some(lang) = ui_lang {
             self.ui.lang = lang;
         }
+        if let Some(fps) = ui_fps {
+            self.ui.fps = fps;
+        }
         // Clamp any non-zero value regardless of origin so the main
         // loop never sees a sub-floor interval.
         if self.ime.overlay_catchup_ms != 0 && self.ime.overlay_catchup_ms < MIN_OVERLAY_CATCHUP_MS
         {
             self.ime.overlay_catchup_ms = MIN_OVERLAY_CATCHUP_MS;
+        }
+        if self.ui.fps < MIN_UI_FPS {
+            self.ui.fps = MIN_UI_FPS;
         }
     }
 }
@@ -330,7 +360,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(Some(ImeMode::Off), None, None, None);
+        cfg.apply_cli_overrides(Some(ImeMode::Off), None, None, None, None);
         assert_eq!(cfg.ime.mode, ImeMode::Off);
     }
 
@@ -343,7 +373,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(None, None, None, None);
+        cfg.apply_cli_overrides(None, None, None, None, None);
         assert_eq!(cfg.ime.mode, ImeMode::Off);
     }
 
@@ -418,11 +448,11 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(None, Some(false), None, None);
+        cfg.apply_cli_overrides(None, Some(false), None, None, None);
         assert!(!cfg.ime.freeze_panes_on_overlay);
 
         let mut cfg2 = Config::default();
-        cfg2.apply_cli_overrides(None, Some(true), None, None);
+        cfg2.apply_cli_overrides(None, Some(true), None, None, None);
         assert!(cfg2.ime.freeze_panes_on_overlay);
     }
 
@@ -457,19 +487,19 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(None, None, Some(3000), None);
+        cfg.apply_cli_overrides(None, None, Some(3000), None, None);
         assert_eq!(cfg.ime.overlay_catchup_ms, 3000);
 
         let mut cfg2 = Config::default();
         // Non-zero sub-floor value must be clamped up.
-        cfg2.apply_cli_overrides(None, None, Some(10), None);
+        cfg2.apply_cli_overrides(None, None, Some(10), None, None);
         assert_eq!(cfg2.ime.overlay_catchup_ms, MIN_OVERLAY_CATCHUP_MS);
 
         // Zero must stay zero (means "disabled") even when the default
         // is a non-zero value — an explicit `--ime-overlay-catchup-ms 0`
         // must still give a pure freeze.
         let mut cfg3 = Config::default();
-        cfg3.apply_cli_overrides(None, None, Some(0), None);
+        cfg3.apply_cli_overrides(None, None, Some(0), None, None);
         assert_eq!(cfg3.ime.overlay_catchup_ms, 0);
     }
 
@@ -491,6 +521,12 @@ mod tests {
     fn ui_lang_defaults_to_auto() {
         let cfg = Config::default();
         assert_eq!(cfg.ui.lang, crate::i18n::UiLang::Auto);
+    }
+
+    #[test]
+    fn ui_fps_defaults_to_30() {
+        let cfg = Config::default();
+        assert_eq!(cfg.ui.fps, DEFAULT_UI_FPS);
     }
 
     #[test]
@@ -538,6 +574,35 @@ mod tests {
     }
 
     #[test]
+    fn parses_ui_fps_from_toml() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [ui]
+            fps = 60
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.ui.fps, 60);
+    }
+
+    #[test]
+    fn cli_ui_fps_beats_file_and_clamps_zero() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [ui]
+            fps = 45
+            "#,
+        )
+        .unwrap();
+        cfg.apply_cli_overrides(None, None, None, None, Some(60));
+        assert_eq!(cfg.ui.fps, 60);
+
+        let mut cfg2 = Config::default();
+        cfg2.apply_cli_overrides(None, None, None, None, Some(0));
+        assert_eq!(cfg2.ui.fps, MIN_UI_FPS);
+    }
+
+    #[test]
     fn rejects_unknown_ui_lang_value() {
         // An unknown value must bubble up as a parse error instead of
         // silently falling through to a default — otherwise a typo
@@ -564,7 +629,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(None, None, None, Some(crate::i18n::UiLang::En));
+        cfg.apply_cli_overrides(None, None, None, Some(crate::i18n::UiLang::En), None);
         assert_eq!(cfg.ui.lang, crate::i18n::UiLang::En);
     }
 
@@ -577,7 +642,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        cfg.apply_cli_overrides(None, None, None, None);
+        cfg.apply_cli_overrides(None, None, None, None, None);
         assert_eq!(cfg.ui.lang, crate::i18n::UiLang::En);
     }
 }

@@ -75,6 +75,14 @@ pub struct Cli {
     #[arg(long, value_name = "LANG", value_enum, ignore_case = true)]
     pub lang: Option<crate::i18n::UiLang>,
 
+    /// Main event-loop target rate for ordinary rendering / input
+    /// polling. Higher values reduce idle input latency and make
+    /// animations smoother at the cost of more wakeups. Overrides
+    /// `[ui] fps` in config.toml. `0` is accepted here and clamped to
+    /// `1` at runtime to avoid a busy loop.
+    #[arg(long, value_name = "FPS")]
+    pub fps: Option<u16>,
+
     /// Minimum columns each child pane must retain after a vertical
     /// split. Splits that would produce a narrower child are refused.
     /// A value of `0` is clamped to `1` at runtime to avoid degenerate
@@ -1016,6 +1024,12 @@ mod tests {
     }
 
     #[test]
+    fn fps_defaults_to_none() {
+        let cli = Cli::try_parse_from(["renga"]).unwrap();
+        assert_eq!(cli.fps, None);
+    }
+
+    #[test]
     fn parses_lang_auto_ja_en() {
         let cli = Cli::try_parse_from(["renga", "--lang", "auto"]).unwrap();
         assert_eq!(cli.lang, Some(crate::i18n::UiLang::Auto));
@@ -1040,6 +1054,15 @@ mod tests {
     fn rejects_unknown_lang() {
         assert!(Cli::try_parse_from(["renga", "--lang", "zh"]).is_err());
         assert!(Cli::try_parse_from(["renga", "--lang", "banana"]).is_err());
+    }
+
+    #[test]
+    fn parses_fps_override_and_zero() {
+        let cli = Cli::try_parse_from(["renga", "--fps", "60"]).unwrap();
+        assert_eq!(cli.fps, Some(60));
+
+        let cli = Cli::try_parse_from(["renga", "--fps", "0"]).unwrap();
+        assert_eq!(cli.fps, Some(0));
     }
 
     #[test]
