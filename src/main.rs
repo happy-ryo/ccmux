@@ -147,7 +147,9 @@ fn main() -> Result<()> {
         cli.ime_freeze_panes,
         cli.ime_overlay_catchup_ms,
         cli.lang,
+        cli.fps,
     );
+    let event_poll_timeout = Duration::from_secs_f64(1.0 / f64::from(user_config.ui.fps));
 
     // If a layout was requested and its root node is a single pane
     // with an explicit cwd, pre-load the layout so we can spawn the
@@ -226,7 +228,7 @@ fn main() -> Result<()> {
     }
 
     // Main event loop
-    let result = run_event_loop(&mut terminal, &mut app);
+    let result = run_event_loop(&mut terminal, &mut app, event_poll_timeout);
 
     // Cleanup
     app.shutdown();
@@ -365,6 +367,7 @@ fn run_events(
 fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut app::App,
+    event_poll_timeout: Duration,
 ) -> Result<()> {
     let mut paste_buffer: Vec<u8> = Vec::new();
 
@@ -449,8 +452,8 @@ fn run_event_loop(
             break;
         }
 
-        // Poll for crossterm events with a short timeout (~30fps)
-        if event::poll(Duration::from_millis(33))? {
+        // Poll for crossterm events at the configured idle rate.
+        if event::poll(event_poll_timeout)? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     let consumed = app.handle_key_event(key)?;
