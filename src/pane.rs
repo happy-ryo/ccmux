@@ -608,7 +608,25 @@ impl Pane {
     }
 
     /// Kill the PTY child process.
+    ///
+    /// On Windows, `portable-pty`'s `Child::kill` is a bare
+    /// `TerminateProcess` against the immediate shell only — any
+    /// grandchildren (e.g. `claude`/`node.exe` launched from the shell
+    /// via `pending_startup`) survive and keep open handles on the
+    /// pane's working directory. That blocks `git worktree remove` /
+    /// `rmdir` until the renga process itself exits (#214). Walk the
+    /// tree first via `taskkill /F /T` so directory handles in the
+    /// pane's cwd are released as soon as the pane is closed.
     pub fn kill(&mut self) {
+        #[cfg(windows)]
+        if let Some(pid) = self.child.process_id() {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .stdin(std::process::Stdio::null())
+                .status();
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
