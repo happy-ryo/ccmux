@@ -608,9 +608,39 @@ impl Pane {
     }
 
     /// Kill the PTY child process.
+    ///
+    /// On Windows, `portable-pty`'s `Child::kill` is a bare
+    /// `TerminateProcess` against the immediate shell only — any
+    /// grandchildren (e.g. `claude`/`node.exe` launched from the shell
+    /// via `pending_startup`) survive and keep open handles on the
+    /// pane's working directory. That blocks `git worktree remove` /
+    /// `rmdir` until the renga process itself exits (#214). Walk the
+    /// tree first via `taskkill /F /T` so directory handles in the
+    /// pane's cwd are released as soon as the pane is closed.
     pub fn kill(&mut self) {
-        let _ = self.child.kill();
+        // `try_wait` distinguishes "child still alive, needs killing"
+        // from "child already exited, just needs reaping" — important
+        // because `pane.exited` only signals PTY EOF was observed, not
+        // that the child has been waited on, so naive short-circuiting
+        // on `exited` would zombie the shell on Unix Drop. The taskkill
+        // / `child.kill()` path is skipped when the process is already
+        // gone so the close+Drop pair doesn't double-spawn taskkill on
+        // Windows (#214 review), but `wait()` always runs to reap.
+        let alive = !matches!(self.child.try_wait(), Ok(Some(_)));
+        if alive {
+            #[cfg(windows)]
+            if let Some(pid) = self.child.process_id() {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .stdin(std::process::Stdio::null())
+                    .status();
+            }
+            let _ = self.child.kill();
+        }
         let _ = self.child.wait();
+        self.exited = true;
     }
 
     /// Queue a command to be written into the PTY once the shell prompt
