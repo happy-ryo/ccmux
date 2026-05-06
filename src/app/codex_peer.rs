@@ -200,9 +200,10 @@ impl App {
     /// Route `body` from `from_pane` to `target` when both share a
     /// workspace. Cross-tab targets are silently dropped so the MCP
     /// server cannot enumerate panes in other tabs by probing ids.
-    /// Self-sends are also a no-op — the spike binary proved the
-    /// loopback rendering already; in production self-send is always
-    /// a mistake.
+    /// Self-sends loop back to the sender pane: tooling like
+    /// claude-org-ja's peer_notify resolves "secretary" from a shell
+    /// running inside the secretary pane, and a silent drop there
+    /// breaks the notification round-trip (see renga#215).
     pub(crate) fn handle_peer_send(
         &mut self,
         from_pane: usize,
@@ -221,7 +222,7 @@ impl App {
             Some(pair) => pair,
             None => return Ok(()),
         };
-        if sender_ws != target_ws || target_id == from_pane {
+        if sender_ws != target_ws {
             return Ok(());
         }
         self.materialize_unfocused_codex_peer_notification();
