@@ -618,6 +618,14 @@ impl Pane {
     /// tree first via `taskkill /F /T` so directory handles in the
     /// pane's cwd are released as soon as the pane is closed.
     pub fn kill(&mut self) {
+        // Short-circuit on the second pass through an already-killed
+        // pane: `remove_pane_from_layout` calls `kill()` explicitly and
+        // `Drop` calls it again on the same value (#214 review). The
+        // PTY EOF path also flips `exited` before `Pane` is dropped, so
+        // natural exits skip the spawn entirely.
+        if self.exited {
+            return;
+        }
         #[cfg(windows)]
         if let Some(pid) = self.child.process_id() {
             let _ = std::process::Command::new("taskkill")
@@ -629,6 +637,7 @@ impl Pane {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+        self.exited = true;
     }
 
     /// Queue a command to be written into the PTY once the shell prompt
