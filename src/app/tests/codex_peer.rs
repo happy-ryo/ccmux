@@ -134,6 +134,46 @@ fn handle_peer_send_emits_peer_inbox_to_sibling_in_same_tab() {
 }
 
 #[test]
+fn handle_peer_send_loops_back_to_sender_pane() {
+    // Regression for renga#215: when the resolved target is the
+    // sender pane itself (e.g. claude-org-ja's peer_notify resolving
+    // "secretary" from a shell inside the secretary pane), the
+    // handler must still emit PeerInbox so the local check_messages
+    // loop picks it up. Prior to the fix the self-send was silently
+    // dropped while JSON-RPC reported Delivered.
+    let mut app = App::new(40, 80).expect("App::new");
+    let (_sub_id, rx) = app.event_bus.subscribe();
+    let sender_id = app.ws().focused_pane_id;
+    while rx.try_recv().is_ok() {}
+
+    app.handle_peer_send(
+        sender_id,
+        &ipc::PaneRef::Id(sender_id),
+        "self ping".to_string(),
+    )
+    .expect("self send");
+
+    let mut found = false;
+    while let Ok(ev) = rx.try_recv() {
+        if let ipc::Event::PeerInbox {
+            target_pane,
+            from_pane,
+            body,
+            ..
+        } = ev
+        {
+            assert_eq!(target_pane, sender_id);
+            assert_eq!(from_pane, sender_id);
+            assert_eq!(body, "self ping");
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "expected PeerInbox event for self-send (renga#215)");
+    app.shutdown();
+}
+
+#[test]
 fn handle_peer_send_silently_drops_cross_tab_target() {
     // Cross-tab delivery is a silent no-op by design — callers
     // cannot enumerate panes in other tabs by probing ids. A
