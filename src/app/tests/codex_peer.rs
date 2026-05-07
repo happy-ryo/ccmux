@@ -854,3 +854,136 @@ fn handle_peer_list_excludes_caller_and_lists_siblings() {
     );
     app.shutdown();
 }
+
+#[test]
+fn handle_peer_send_dedupes_identical_payload_within_window() {
+    // renga#221 acceptance criterion #2: re-sending the exact same
+    // payload from the same peer within the dedupe window must not
+    // produce two PeerInbox events. Otherwise a chatty dispatcher /
+    // worker can paper the receiver's transcript with phantom
+    // Human: turns.
+    let mut app = App::new(40, 80).expect("App::new");
+    let (_sub_id, rx) = app.event_bus.subscribe();
+    let sender_id = app.ws().focused_pane_id;
+    let sibling_id = app
+        .handle_split(
+            &ipc::PaneRef::Focused,
+            ipc::Direction::Vertical,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("split succeeds");
+    while rx.try_recv().is_ok() {}
+
+    app.handle_peer_send(sender_id, &ipc::PaneRef::Id(sibling_id), "ack".to_string())
+        .expect("first send");
+    app.handle_peer_send(sender_id, &ipc::PaneRef::Id(sibling_id), "ack".to_string())
+        .expect("second send (duplicate)");
+
+    let mut peer_inboxes = 0usize;
+    while let Ok(ev) = rx.try_recv() {
+        if let ipc::Event::PeerInbox { body, .. } = ev {
+            assert_eq!(body, "ack");
+            peer_inboxes += 1;
+        }
+    }
+    assert_eq!(
+        peer_inboxes, 1,
+        "duplicate identical payload should collapse to a single PeerInbox"
+    );
+    app.shutdown();
+}
+
+#[test]
+fn handle_peer_send_distinct_bodies_are_not_deduped() {
+    // Sanity check: dedupe is keyed on body, so two genuinely
+    // distinct messages must both go through. Without this, the
+    // "every reply gets the same prefix" pattern would silently
+    // swallow follow-ups.
+    let mut app = App::new(40, 80).expect("App::new");
+    let (_sub_id, rx) = app.event_bus.subscribe();
+    let sender_id = app.ws().focused_pane_id;
+    let sibling_id = app
+        .handle_split(
+            &ipc::PaneRef::Focused,
+            ipc::Direction::Vertical,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("split succeeds");
+    while rx.try_recv().is_ok() {}
+
+    app.handle_peer_send(
+        sender_id,
+        &ipc::PaneRef::Id(sibling_id),
+        "first".to_string(),
+    )
+    .expect("first send");
+    app.handle_peer_send(
+        sender_id,
+        &ipc::PaneRef::Id(sibling_id),
+        "second".to_string(),
+    )
+    .expect("second send");
+
+    let mut bodies = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        if let ipc::Event::PeerInbox { body, .. } = ev {
+            bodies.push(body);
+        }
+    }
+    assert_eq!(bodies, vec!["first", "second"]);
+    app.shutdown();
+}
+
+#[test]
+fn handle_peer_send_dedupe_does_not_collapse_distinct_senders() {
+    // Dedupe key is (target, from, body). Two different peers
+    // sending the same text must both deliver, since they really
+    // are independent messages in the human sense.
+    let mut app = App::new(40, 80).expect("App::new");
+    let (_sub_id, rx) = app.event_bus.subscribe();
+    let sender_a = app.ws().focused_pane_id;
+    let sender_b = app
+        .handle_split(
+            &ipc::PaneRef::Focused,
+            ipc::Direction::Vertical,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("split succeeds (sender_b)");
+    let target = app
+        .handle_split(
+            &ipc::PaneRef::Id(sender_a),
+            ipc::Direction::Horizontal,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("split succeeds (target)");
+    while rx.try_recv().is_ok() {}
+
+    app.handle_peer_send(sender_a, &ipc::PaneRef::Id(target), "ping".to_string())
+        .expect("a -> target");
+    app.handle_peer_send(sender_b, &ipc::PaneRef::Id(target), "ping".to_string())
+        .expect("b -> target");
+
+    let mut count = 0usize;
+    while let Ok(ev) = rx.try_recv() {
+        if let ipc::Event::PeerInbox { .. } = ev {
+            count += 1;
+        }
+    }
+    assert_eq!(
+        count, 2,
+        "same body from distinct senders must not collapse into one delivery"
+    );
+    app.shutdown();
+}
