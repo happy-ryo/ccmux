@@ -180,6 +180,12 @@ The pane-local nudge is not a continuously-synchronised banner. It is a one-shot
 
 If `check_messages` returns 0, treat the on-screen nudge as stale. The real inbox is already empty.
 
+### `spawn_codex_pane` fails with `[codex_not_installed]`
+
+The handler verifies up front that Codex's MCP config (`~/.codex/config.toml`) registers the renga-peers entry with `[mcp_servers.renga-peers.env] RENGA_PEER_CLIENT_KIND = "codex"`. If the file is missing/unreadable, the entry is absent, or the env value is missing or different, the call returns JSON-RPC `-32603` carrying the `[codex_not_installed]` marker instead of silently spawning a pane that registers as a `claude` (push) client.
+
+Run `renga mcp install --client codex` once to register the MCP entry. The install path also self-heals an existing entry that lost its `RENGA_PEER_CLIENT_KIND=codex` env var (e.g. from an older renga version), so the same command fixes both "never installed" and "partially installed" states.
+
 ### A new Codex pane asks for approval again
 
 Codex MCP approvals are pane-local. Unlike Claude Code, do not assume one approval automatically propagates to other Codex panes in the same tab.
