@@ -7,7 +7,71 @@ and from v1.0 onward this project adheres to
 [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) under the
 rules in [`docs/semver-policy.md`](./docs/semver-policy.md).
 
-## [Unreleased] — v1.0.0 (planned)
+## [1.1.0] — 2026-05-07
+
+First release after the v1.0 API surface freeze. Two new optional features
+ship without touching the frozen surface, alongside four bug fixes.
+
+### Added
+
+- **`--fps` CLI flag and `[ui] fps` config key** for tuning the main
+  event-loop target rate. Higher values reduce idle input latency at the
+  cost of more wakeups; `0` is accepted and clamped to `1` at runtime to
+  avoid a busy loop. The CLI flag overrides the config key; default
+  behavior is unchanged when neither is set. Adds `--fps` to the frozen
+  CLI surface as a new optional flag and `[ui] fps` to the frozen config
+  schema as a new optional key (#213).
+- **Ctrl+U IME overlay shortcut** that discards the entire composition
+  buffer in one keystroke (multi-line, not just the current line). Footer
+  hint updated; lowercase / Shift / empty-buffer paths covered by tests
+  (#211).
+
+### Fixed
+
+- **Self-targeted peer sends now emit `Event::PeerInbox` instead of being
+  silently dropped.** `handle_peer_send` previously returned `Ok` without
+  emitting the event when `target_id == from_pane`, so JSON-RPC reported
+  `Delivered` while the recipient never observed the message. The
+  self-send guard is removed; cross-tab silence (the actual security
+  boundary) is preserved (#215, #217).
+- **Pane close now walks the descendant process tree on Windows.**
+  `portable-pty`'s `Child::kill` only terminates the immediate shell, so
+  grandchildren (e.g. `claude` / `node.exe` started via
+  `spawn_claude_pane`'s queued startup command) survived close and kept
+  open handles on the pane's working directory, blocking
+  `git worktree remove --force` and `Remove-Item`. `Pane::kill` now
+  invokes `taskkill /F /T /PID <pid>` before delegating to portable-pty,
+  short-circuits when `try_wait()` shows the child has already exited
+  (avoids redundant taskkill from `Drop` after an explicit close), and
+  always calls `wait()` so the child is reaped on every exit pathway —
+  no more zombies on natural Unix exit (#214, #216).
+- **Cosmetic Claude/Codex pane indicators latch across OSC title
+  rewrites.** The per-pane border accent, pane label, and status-bar tab
+  title now key off the sticky `claude_ever_seen()` / `codex_ever_seen()`
+  latches instead of the live title check, since both clients rewrite
+  their OSC 0/2 window titles to in-flight task summaries that frequently
+  drop the literal client name. Foreground-app gating
+  (`shell_accepts_command_injection`, mouse protocol resolution,
+  `codex_peer` fallback) keeps using the live signal where "is the client
+  foreground right now?" is actually needed.
+  `pane_expects_codex_peer_delivery` short-circuits on a registered
+  Claude pane so transient "codex" mentions in a Claude task title cannot
+  mis-route delivery (#209, #210).
+- **Cargo.toml version-history comments and BRANCHING.md no longer
+  reference the legacy `ccmux` binary name.** Comments for 0.9.0,
+  0.10.0, 0.13.0, 0.14.0, 0.16.0, 0.17.0, the interprocess pin comment,
+  the `~/.config/ccmux/.macos_tip_dismissed` path, and the
+  `CCMUX_NO_MACOS_TIP` env var are updated to current `renga` naming.
+  BRANCHING.md "renga と ccmux" is qualified as "upstream ccmux" to
+  disambiguate now that this repo IS renga (#212).
+
+## [1.0.0] — 2026-05-02
+
+API surface freeze release. Defines the v1.0 frozen surface and adopts
+formal semver for all subsequent changes. The Cargo.toml / `npm/package.json`
+version bump was omitted at tag time and is reconciled in 1.1.0; the v1.0.0
+git tag and GitHub Release remain the canonical marker for this surface
+freeze.
 
 ### Added
 
