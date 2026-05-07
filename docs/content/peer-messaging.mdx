@@ -184,6 +184,12 @@ pane-local nudge は queue 状態を常時同期するバナーではなく、`c
 `check_messages` が 0 件なら、それは stale な nudge です。実 inbox 側は空なので、そのまま無視して構いません。
 
 
+### `spawn_codex_pane` が `[codex_not_installed]` で失敗する
+
+ハンドラは事前に Codex の MCP 設定 (`~/.codex/config.toml`) を検査し、`[mcp_servers.renga-peers.env] RENGA_PEER_CLIENT_KIND = "codex"` が登録されていることを確認します。ファイルが無い／読めない、エントリ自体が無い、env 値が不一致のいずれかで JSON-RPC `-32603` を `[codex_not_installed]` マーカー付きで返します（黙って `claude` (push) として再登録される silent bifurcation を防ぐためです）。
+
+`renga mcp install --client codex` を 1 回実行すれば登録されます。env 値だけが欠落した既存エントリ（旧 renga で入れたもの等）も、同じ install コマンドで self-heal するので、未インストール／部分インストールどちらの状態にも同じ手順で対応できます。
+
 ### 新しい Codex pane でまた承認が出る
 
 Codex の MCP 承認は pane ごとです。Claude Code のような「一度許可したら同じタブの別 pane にも伝播する」共有承認は前提にしていません。

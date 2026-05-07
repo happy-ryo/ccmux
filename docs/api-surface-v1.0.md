@@ -165,9 +165,13 @@ is appended after the literal `codex` token.
 
 **Pre-condition**: the user must have run `renga mcp install --client codex`
 so `RENGA_PEER_CLIENT_KIND=codex` is injected into Codex's MCP subprocess env.
-If absent, the new pane registers as `claude` (push) and message delivery
-silently bifurcates. v1.0 freezes the current behavior; tightening the
-detection is tracked as a follow-up (see PR description).
+The handler verifies this up front by inspecting `~/.codex/config.toml` for
+`[mcp_servers.renga-peers.env] RENGA_PEER_CLIENT_KIND = "codex"`. If the file
+is missing/unreadable, the renga-peers entry is absent, or the value differs
+from `"codex"`, the call returns a JSON-RPC `-32603` whose message carries the
+`[codex_not_installed]` marker and the remediation hint
+`renga mcp install --client codex`. Issue #203 — replaces the prior
+silent-bifurcation behavior recorded in v1.0.
 
 ### 1.9 `close_pane` — stable
 
@@ -526,6 +530,7 @@ these as `[<code>] <human message>` in JSON-RPC error message strings.
 | `name_in_use` | `split`, `new_tab`, `set_pane_identity` | Another pane in the same tab holds the requested name. |
 | `name_invalid` | `split`, `new_tab`, `set_pane_identity` | Name empty / all-digits / non-`[A-Za-z0-9_-]`. |
 | `summary_too_long` | `set_summary` | Summary input exceeds 256 Unicode scalar values. Pre-mutation rejection. |
+| `codex_not_installed` | `spawn_codex_pane` | Codex's `~/.codex/config.toml` is missing the renga-peers entry, the file is unreadable, or the `RENGA_PEER_CLIENT_KIND=codex` env-var passthrough is absent. Surfaced from the MCP layer (not `renga::ipc::err_code`); branch on the `[code]` token same as the others. Run `renga mcp install --client codex` to remediate. |
 
 ### 5.2 JSON-RPC numeric codes (Q9)
 
@@ -587,8 +592,6 @@ minor release.
   must use a non-`claude` leading token (e.g. `bash -c '…'`).
 - **Per-call `min_pane_width` / `min_pane_height`** on `spawn_pane` /
   `spawn_claude_pane` / `spawn_codex_pane`. Process-global only.
-- **`spawn_codex_pane` strict env detection**. v1.0 freezes the current
-  silent-bifurcation behavior; tightening is a follow-up.
 - **`peer_*` IPC variant naming as a stable surface**. The peer-routing
   subset of `Request` is reachable from downstream only via the MCP layer
   (§1) and the CLI (§2); the Rust-level variant names are not promised.
@@ -614,6 +617,6 @@ minor release.
 | IPC `Request` variants (§3.3) | 14 |
 | IPC `Response` variants (§3.4) | 4 |
 | IPC `Event` variants (§3.5) | 5 |
-| Error codes (§5.1) | 14 |
+| Error codes (§5.1) | 15 |
 | Config schema sections (§4.1) | 2 |
 | Layout TOML node types (§4.2) | 2 |
