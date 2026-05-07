@@ -1,7 +1,7 @@
 {
   "name": "@suisya-systems/renga",
   "version": "1.1.0",
-  "description": "AI-native terminal for orchestrating multiple Claude Code and Codex agents in one workspace",
+  "description": "Claude Code Multiplexer — manage multiple Claude Code instances in TUI split panes.",
   "bin": {
     "renga": "bin/cli.js"
   },
