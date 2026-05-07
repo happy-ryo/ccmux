@@ -361,6 +361,68 @@ fn codex_config_path() -> Result<PathBuf> {
     Ok(home.join(".codex").join("config.toml"))
 }
 
+/// Verify that `renga mcp install --client codex` has been run by
+/// inspecting `~/.codex/config.toml` for the `[mcp_servers.renga-peers]`
+/// entry and confirming its `[...env]` subtable carries
+/// `RENGA_PEER_CLIENT_KIND = "codex"`. Issue #203: without this, the
+/// freshly spawned codex pane's mcp-peer subprocess falls back to
+/// PeerClientKind::Claude and message delivery silently bifurcates.
+pub(crate) fn verify_codex_renga_peers_install() -> std::result::Result<(), String> {
+    // Returned strings explain *which* check failed; the MCP layer
+    // appends the user-facing remediation command so the hint can't
+    // accidentally drift between this module and the spawn handler.
+    let path =
+        codex_config_path().map_err(|e| format!("could not resolve Codex config path: {e}"))?;
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!("Codex config not found at {}", path.display()));
+        }
+        Err(e) => {
+            return Err(format!(
+                "could not read Codex config at {}: {e}",
+                path.display()
+            ));
+        }
+    };
+    if codex_config_has_renga_peers_kind(&content) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Codex's renga-peers MCP entry at {} is missing `{ENV_CLIENT_KIND}=codex`",
+            path.display()
+        ))
+    }
+}
+
+/// Returns true if `toml_src` declares `RENGA_PEER_CLIENT_KIND = "codex"`
+/// inside the `[mcp_servers.renga-peers.env]` subtable. Substring scan
+/// rather than full TOML parsing — keeps this hot path zero-dep and
+/// matches the rest of `install.rs` style.
+fn codex_config_has_renga_peers_kind(toml_src: &str) -> bool {
+    let header = format!("[{}.env]", codex_server_section_name());
+    let mut in_env = false;
+    for line in toml_src.lines() {
+        let trimmed = line.trim();
+        if !in_env {
+            if trimmed == header {
+                in_env = true;
+            }
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            return false;
+        }
+        if let Some(rest) = trimmed.strip_prefix(ENV_CLIENT_KIND) {
+            let value = rest.trim_start().trim_start_matches('=').trim();
+            if value == "\"codex\"" || value == "'codex'" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn codex_server_section_name() -> String {
     format!("mcp_servers.{SERVER_NAME}")
 }
@@ -754,6 +816,66 @@ mod tests {
         let output = upsert_codex_auto_approve_peer_tools(input).expect("server section");
         assert!(output.contains("[mcp_servers.renga-peers.tools.check_messages]"));
         assert!(output.contains("[mcp_servers.renga-peers.tools.send_message]"));
+    }
+
+    #[test]
+    fn codex_config_has_renga_peers_kind_accepts_double_quoted_codex() {
+        let input = concat!(
+            "[mcp_servers.renga-peers]\n",
+            "command = 'renga'\n",
+            "args = [\"mcp-peer\"]\n",
+            "\n",
+            "[mcp_servers.renga-peers.env]\n",
+            "RENGA_PEER_CLIENT_KIND = \"codex\"\n"
+        );
+        assert!(codex_config_has_renga_peers_kind(input));
+    }
+
+    #[test]
+    fn codex_config_has_renga_peers_kind_accepts_single_quoted_codex() {
+        let input = concat!(
+            "[mcp_servers.renga-peers.env]\n",
+            "RENGA_PEER_CLIENT_KIND = 'codex'\n"
+        );
+        assert!(codex_config_has_renga_peers_kind(input));
+    }
+
+    #[test]
+    fn codex_config_has_renga_peers_kind_rejects_missing_env_section() {
+        let input = concat!(
+            "[mcp_servers.renga-peers]\n",
+            "command = 'renga'\n",
+            "args = [\"mcp-peer\"]\n"
+        );
+        assert!(!codex_config_has_renga_peers_kind(input));
+    }
+
+    #[test]
+    fn codex_config_has_renga_peers_kind_rejects_wrong_value() {
+        let input = concat!(
+            "[mcp_servers.renga-peers.env]\n",
+            "RENGA_PEER_CLIENT_KIND = \"claude\"\n"
+        );
+        assert!(!codex_config_has_renga_peers_kind(input));
+    }
+
+    #[test]
+    fn codex_config_has_renga_peers_kind_rejects_unset_env_section() {
+        let input = concat!("[mcp_servers.renga-peers.env]\n", "RENGA_PANE_ID = \"\"\n");
+        assert!(!codex_config_has_renga_peers_kind(input));
+    }
+
+    #[test]
+    fn codex_config_has_renga_peers_kind_stops_at_next_section() {
+        // The kind line lives outside the renga-peers env subtable —
+        // must not be picked up by a naive substring scan.
+        let input = concat!(
+            "[mcp_servers.renga-peers.env]\n",
+            "\n",
+            "[mcp_servers.other.env]\n",
+            "RENGA_PEER_CLIENT_KIND = \"codex\"\n"
+        );
+        assert!(!codex_config_has_renga_peers_kind(input));
     }
 
     #[test]

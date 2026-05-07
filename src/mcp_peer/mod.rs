@@ -1434,6 +1434,18 @@ fn handle_spawn_claude_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
 }
 
 fn handle_spawn_codex_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
+    handle_spawn_codex_pane_with(id, args, ctx, install::verify_codex_renga_peers_install)
+}
+
+/// Inner form with an injectable verifier so unit tests can drive the
+/// `RENGA_PEER_CLIENT_KIND` check independently of the host machine's
+/// `~/.codex/config.toml`.
+fn handle_spawn_codex_pane_with(
+    id: &Value,
+    args: &Value,
+    ctx: &PeerCtx,
+    verify_codex_install: fn() -> std::result::Result<(), String>,
+) -> Value {
     let direction = match parse_direction(args.get("direction").and_then(|v| v.as_str())) {
         Ok(d) => d,
         Err(msg) => return err_response(id, -32602, &msg),
@@ -1447,6 +1459,27 @@ fn handle_spawn_codex_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
         Err(msg) => return err_response(id, -32602, &msg),
     };
     let command = build_codex_launch_command(&extra_args);
+
+    // Issue #203: refuse to spawn unless Codex's MCP config will
+    // inject `RENGA_PEER_CLIENT_KIND=codex` into the new pane's
+    // mcp-peer subprocess. Otherwise the new pane registers as a
+    // push (claude) client and `send_message` delivery silently
+    // bifurcates from what the orchestrator expects.
+    if let Err(reason) = verify_codex_install() {
+        // Always surface the remediation command — the verifier's
+        // detail string explains *which* check failed (file missing /
+        // entry missing / wrong value), but the user-actionable
+        // recovery is always the same.
+        return err_response(
+            id,
+            -32603,
+            &format!(
+                "renga refused spawn_codex_pane: [codex_not_installed] {reason} \
+                 (run `renga mcp install --client codex` to register Codex \
+                 with `RENGA_PEER_CLIENT_KIND=codex`)"
+            ),
+        );
+    }
 
     let (caller_pane, endpoint) = match require_connected(ctx, id, "spawn codex pane") {
         Ok(t) => t,
@@ -2889,6 +2922,72 @@ mod tests {
             .and_then(|e| e.get("code"))
             .and_then(|c| c.as_i64());
         assert_eq!(err_code, Some(-32602), "resp={resp}");
+    }
+
+    #[test]
+    fn spawn_codex_pane_errors_when_codex_install_missing() {
+        // Issue #203: when ~/.codex/config.toml does not declare
+        // `RENGA_PEER_CLIENT_KIND=codex` for the renga-peers MCP entry,
+        // the spawned codex pane would otherwise register as a `claude`
+        // (push) client. The handler must short-circuit with the
+        // `[codex_not_installed]` marker pointing at
+        // `renga mcp install --client codex`.
+        let ctx = connected_ctx_with(Arc::new((
+            Mutex::new(EventBuffer::default()),
+            Condvar::new(),
+        )));
+        let id = json!(1);
+        fn verify_unset() -> std::result::Result<(), String> {
+            Err("RENGA_PEER_CLIENT_KIND not set in Codex MCP config".to_string())
+        }
+        let resp = handle_spawn_codex_pane_with(
+            &id,
+            &json!({ "direction": "vertical" }),
+            &ctx,
+            verify_unset,
+        );
+        let err = resp.get("error").expect("error envelope");
+        assert_eq!(err.get("code").and_then(|c| c.as_i64()), Some(-32603));
+        let msg = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or_default();
+        assert!(
+            msg.contains("[codex_not_installed]"),
+            "message missing error code: {msg}"
+        );
+        assert!(
+            msg.contains("renga mcp install --client codex"),
+            "message missing remediation hint: {msg}"
+        );
+    }
+
+    #[test]
+    fn spawn_codex_pane_proceeds_when_codex_install_verified() {
+        // Sanity: a passing verifier must not short-circuit before
+        // the regular `require_connected` / Split flow. The test ctx
+        // points at a non-existent endpoint, so the call ultimately
+        // fails with -32603 from `client::send_request`, but it must
+        // *not* be the `[codex_not_installed]` short-circuit.
+        let ctx = connected_ctx_with(Arc::new((
+            Mutex::new(EventBuffer::default()),
+            Condvar::new(),
+        )));
+        let id = json!(1);
+        fn verify_ok() -> std::result::Result<(), String> {
+            Ok(())
+        }
+        let resp =
+            handle_spawn_codex_pane_with(&id, &json!({ "direction": "vertical" }), &ctx, verify_ok);
+        let msg = resp
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or_default();
+        assert!(
+            !msg.contains("[codex_not_installed]"),
+            "verify_ok must not surface codex_not_installed: {msg}"
+        );
     }
 
     #[test]
