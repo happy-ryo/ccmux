@@ -203,6 +203,13 @@ pub struct App {
     /// Focused Codex panes show a local notification overlay instead
     /// of receiving an immediate PTY nudge.
     pub(crate) codex_peer_notification: Option<CodexPeerNotificationState>,
+    /// Recently delivered peer messages, keyed by
+    /// `(target_pane, from_pane, body)`, with the timestamp of last
+    /// delivery. Used by `handle_peer_send` to drop duplicate
+    /// re-sends arriving within `PEER_SEND_DEDUPE_TTL` so a noisy
+    /// dispatcher / worker can't paper the receiver's transcript with
+    /// phantom user-turns. See renga#221 acceptance criterion #2.
+    pub(crate) recent_peer_sends: HashMap<(usize, usize, String), Instant>,
     // Reusable clipboard handle (lazy-initialized)
     pub(crate) clipboard: Option<arboard::Clipboard>,
     // Pane lifecycle event bus shared with IPC subscribers.

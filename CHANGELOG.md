@@ -7,6 +7,29 @@ and from v1.0 onward this project adheres to
 [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) under the
 rules in [`docs/semver-policy.md`](./docs/semver-policy.md).
 
+## [Unreleased]
+
+### Changed
+
+- **Peer channel notifications now lead with a `📡 PEER MESSAGE …
+  NOT FROM USER` banner.** Claude Code injects renga peer messages
+  into a user-slot turn, which the transcript renders under a
+  `Human:` heading. The banner is wrapped around the body in
+  `notifications/claude/channel` so an operator scanning a long
+  transcript can tell at a glance that the line is peer chatter
+  rather than something the human typed. The original body is
+  preserved verbatim after the banner. (#221)
+
+### Fixed
+
+- **`handle_peer_send` now drops duplicate `(target, from, body)`
+  re-sends inside a 5-second window.** Previously a chatty
+  dispatcher / worker that fired the same payload twice in quick
+  succession (duplicate acks, `PR_MERGE_WATCH_TIMEOUT` false fires)
+  produced two phantom `Human:` turns on the receiving Claude pane.
+  The dedupe key includes the sender, so two distinct peers sending
+  the same text still both deliver. (#221)
+
 ## [1.1.0] — 2026-05-07
 
 First release after the v1.0 API surface freeze. Two new optional features

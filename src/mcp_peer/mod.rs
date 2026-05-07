@@ -294,12 +294,19 @@ fn queue_pull_message(inbox: &InboxSink, message: QueuedPeerMessage) {
 /// in the receiver's context. The `source=` attribute is derived by
 /// Claude Code from our `serverInfo.name`, not from this payload, so
 /// `params.meta` here only carries sender metadata.
+///
+/// Claude Code currently injects channel notifications into a
+/// user-slot turn, which the transcript renders with a `Human:`
+/// prefix even though the content is from a peer. To keep operators
+/// from mistaking peer chatter for things the human typed, the body
+/// is wrapped with a loud banner that's obviously machine-generated
+/// (uppercase, emoji, explicit "not from user"). See renga#221.
 fn channel_notification(body: &str, from_id: &str, from_name: Option<&str>) -> Value {
     json!({
         "jsonrpc": "2.0",
         "method": "notifications/claude/channel",
         "params": {
-            "content": body,
+            "content": peer_banner_wrap(body, from_id, from_name),
             "meta": {
                 "from_id": from_id,
                 "from_name": from_name.unwrap_or(""),
@@ -307,6 +314,23 @@ fn channel_notification(body: &str, from_id: &str, from_name: Option<&str>) -> V
             }
         }
     })
+}
+
+/// Prepend a visible "this is a peer message, not user input" banner
+/// to a peer-channel body. Renga-side wrap of choice for renga#221:
+/// the receiving Claude Code displays channel notifications under a
+/// `Human:` heading, so without an obvious in-body marker, peer
+/// chatter looks like the human typed it. The banner is uppercase
+/// with an emoji and an explicit disclaimer so a human scanning the
+/// transcript can tell at a glance.
+fn peer_banner_wrap(body: &str, from_id: &str, from_name: Option<&str>) -> String {
+    let name = from_name.unwrap_or("").trim();
+    let header = if name.is_empty() {
+        format!("📡 PEER MESSAGE — from id={from_id} — NOT FROM USER")
+    } else {
+        format!("📡 PEER MESSAGE — from {name} (id={from_id}) — NOT FROM USER")
+    };
+    format!("{header}\n\n{body}")
 }
 
 fn now_ts_string() -> String {
@@ -3937,5 +3961,54 @@ mod tests {
                 "{name} fell through to unknown-tool arm: {resp}"
             );
         }
+    }
+
+    #[test]
+    fn channel_notification_body_starts_with_peer_banner() {
+        // renga#221 acceptance criterion #1: a peer notification must
+        // be visually distinguishable from a real user turn even
+        // when Claude Code renders it under a `Human:` heading. The
+        // body wrap inside `peer_banner_wrap` is what carries that
+        // signal — make sure it actually reaches the channel push.
+        let note = channel_notification("hi there", "7", Some("dispatcher"));
+        let content = note
+            .pointer("/params/content")
+            .and_then(|v| v.as_str())
+            .expect("content string");
+        assert!(
+            content.starts_with("📡 PEER MESSAGE"),
+            "channel content must start with the peer-message banner; got {content:?}"
+        );
+        assert!(
+            content.contains("dispatcher"),
+            "banner should name the sender so an operator can tell who spoke; got {content:?}"
+        );
+        assert!(
+            content.contains("(id=7)"),
+            "banner should include the from_id; got {content:?}"
+        );
+        assert!(
+            content.contains("NOT FROM USER"),
+            "banner must explicitly disclaim user-input semantics; got {content:?}"
+        );
+        assert!(
+            content.ends_with("hi there"),
+            "original body must be preserved verbatim after the banner; got {content:?}"
+        );
+    }
+
+    #[test]
+    fn channel_notification_banner_handles_missing_from_name() {
+        // EventsDropped synthesizes its own from_name, but anonymous
+        // senders (no display name) still need a clean banner.
+        let note = channel_notification("payload", "12", None);
+        let content = note
+            .pointer("/params/content")
+            .and_then(|v| v.as_str())
+            .expect("content string");
+        assert!(
+            content.starts_with("📡 PEER MESSAGE — from id=12 — NOT FROM USER"),
+            "missing from_name should fall back to id-only header; got {content:?}"
+        );
     }
 }

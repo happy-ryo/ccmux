@@ -69,6 +69,7 @@ impl App {
             peer_client_kinds: HashMap::new(),
             pending_codex_peer_messages: HashMap::new(),
             codex_peer_notification: None,
+            recent_peer_sends: HashMap::new(),
             clipboard: None,
             event_bus,
             ime_mode: crate::config::ImeMode::default(),

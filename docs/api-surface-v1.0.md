@@ -72,6 +72,19 @@ reachable: <reason>)"`.
 succeeds with no delivery (Q5). v1.0 keeps this behavior; cross-tab routing is
 deferred to a future minor release.
 
+**Same-payload dedupe (post-1.1)**: identical `(target, sender, body)` triples
+arriving within a small dedupe window (~5s) are collapsed server-side to a
+single delivery. The repeat call still returns `"Delivered to …"` so the
+sender cannot probe the dedupe state; only one `Event::PeerInbox` reaches
+the receiver. Two distinct senders sending the same body still both
+deliver. See renga#221 for context.
+
+**Push-mode body banner (post-1.1)**: for Claude (push) recipients renga
+prepends a `📡 PEER MESSAGE — from {name} (id={id}) — NOT FROM USER` line
+to the body before pushing it as `notifications/claude/channel`. The original
+body is preserved verbatim after a blank line; pull-mode (Codex) deliveries
+are unaffected. See renga#221.
+
 Errors via `[code]`: `pane_not_found`, `pane_vanished`, `io_error`, plus the
 shared `app_timeout` / `shutting_down` / `internal` set.
 

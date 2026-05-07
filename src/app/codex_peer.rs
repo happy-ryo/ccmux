@@ -4,6 +4,15 @@ pub(crate) const CODEX_APPEND_ENTER_DELAY: Duration = Duration::from_millis(75);
 pub(crate) const CODEX_PEER_NUDGE_SUBMIT_DELAY: Duration = Duration::from_millis(1000);
 pub(crate) const CODEX_APPEND_ENTER_SNAPSHOT_LINES: usize = 8;
 
+/// Window during which a `(target, from, body)` triple is treated as
+/// a re-send and dropped before reaching `Event::PeerInbox`. Set to a
+/// small handful of seconds so legitimate retries after the
+/// receiver's reply still get through, but a dispatcher / worker
+/// that fires the exact same payload twice in quick succession
+/// can't double-paper the transcript with phantom user turns. See
+/// renga#221 acceptance criterion #2.
+pub(crate) const PEER_SEND_DEDUPE_TTL: Duration = Duration::from_secs(5);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PendingCodexPeerMessage {
     pub(crate) from_pane: usize,
@@ -225,6 +234,15 @@ impl App {
         if sender_ws != target_ws {
             return Ok(());
         }
+        if self.is_duplicate_peer_send(target_id, from_pane, &body) {
+            // Same (target, from, body) within the dedupe window —
+            // treat as a no-op so duplicate dispatcher acks /
+            // worker false-fires don't paper the receiver's
+            // transcript with phantom Human: turns. The sender
+            // gets a successful Ok() reply so it can't probe the
+            // dedupe state. (renga#221)
+            return Ok(());
+        }
         self.materialize_unfocused_codex_peer_notification();
         let from_name = self.workspaces[sender_ws]
             .pane_names
@@ -269,6 +287,31 @@ impl App {
             ts_ms: ipc::events::now_ms(),
         });
         Ok(())
+    }
+
+    /// Return true when an identical (target, from, body) peer send
+    /// arrived within [`PEER_SEND_DEDUPE_TTL`]. A side effect
+    /// records the new send so future calls compare against it,
+    /// and stale entries (older than the TTL) are evicted on every
+    /// call so the map can't grow unbounded under heavy traffic.
+    fn is_duplicate_peer_send(&mut self, target: usize, from: usize, body: &str) -> bool {
+        let now = Instant::now();
+        self.recent_peer_sends
+            .retain(|_, ts| now.duration_since(*ts) < PEER_SEND_DEDUPE_TTL);
+        let key = (target, from, body.to_string());
+        match self.recent_peer_sends.get(&key).copied() {
+            Some(prev) if now.duration_since(prev) < PEER_SEND_DEDUPE_TTL => {
+                // Refresh the timestamp so a chatty sender keeps
+                // getting its retries collapsed instead of slipping
+                // a duplicate through right at the TTL boundary.
+                self.recent_peer_sends.insert(key, now);
+                true
+            }
+            _ => {
+                self.recent_peer_sends.insert(key, now);
+                false
+            }
+        }
     }
 
     pub(crate) fn handle_peer_register_client(
