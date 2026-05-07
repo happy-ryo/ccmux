@@ -130,7 +130,18 @@ name = "renga"
 # survive OSC title rewrites (#209 / #210). Minor bump under the
 # semver policy because two new optional features ship while the
 # frozen surface remains backward-compatible.
-version = "1.1.0"
+# 1.1.1 wraps peer-channel notifications with a `📡 PEER MESSAGE …
+# NOT FROM USER` banner so operators can tell at a glance that a
+# `Human:` turn is renga peer chatter rather than user input, and
+# server-side dedupes duplicate `(target, from, body)` re-sends
+# within a 5-second window so chatty dispatchers no longer produce
+# two phantom turns on the receiving pane (#221 / #222). Also fixes
+# `spawn_codex_pane` erroring when `RENGA_PEER_CLIENT_KIND` is
+# unset by treating the missing env as the default `claude` kind
+# rather than a hard error (#203 / #220). Patch bump because the
+# frozen API surface is unchanged; the banner is a presentation
+# tweak and the dedupe / fallback are bug fixes.
+version = "1.1.1"
 edition = "2021"
 description = "AI-native terminal for orchestrating multiple Claude Code and Codex agents in one workspace"
 

@@ -9,6 +9,20 @@ rules in [`docs/semver-policy.md`](./docs/semver-policy.md).
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-05-08
+
+Patch release. Peer channel notifications now carry a loud
+`📡 PEER MESSAGE … NOT FROM USER` banner so operators can tell at a
+glance that a `Human:` turn is renga peer chatter rather than user
+input, and `handle_peer_send` dedupes duplicate `(target, from, body)`
+re-sends within a 5-second window so a chatty dispatcher no longer
+produces two phantom turns on the receiving pane. Also relocates the
+`spawn_codex_pane` verifier entry from `[1.0.0]` to here, since the
+fix actually shipped in 1.1.1 (the v1.1.0 binary did not contain
+PR #220). The frozen v1.0 API surface is unchanged — the banner is a
+presentation tweak in `notifications/claude/channel` and the dedupe /
+verifier are bug fixes.
+
 ### Changed
 
 - **Peer channel notifications now lead with a `📡 PEER MESSAGE …
@@ -18,7 +32,17 @@ rules in [`docs/semver-policy.md`](./docs/semver-policy.md).
   `notifications/claude/channel` so an operator scanning a long
   transcript can tell at a glance that the line is peer chatter
   rather than something the human typed. The original body is
-  preserved verbatim after the banner. (#221)
+  preserved verbatim after the banner. (#221, #222)
+- **`spawn_codex_pane` now refuses to spawn when Codex's MCP config will
+  not inject `RENGA_PEER_CLIENT_KIND=codex`.** Previously, if the user had
+  not run `renga mcp install --client codex`, the freshly spawned codex
+  pane registered as a `claude` (push) client and message delivery
+  silently bifurcated. The handler now inspects `~/.codex/config.toml` for
+  the `[mcp_servers.renga-peers.env] RENGA_PEER_CLIENT_KIND = "codex"`
+  entry and fails the call with the new `[codex_not_installed]` error
+  code, pointing the user at `renga mcp install --client codex`. The
+  v1.0 freeze §6.2 entry tracking this as a follow-up has been removed
+  and §1.8 / §5.1 are updated accordingly. Closes #203. (#220)
 
 ### Fixed
 
@@ -28,7 +52,7 @@ rules in [`docs/semver-policy.md`](./docs/semver-policy.md).
   succession (duplicate acks, `PR_MERGE_WATCH_TIMEOUT` false fires)
   produced two phantom `Human:` turns on the receiving Claude pane.
   The dedupe key includes the sender, so two distinct peers sending
-  the same text still both deliver. (#221)
+  the same text still both deliver. (#221, #222)
 
 ## [1.1.0] — 2026-05-07
 
@@ -120,16 +144,6 @@ freeze.
   `list_panes` / `list_peers`. Empty input clears the summary; input
   longer than 256 Unicode scalar values is rejected with the new
   `[summary_too_long]` error code. Closes #202.
-- **`spawn_codex_pane` now refuses to spawn when Codex's MCP config will
-  not inject `RENGA_PEER_CLIENT_KIND=codex`.** Previously, if the user had
-  not run `renga mcp install --client codex`, the freshly spawned codex
-  pane registered as a `claude` (push) client and message delivery
-  silently bifurcated. The handler now inspects `~/.codex/config.toml` for
-  the `[mcp_servers.renga-peers.env] RENGA_PEER_CLIENT_KIND = "codex"`
-  entry and fails the call with the new `[codex_not_installed]` error
-  code, pointing the user at `renga mcp install --client codex`. The
-  v1.0 freeze §6.2 entry tracking this as a follow-up has been removed
-  and §1.8 / §5.1 are updated accordingly. Closes #203.
 
 ### Documentation
 
