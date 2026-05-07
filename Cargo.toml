@@ -109,7 +109,28 @@ name = "renga"
 # AI-native terminal for multi-agent coding rather than only as a
 # Claude-only multiplexer. Patch bump because this is packaging /
 # messaging work, not a behavior change in the binary itself.
-version = "0.18.5"
+# 1.0.0 marks the API surface freeze across MCP tools, CLI, IPC
+# protocol, and config / layout / env (#201 / #207). The
+# `set_summary` MCP tool moves from stable-stub to a real per-pane
+# summary store, and `RENGA_TOKEN` / `RENGA_SOCKET` / `RENGA_PANE_ID`
+# / `RENGA_PEER_CLIENT_KIND` are now part of the formal v1.0
+# contract. Major bump under the new semver policy
+# (`docs/semver-policy.md`); the Cargo.toml / npm version bump was
+# omitted at tag time and is being reconciled at v1.1.0.
+# 1.1.0 is the first release after the v1.0 freeze. Adds the
+# `--fps` CLI flag with a `[ui] fps` config key counterpart so users
+# can dial the main event-loop rate (#213, additive optional
+# input), and a Ctrl+U IME overlay shortcut that wipes the entire
+# composition buffer in one keystroke (#211, additive keybinding).
+# Bug fixes: pane close now walks the Windows process tree via
+# `taskkill /F /T` so descendant processes release cwd handles
+# (#214 / #216), self-targeted peer sends emit `Event::PeerInbox`
+# instead of silently dropping (#215 / #217), and the per-pane
+# Claude/Codex cosmetic indicators latch on `*_ever_seen` so they
+# survive OSC title rewrites (#209 / #210). Minor bump under the
+# semver policy because two new optional features ship while the
+# frozen surface remains backward-compatible.
+version = "1.1.0"
 edition = "2021"
 description = "AI-native terminal for orchestrating multiple Claude Code and Codex agents in one workspace"
 
