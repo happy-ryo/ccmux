@@ -1460,11 +1460,18 @@ fn handle_spawn_codex_pane_with(
     };
     let command = build_codex_launch_command(&extra_args);
 
+    let (caller_pane, endpoint) = match require_connected(ctx, id, "spawn codex pane") {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+
     // Issue #203: refuse to spawn unless Codex's MCP config will
     // inject `RENGA_PEER_CLIENT_KIND=codex` into the new pane's
     // mcp-peer subprocess. Otherwise the new pane registers as a
     // push (claude) client and `send_message` delivery silently
-    // bifurcates from what the orchestrator expects.
+    // bifurcates from what the orchestrator expects. Runs after the
+    // detached/connected gate so a renga-not-reachable failure isn't
+    // hidden by a spurious `[codex_not_installed]`.
     if let Err(reason) = verify_codex_install() {
         // Always surface the remediation command — the verifier's
         // detail string explains *which* check failed (file missing /
@@ -1480,11 +1487,6 @@ fn handle_spawn_codex_pane_with(
             ),
         );
     }
-
-    let (caller_pane, endpoint) = match require_connected(ctx, id, "spawn codex pane") {
-        Ok(t) => t,
-        Err(resp) => return resp,
-    };
     let cwd = match resolve_mcp_cwd(endpoint, caller_pane, cwd.as_deref()) {
         Ok(v) => v,
         Err(msg) => return err_response(id, -32602, &msg),

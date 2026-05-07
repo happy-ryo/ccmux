@@ -52,6 +52,26 @@ fn install(force: bool, client: McpClient, codex_auto_approve_peer_tools: bool) 
         if !force {
             if client == McpClient::Codex {
                 ensure_codex_env_var_passthrough()?;
+                // Issue #203 follow-up: if the existing entry is
+                // missing `RENGA_PEER_CLIENT_KIND=codex` (e.g. installed
+                // by an earlier renga version, or partially edited),
+                // repair it in-place so the user's `renga mcp install`
+                // call is self-healing. Without this, the remediation
+                // hint surfaced by `[codex_not_installed]` would lead
+                // users to a no-op and they'd have to discover `--force`
+                // on their own.
+                if verify_codex_renga_peers_install().is_err() {
+                    remove_silent(client)?;
+                    install_codex(&exe)?;
+                    if codex_auto_approve_peer_tools {
+                        ensure_codex_auto_approve_peer_tools()?;
+                    }
+                    println!(
+                        "{}",
+                        install_success_message(client, &exe, codex_auto_approve_peer_tools)
+                    );
+                    return Ok(());
+                }
                 if codex_auto_approve_peer_tools {
                     ensure_codex_auto_approve_peer_tools()?;
                 }
@@ -396,31 +416,21 @@ pub(crate) fn verify_codex_renga_peers_install() -> std::result::Result<(), Stri
 }
 
 /// Returns true if `toml_src` declares `RENGA_PEER_CLIENT_KIND = "codex"`
-/// inside the `[mcp_servers.renga-peers.env]` subtable. Substring scan
-/// rather than full TOML parsing — keeps this hot path zero-dep and
-/// matches the rest of `install.rs` style.
+/// for the renga-peers MCP entry. Uses real TOML parsing (vs. a line
+/// scan) so inline comments, the `[..."renga-peers".env]` quoted-key
+/// form, and inline `env = { ... }` tables are all recognized.
 fn codex_config_has_renga_peers_kind(toml_src: &str) -> bool {
-    let header = format!("[{}.env]", codex_server_section_name());
-    let mut in_env = false;
-    for line in toml_src.lines() {
-        let trimmed = line.trim();
-        if !in_env {
-            if trimmed == header {
-                in_env = true;
-            }
-            continue;
-        }
-        if trimmed.starts_with('[') {
-            return false;
-        }
-        if let Some(rest) = trimmed.strip_prefix(ENV_CLIENT_KIND) {
-            let value = rest.trim_start().trim_start_matches('=').trim();
-            if value == "\"codex\"" || value == "'codex'" {
-                return true;
-            }
-        }
-    }
-    false
+    let parsed: toml::Value = match toml::from_str(toml_src) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    parsed
+        .get("mcp_servers")
+        .and_then(|v| v.get("renga-peers"))
+        .and_then(|v| v.get("env"))
+        .and_then(|env| env.get(ENV_CLIENT_KIND))
+        .and_then(|v| v.as_str())
+        == Some("codex")
 }
 
 fn codex_server_section_name() -> String {
