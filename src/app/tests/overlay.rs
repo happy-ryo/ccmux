@@ -618,6 +618,33 @@ fn handle_paste_truncates_at_buffer_cap() {
 }
 
 #[test]
+fn handle_paste_normalizes_crlf_from_windows_clipboard() {
+    // The actual user environment is WSL2, where Ctrl+V pastes text
+    // copied from Windows applications — clipboard payloads use CRLF
+    // line endings. wrap_overlay_buffer (ui.rs) only recognizes \n
+    // as a hard newline, so a stray \r would render as a zero-width
+    // control glyph and offset the rendered cursor from the buffer
+    // cursor by one char per pasted line. Normalize at intake.
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_a = app.ws().focused_pane_id;
+    app.overlay = Some(crate::input::overlay::OverlayState::new(pane_a));
+
+    app.handle_paste("first\r\nsecond\rthird")
+        .expect("handle_paste");
+
+    let overlay = app.overlay.as_ref().expect("overlay still open");
+    assert_eq!(
+        overlay.buffer, "first\nsecond\nthird",
+        "CRLF and bare CR must collapse to \\n"
+    );
+    assert_eq!(overlay.cursor, "first\nsecond\nthird".chars().count());
+    assert!(
+        !overlay.buffer.contains('\r'),
+        "no carriage returns should survive normalization"
+    );
+}
+
+#[test]
 fn handle_paste_falls_through_to_pty_when_overlay_closed() {
     // Behavior preservation guard: with no overlay open the paste
     // path must still reach the focused pane's PTY (and return false

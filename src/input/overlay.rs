@@ -62,9 +62,17 @@ impl OverlayState {
     /// number of inserted chars. Used for routing terminal-level
     /// bracketed-paste payloads (Ctrl+V on WSL2 / Windows Terminal /
     /// WezTerm) into the composition buffer instead of the underlying
-    /// pane. Honors the same 4096-char cap as `insert_char` by
-    /// truncating the tail rather than rejecting the whole paste — a
-    /// dropped paste is harder to recover from than a clipped one.
+    /// pane. Honors the same 4096-char cap that `handle_overlay_key`
+    /// applies to typed input, by truncating the tail rather than
+    /// rejecting the whole paste — a dropped paste is harder to
+    /// recover from than a clipped one.
+    ///
+    /// Line endings are normalized to `\n` so a Windows-clipboard
+    /// paste (the WSL2 user's primary path) doesn't leave bare `\r`
+    /// bytes in the buffer. The overlay's wrap/render path treats
+    /// only `\n` as a hard newline, and `\r` is a width-zero control
+    /// char — without normalization the host clipboard's CRLF would
+    /// desync the rendered cursor from the buffer cursor.
     pub fn insert_str(&mut self, s: &str) {
         const MAX_BUFFER_CHARS: usize = 4096;
 
@@ -75,8 +83,9 @@ impl OverlayState {
         if current_len >= MAX_BUFFER_CHARS {
             return;
         }
+        let normalized = normalize_paste_line_endings(s);
         let remaining = MAX_BUFFER_CHARS - current_len;
-        let to_insert: String = s.chars().take(remaining).collect();
+        let to_insert: String = normalized.chars().take(remaining).collect();
         if to_insert.is_empty() {
             return;
         }
@@ -268,6 +277,36 @@ const CLAUDE_PROMPT_GLYPHS: &[&str] = &[
 ];
 const CLAUDE_PROMPT_SCAN_COLS: u16 = 8;
 const CLAUDE_INPUT_WALK_MAX: u16 = 20;
+
+/// Collapse `\r\n` and bare `\r` into `\n` for paste payloads. The
+/// overlay buffer treats `\n` as the only line break (see
+/// `wrap_overlay_buffer` in `ui.rs`), so leaving carriage returns
+/// in-band would render as zero-width control glyphs and desync the
+/// rendered cursor from the buffer cursor on Windows-clipboard
+/// pastes via WSL2.
+fn normalize_paste_line_endings(s: &str) -> String {
+    if !s.contains('\r') {
+        return s.to_owned();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut prev_cr = false;
+    for ch in s.chars() {
+        match ch {
+            '\r' => {
+                out.push('\n');
+                prev_cr = true;
+            }
+            '\n' if prev_cr => {
+                prev_cr = false;
+            }
+            _ => {
+                out.push(ch);
+                prev_cr = false;
+            }
+        }
+    }
+    out
+}
 
 pub(crate) fn snapshot_visible_input(pane: &crate::pane::Pane) -> Option<VisibleInputSnapshot> {
     let parser = pane.parser.lock().ok()?;
