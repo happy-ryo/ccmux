@@ -58,6 +58,40 @@ impl OverlayState {
         self.cursor += 1;
     }
 
+    /// Insert `s` at the overlay cursor and advance the cursor by the
+    /// number of inserted chars. Used for routing terminal-level
+    /// bracketed-paste payloads (Ctrl+V on WSL2 / Windows Terminal /
+    /// WezTerm) into the composition buffer instead of the underlying
+    /// pane. Honors the same 4096-char cap as `insert_char` by
+    /// truncating the tail rather than rejecting the whole paste — a
+    /// dropped paste is harder to recover from than a clipped one.
+    pub fn insert_str(&mut self, s: &str) {
+        const MAX_BUFFER_CHARS: usize = 4096;
+
+        if s.is_empty() {
+            return;
+        }
+        let current_len = self.buffer.chars().count();
+        if current_len >= MAX_BUFFER_CHARS {
+            return;
+        }
+        let remaining = MAX_BUFFER_CHARS - current_len;
+        let to_insert: String = s.chars().take(remaining).collect();
+        if to_insert.is_empty() {
+            return;
+        }
+        let inserted_chars = to_insert.chars().count();
+
+        let byte_idx = self
+            .buffer
+            .char_indices()
+            .nth(self.cursor)
+            .map(|(i, _)| i)
+            .unwrap_or(self.buffer.len());
+        self.buffer.insert_str(byte_idx, &to_insert);
+        self.cursor += inserted_chars;
+    }
+
     /// Clear the entire composition buffer and reset the cursor.
     pub fn clear(&mut self) {
         self.buffer.clear();

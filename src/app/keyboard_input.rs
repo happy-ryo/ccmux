@@ -354,6 +354,23 @@ impl App {
 
     // ─── PTY forwarding ───────────────────────────────────
 
+    /// Route a terminal-level paste payload (bracketed-paste from the
+    /// host terminal — typically Ctrl+V on WSL2 / Windows Terminal /
+    /// WezTerm / iTerm2) to the right destination. When the IME
+    /// composition overlay is open, the paste belongs to the overlay
+    /// buffer; otherwise it forwards to the focused pane's PTY via
+    /// `forward_paste_to_pty`. Centralizing the routing here keeps
+    /// `main.rs` from having to reach into overlay internals.
+    pub fn handle_paste(&mut self, text: &str) -> Result<bool> {
+        if let Some(overlay) = self.overlay.as_mut() {
+            overlay.insert_str(text);
+            self.dirty = true;
+            return Ok(true);
+        }
+        self.forward_paste_to_pty(text)?;
+        Ok(false)
+    }
+
     /// Forward pasted text to PTY, wrapping in bracketed paste only if
     /// the PTY application has enabled the mode (e.g. Claude Code, modern
     /// readline). Sending bracketed paste to a shell that hasn't opted in

@@ -545,3 +545,90 @@ fn freeze_panes_does_not_suppress_without_overlay() {
 
     assert!(app.dirty, "PtyOutput must dirty when overlay is closed");
 }
+
+#[test]
+fn handle_paste_routes_to_overlay_when_open() {
+    // The user-visible bug: on WSL2, terminal-level Ctrl+V emits a
+    // bracketed-paste sequence which crossterm surfaces as
+    // Event::Paste. Without overlay-aware routing the text leaked to
+    // the back pane's PTY even though the IME composition overlay
+    // was holding focus. handle_paste must intercept and deliver the
+    // payload into the overlay buffer instead.
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_a = app.ws().focused_pane_id;
+    let mut state = crate::input::overlay::OverlayState::new(pane_a);
+    state.insert_char('a');
+    app.overlay = Some(state);
+    app.dirty = false;
+
+    let routed_to_overlay = app.handle_paste("bcd").expect("handle_paste");
+
+    assert!(routed_to_overlay, "overlay-open paste must report routed");
+    let overlay = app.overlay.as_ref().expect("overlay still open");
+    assert_eq!(overlay.buffer, "abcd");
+    assert_eq!(overlay.cursor, 4);
+    assert!(app.dirty, "overlay paste must mark dirty for redraw");
+}
+
+#[test]
+fn handle_paste_inserts_at_cursor_position() {
+    // The cursor isn't always at the buffer end (the user may have
+    // arrowed back to fix earlier composition). Pasted text must
+    // splice in at the cursor and advance it past the inserted run.
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_a = app.ws().focused_pane_id;
+    let mut state = crate::input::overlay::OverlayState::new(pane_a);
+    for ch in "ab".chars() {
+        state.insert_char(ch);
+    }
+    state.cursor = 1;
+    app.overlay = Some(state);
+
+    app.handle_paste("XY").expect("handle_paste");
+
+    let overlay = app.overlay.as_ref().expect("overlay still open");
+    assert_eq!(overlay.buffer, "aXYb");
+    assert_eq!(overlay.cursor, 3, "cursor advances past inserted run");
+}
+
+#[test]
+fn handle_paste_truncates_at_buffer_cap() {
+    // The overlay caps the composition buffer at 4096 chars to
+    // bound memory on a stuck key. Pasted text must follow the same
+    // cap by truncating the tail; dropping the entire paste would
+    // be far worse UX than a clipped paste.
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_a = app.ws().focused_pane_id;
+    let mut state = crate::input::overlay::OverlayState::new(pane_a);
+    for _ in 0..4090 {
+        state.insert_char('x');
+    }
+    app.overlay = Some(state);
+
+    app.handle_paste("0123456789abcdef").expect("handle_paste");
+
+    let overlay = app.overlay.as_ref().expect("overlay still open");
+    assert_eq!(overlay.buffer.chars().count(), 4096);
+    assert_eq!(overlay.cursor, 4096);
+    assert!(
+        overlay.buffer.ends_with("xxxxxx012345"),
+        "tail of buffer must reflect the truncated paste prefix, got {:?}",
+        &overlay.buffer[overlay.buffer.len().saturating_sub(20)..]
+    );
+}
+
+#[test]
+fn handle_paste_falls_through_to_pty_when_overlay_closed() {
+    // Behavior preservation guard: with no overlay open the paste
+    // path must still reach the focused pane's PTY (and return false
+    // so main.rs keeps applying the post-PTY-paste cooldown).
+    let mut app = App::new(40, 80).expect("App::new");
+    assert!(app.overlay.is_none());
+
+    let routed_to_overlay = app.handle_paste("hello").expect("handle_paste");
+
+    assert!(
+        !routed_to_overlay,
+        "no overlay → paste must report PTY-routed"
+    );
+}
