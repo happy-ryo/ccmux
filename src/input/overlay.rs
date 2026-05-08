@@ -5,7 +5,7 @@
 //! owns the `Option<OverlayState>` field and the open/close call sites.
 //!
 //! The overlay is a centered multi-line composition box. Enter inserts
-//! a newline; Alt+Enter (portable across all tier-1 terminals) or
+//! a newline; Alt+Enter (the canonical commit on most terminals) or
 //! Ctrl+Enter (Windows Terminal / wezterm / VS Code) commit the
 //! buffer. The host terminal's IME candidate window anchors to the
 //! caret inside the box.
@@ -544,12 +544,13 @@ fn count_chars_before_col(
 
 /// Modal key handling while the IME composition overlay is open.
 ///
-/// Commits with **Alt+Enter** (portable across all tier-1 terminals,
-/// including macOS Option+Return) or **Ctrl+Enter** (Windows Terminal
-/// / wezterm / VS Code / most Linux terminals). On WSL2 / Windows
-/// Terminal where the host swallows Alt+Enter for fullscreen and
-/// reports Ctrl+Enter as the LF byte (0x0A → Ctrl+J in crossterm),
-/// **Ctrl+J** is treated as the same commit key — see Issue #226.
+/// Commits with **Alt+Enter** (the canonical commit on most
+/// terminals, including macOS Option+Return) or **Ctrl+Enter**
+/// (Windows Terminal / wezterm / VS Code / most Linux terminals).
+/// On WSL2 / Windows Terminal where the host swallows Alt+Enter
+/// for fullscreen and reports Ctrl+Enter as the LF byte (0x0A →
+/// Ctrl+J in crossterm), **Ctrl+J** is treated as the same commit
+/// key — see Issue #226.
 /// Bare `Enter` inserts a newline into the composition buffer.
 /// Cancels with Esc or Ctrl+C. Arrow keys navigate, Backspace
 /// deletes, other printable characters are inserted; other Ctrl/Alt
