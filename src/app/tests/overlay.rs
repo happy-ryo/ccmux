@@ -347,6 +347,66 @@ fn overlay_commit_clears_saved_draft_for_target_pane() {
 }
 
 #[test]
+fn overlay_ctrl_j_commits_as_wsl_ctrl_enter_fallback() {
+    // Issue #226: WSL / Windows Terminal swallow Alt+Enter for the
+    // host's fullscreen shortcut and deliver Ctrl+Enter as the bare
+    // LF byte (0x0A → Ctrl+J in crossterm). Pressing Ctrl+J inside
+    // the overlay must therefore drive the same commit path Alt+Enter
+    // does on other hosts: overlay closes, draft cache clears,
+    // buffer is delivered to the target pane.
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_a = app.ws().focused_pane_id;
+    let mut live = crate::input::overlay::OverlayState::new(pane_a);
+    for ch in "wsl-fallback".chars() {
+        live.insert_char(ch);
+    }
+    app.overlay = Some(live);
+
+    let mut stale = crate::input::overlay::OverlayState::new(pane_a);
+    stale.insert_char('x');
+    app.saved_overlay_drafts.insert(pane_a, stale);
+
+    let commit = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL);
+    let consumed = crate::input::overlay::handle_overlay_key(&mut app, commit)
+        .expect("handle_overlay_key Ctrl+J");
+
+    assert!(consumed, "Ctrl+J must be consumed by the overlay");
+    assert!(
+        app.overlay.is_none(),
+        "Ctrl+J must close the overlay just like Alt+Enter"
+    );
+    assert!(
+        !app.saved_overlay_drafts.contains_key(&pane_a),
+        "Ctrl+J commit must clear any saved draft for that pane"
+    );
+}
+
+#[test]
+fn overlay_bare_enter_inserts_newline_not_commit() {
+    // Guards against a regression where the commit-path
+    // restructuring for Ctrl+J might accidentally re-route bare
+    // Enter to commit. Bare Enter must keep its multi-line role
+    // and leave the overlay open with a newline appended.
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane_a = app.ws().focused_pane_id;
+    let mut live = crate::input::overlay::OverlayState::new(pane_a);
+    live.insert_char('a');
+    app.overlay = Some(live);
+
+    let bare_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+    let consumed = crate::input::overlay::handle_overlay_key(&mut app, bare_enter)
+        .expect("handle_overlay_key Enter");
+
+    assert!(consumed);
+    let overlay = app
+        .overlay
+        .as_ref()
+        .expect("overlay still open after Enter");
+    assert_eq!(overlay.buffer, "a\n");
+    assert_eq!(overlay.cursor, 2);
+}
+
+#[test]
 fn closing_pane_drops_saved_overlay_draft() {
     let mut app = App::new(40, 80).expect("App::new");
     let pane_a = app.ws().focused_pane_id;
