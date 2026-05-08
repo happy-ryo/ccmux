@@ -9,6 +9,22 @@ rules in [`docs/semver-policy.md`](./docs/semver-policy.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **IME composition overlay: `Ctrl+Enter` now commits on WSL2 / Windows
+  Terminal, where the host emulator binds `Alt+Enter` to *Toggle
+  Fullscreen* and consumes the chord before renga sees it.** The host
+  delivers the user's Ctrl+Enter as a bare LF byte (0x0A) when extended
+  key reporting is off, which crossterm decodes into `Ctrl+J`; renga's
+  overlay commit predicate (`is_overlay_commit_key`) now accepts
+  `Ctrl+J` as the WSL fallback for Ctrl+Enter, so the buffer commits to
+  the target pane via the existing bracketed-paste path. `Alt+Enter`
+  remains the canonical commit binding on hosts that don't shadow it,
+  and the existing `Ctrl+Enter` event path (used by terminals that opt
+  into kitty keyboard protocol or xterm modifyOtherKeys) is unchanged.
+  README, README.ja, and the docs site keymap tables now call out the
+  WSL caveat next to the `Alt+Enter` row. (#226)
+
 ## [1.1.2] — 2026-05-09
 
 Patch release. Bracketed-paste events now route to the IME composition

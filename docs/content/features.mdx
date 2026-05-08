@@ -140,8 +140,8 @@ renga は **画面中央にフロート表示する多行 composition overlay** 
 | キー | 動作 |
 |---|---|
 | `Enter` / `Shift+Enter` | 改行挿入 |
-| **`Alt+Enter`** | 送信 (全環境対応、macOS `Option+Return` 含む) |
-| `Ctrl+Enter` | 送信 (Windows Terminal / wezterm / VS Code 及び多くの Linux ターミナル) |
+| **`Alt+Enter`** | 送信 (主要ターミナルでのカノニカルな commit、macOS `Option+Return` 含む)。WSL2 / Windows Terminal ではホストが *Toggle Fullscreen* に割り当てて飲み込むため renga まで届きません。代わりに `Ctrl+Enter` を使ってください (Issue #226)。 |
+| `Ctrl+Enter` | 送信 (Windows Terminal / wezterm / VS Code 及び多くの Linux ターミナル)。WSL2 / Windows Terminal ではこちらが推奨。renga は `Ctrl+J` も commit として受け付けます (extended-key reporting 無効時、ホストは Ctrl+Enter を素の LF バイトで送ってくるため)。 |
 | `Esc` / `Ctrl+C` | overlay を閉じる。同じペインで開き直すとドラフトを復元 |
 | `←` `→` `↑` `↓` | カーソル移動 |
 | `Home` / `End` | 現行行の先頭 / 末尾 |

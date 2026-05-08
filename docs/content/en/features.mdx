@@ -140,8 +140,8 @@ renga paints a **centered, multi-line composition overlay** that floats over the
 | Key | Action |
 |---|---|
 | `Enter` / `Shift+Enter` | Insert newline |
-| **`Alt+Enter`** | Send (works everywhere, including macOS `Option+Return`) |
-| `Ctrl+Enter` | Send (Windows Terminal / wezterm / VS Code and most Linux terminals) |
+| **`Alt+Enter`** | Send (the canonical commit on most terminals, including macOS `Option+Return`). On WSL2 / Windows Terminal the host emulator binds this chord to *Toggle Fullscreen* and consumes it before renga sees it — use `Ctrl+Enter` instead (Issue #226). |
+| `Ctrl+Enter` | Send (Windows Terminal / wezterm / VS Code and most Linux terminals). Recommended on WSL2 / Windows Terminal. renga also accepts `Ctrl+J`, which is what these hosts deliver for Ctrl+Enter when extended-key reporting is off (a bare LF byte). |
 | `Esc` / `Ctrl+C` | Close the overlay and keep the draft for that pane |
 | `←` `→` `↑` `↓` | Navigate |
 | `Home` / `End` | Start / end of current line |
