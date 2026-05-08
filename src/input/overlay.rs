@@ -83,9 +83,13 @@ impl OverlayState {
         if current_len >= MAX_BUFFER_CHARS {
             return;
         }
-        let normalized = normalize_paste_line_endings(s);
         let remaining = MAX_BUFFER_CHARS - current_len;
-        let to_insert: String = normalized.chars().take(remaining).collect();
+        // Stream the normalized chars and stop once we hit the cap so a
+        // megabyte-class paste doesn't allocate megabytes upfront just
+        // to throw most of it away. `take(remaining)` short-circuits
+        // the `\r`/`\n` state machine the moment we've collected
+        // enough.
+        let to_insert: String = normalize_paste_line_endings(s).take(remaining).collect();
         if to_insert.is_empty() {
             return;
         }
@@ -283,29 +287,25 @@ const CLAUDE_INPUT_WALK_MAX: u16 = 20;
 /// `wrap_overlay_buffer` in `ui.rs`), so leaving carriage returns
 /// in-band would render as zero-width control glyphs and desync the
 /// rendered cursor from the buffer cursor on Windows-clipboard
-/// pastes via WSL2.
-fn normalize_paste_line_endings(s: &str) -> String {
-    if !s.contains('\r') {
-        return s.to_owned();
-    }
-    let mut out = String::with_capacity(s.len());
+/// pastes via WSL2. Returns an iterator so the caller can `take()`
+/// up to the buffer cap without allocating the full normalized
+/// string for a paste that will be truncated anyway.
+fn normalize_paste_line_endings(s: &str) -> impl Iterator<Item = char> + '_ {
     let mut prev_cr = false;
-    for ch in s.chars() {
-        match ch {
-            '\r' => {
-                out.push('\n');
-                prev_cr = true;
-            }
-            '\n' if prev_cr => {
-                prev_cr = false;
-            }
-            _ => {
-                out.push(ch);
-                prev_cr = false;
-            }
+    s.chars().filter_map(move |ch| match ch {
+        '\r' => {
+            prev_cr = true;
+            Some('\n')
         }
-    }
-    out
+        '\n' if prev_cr => {
+            prev_cr = false;
+            None
+        }
+        _ => {
+            prev_cr = false;
+            Some(ch)
+        }
+    })
 }
 
 pub(crate) fn snapshot_visible_input(pane: &crate::pane::Pane) -> Option<VisibleInputSnapshot> {
