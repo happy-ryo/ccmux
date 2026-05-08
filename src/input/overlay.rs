@@ -58,6 +58,53 @@ impl OverlayState {
         self.cursor += 1;
     }
 
+    /// Insert `s` at the overlay cursor and advance the cursor by the
+    /// number of inserted chars. Used for routing terminal-level
+    /// bracketed-paste payloads (Ctrl+V on WSL2 / Windows Terminal /
+    /// WezTerm) into the composition buffer instead of the underlying
+    /// pane. Honors the same 4096-char cap that `handle_overlay_key`
+    /// applies to typed input, by truncating the tail rather than
+    /// rejecting the whole paste — a dropped paste is harder to
+    /// recover from than a clipped one.
+    ///
+    /// Line endings are normalized to `\n` so a Windows-clipboard
+    /// paste (the WSL2 user's primary path) doesn't leave bare `\r`
+    /// bytes in the buffer. The overlay's wrap/render path treats
+    /// only `\n` as a hard newline, and `\r` is a width-zero control
+    /// char — without normalization the host clipboard's CRLF would
+    /// desync the rendered cursor from the buffer cursor.
+    pub fn insert_str(&mut self, s: &str) {
+        const MAX_BUFFER_CHARS: usize = 4096;
+
+        if s.is_empty() {
+            return;
+        }
+        let current_len = self.buffer.chars().count();
+        if current_len >= MAX_BUFFER_CHARS {
+            return;
+        }
+        let remaining = MAX_BUFFER_CHARS - current_len;
+        // Stream the normalized chars and stop once we hit the cap so a
+        // megabyte-class paste doesn't allocate megabytes upfront just
+        // to throw most of it away. `take(remaining)` short-circuits
+        // the `\r`/`\n` state machine the moment we've collected
+        // enough.
+        let to_insert: String = normalize_paste_line_endings(s).take(remaining).collect();
+        if to_insert.is_empty() {
+            return;
+        }
+        let inserted_chars = to_insert.chars().count();
+
+        let byte_idx = self
+            .buffer
+            .char_indices()
+            .nth(self.cursor)
+            .map(|(i, _)| i)
+            .unwrap_or(self.buffer.len());
+        self.buffer.insert_str(byte_idx, &to_insert);
+        self.cursor += inserted_chars;
+    }
+
     /// Clear the entire composition buffer and reset the cursor.
     pub fn clear(&mut self) {
         self.buffer.clear();
@@ -234,6 +281,32 @@ const CLAUDE_PROMPT_GLYPHS: &[&str] = &[
 ];
 const CLAUDE_PROMPT_SCAN_COLS: u16 = 8;
 const CLAUDE_INPUT_WALK_MAX: u16 = 20;
+
+/// Collapse `\r\n` and bare `\r` into `\n` for paste payloads. The
+/// overlay buffer treats `\n` as the only line break (see
+/// `wrap_overlay_buffer` in `ui.rs`), so leaving carriage returns
+/// in-band would render as zero-width control glyphs and desync the
+/// rendered cursor from the buffer cursor on Windows-clipboard
+/// pastes via WSL2. Returns an iterator so the caller can `take()`
+/// up to the buffer cap without allocating the full normalized
+/// string for a paste that will be truncated anyway.
+fn normalize_paste_line_endings(s: &str) -> impl Iterator<Item = char> + '_ {
+    let mut prev_cr = false;
+    s.chars().filter_map(move |ch| match ch {
+        '\r' => {
+            prev_cr = true;
+            Some('\n')
+        }
+        '\n' if prev_cr => {
+            prev_cr = false;
+            None
+        }
+        _ => {
+            prev_cr = false;
+            Some(ch)
+        }
+    })
+}
 
 pub(crate) fn snapshot_visible_input(pane: &crate::pane::Pane) -> Option<VisibleInputSnapshot> {
     let parser = pane.parser.lock().ok()?;

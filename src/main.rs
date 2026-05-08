@@ -487,8 +487,10 @@ fn run_event_loop(
                 }
                 Event::Key(_) => {}
                 Event::Paste(text) => {
-                    app.forward_paste_to_pty(&text)?;
-                    app.paste_cooldown = 5;
+                    let routed_to_overlay = app.handle_paste(&text)?;
+                    if !routed_to_overlay {
+                        app.paste_cooldown = 5;
+                    }
                     app.dirty = true;
                 }
                 Event::Mouse(mouse) => {
