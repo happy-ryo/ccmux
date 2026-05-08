@@ -7,7 +7,7 @@ and from v1.0 onward this project adheres to
 [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) under the
 rules in [`docs/semver-policy.md`](./docs/semver-policy.md).
 
-## [Unreleased]
+## [1.1.3] — 2026-05-09
 
 ### Fixed
 

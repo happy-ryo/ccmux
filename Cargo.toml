@@ -153,7 +153,21 @@ name = "renga"
 # hostile paste no longer briefly allocates a megabyte just to drop
 # all but 4096 chars (#224). Patch bump: the frozen API surface is
 # unchanged; this is a routing bug fix in keyboard input handling.
-version = "1.1.2"
+# 1.1.3 lets the IME composition overlay commit with `Ctrl+Enter` on
+# WSL2 / Windows Terminal, where the host binds `Alt+Enter` to
+# *Toggle Fullscreen* and swallows the chord before renga sees it.
+# When extended key reporting is off, the host delivers Ctrl+Enter
+# as a bare LF byte (0x0A) which crossterm decodes into `Ctrl+J`;
+# the overlay commit predicate (`is_overlay_commit_key`) now
+# accepts `Ctrl+J` as the WSL fallback for Ctrl+Enter so the buffer
+# commits to the target pane via the existing bracketed-paste path.
+# `Alt+Enter` remains the canonical binding on hosts that don't
+# shadow it, and the existing `Ctrl+Enter` event path (kitty
+# keyboard protocol / xterm modifyOtherKeys) is unchanged. README,
+# README.ja, and the docs site keymap tables now call out the WSL
+# caveat next to the Alt+Enter row (#226 / #227). Patch bump: the
+# frozen API surface is unchanged; this is a keyboard-input bug fix.
+version = "1.1.3"
 edition = "2021"
 description = "AI-native terminal for orchestrating multiple Claude Code and Codex agents in one workspace"
 
