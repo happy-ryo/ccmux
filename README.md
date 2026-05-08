@@ -201,7 +201,7 @@ overlay_catchup_ms = 0             # pure freeze, no periodic catch-up
 1. **Overlay on demand.** Press `Ctrl+;` on a focused Claude pane — a centered multi-line composition box appears. The host-terminal IME candidate window anchors to the caret inside the box, so long JP words stop "jumping" around the screen mid-conversion (Issue #25).
 2. **Pane flicker stops.** While the overlay is open, renga freezes the pane underneath — Claude's thinking spinner and streaming tokens no longer force repaints that would flicker past your IME candidates. You can focus entirely on composing.
 3. **Progress stays visible.** Every 3 seconds, renga unfreezes for a single frame so you can see Claude's streamed output advance. Tune the interval with `--ime-overlay-catchup-ms`: `0` for pure freeze, `5000` if even 3 s feels busy.
-4. **Multi-line drafts first-class.** `Enter` inserts a newline. Press `Alt+Enter` (macOS `Option+Return`) to send the whole buffer, or `Ctrl+Enter` on Windows Terminal / wezterm / VS Code. On WSL2 / Windows Terminal where the host emulator binds `Alt+Enter` to *Toggle Fullscreen*, use `Ctrl+Enter` instead — see the keymap subsection below for details (Issue #226). Full keymap is in the next subsection.
+4. **Multi-line drafts first-class.** `Enter` inserts a newline. Press `Alt+Enter` (macOS `Option+Return`) to send the whole buffer on most hosts, or `Ctrl+Enter` on Windows Terminal / wezterm / VS Code. On WSL2 / Windows Terminal where the host emulator binds `Alt+Enter` to *Toggle Fullscreen*, use `Ctrl+Enter` instead — see the keymap subsection below for details (Issue #226). Full keymap is in the next subsection.
 5. **Temporary close is safe.** `Esc` / `Ctrl+C` closes the overlay so you can inspect the pane or use renga's pane-management shortcuts (`Ctrl+D` split, `Ctrl+Left/Right` focus cycle, etc.). Reopen the overlay on the same pane and the previous draft comes back.
 
 ### IME overlay keybindings
@@ -211,7 +211,7 @@ The overlay opens as a centered multi-line composition box. Host-terminal IME ca
 | Key | Action |
 |-----|--------|
 | `Enter` | Insert newline (also `Shift+Enter`) |
-| `Alt+Enter` | Send buffer to the pane and close (portable across all tier-1 terminals, incl. macOS `Option+Return` — see [macOS: Option as Meta](#macos-option-as-meta) if Option doesn't fire). On WSL2 / Windows Terminal the host emulator binds this chord to *Toggle Fullscreen* and consumes it before renga sees it — use `Ctrl+Enter` instead (Issue #226). |
+| `Alt+Enter` | Send buffer to the pane and close (the canonical commit on most terminals, incl. macOS `Option+Return` — see [macOS: Option as Meta](#macos-option-as-meta) if Option doesn't fire). On WSL2 / Windows Terminal the host emulator binds this chord to *Toggle Fullscreen* and consumes it before renga sees it — use `Ctrl+Enter` instead (Issue #226). |
 | `Ctrl+Enter` | Send buffer — alternative commit for Windows Terminal / wezterm / VS Code / most Linux terminals. On WSL2 / Windows Terminal this is the recommended commit binding because the host swallows `Alt+Enter`; renga also accepts `Ctrl+J`, which is what the host's Ctrl+Enter actually delivers (an LF byte, 0x0A) when extended-key reporting is off. |
 | `Esc` / `Ctrl+C` | Close the overlay and keep the draft for the same pane; reopening restores it |
 | `←` `→` `↑` `↓` | Navigate |

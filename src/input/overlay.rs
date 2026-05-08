@@ -697,15 +697,23 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
 }
 
 /// Recognizes the IME overlay's commit chord. Accepts
-/// `Alt+Enter` (universal), `Ctrl+Enter` and `Cmd+Enter` (only when
-/// the host terminal opts into kitty keyboard protocol or xterm
-/// modifyOtherKeys), and `Ctrl+J` as a WSL / Windows Terminal
-/// fallback for Ctrl+Enter — those hosts deliver Ctrl+Enter as the
-/// raw LF byte (0x0A), which crossterm decodes into
-/// `KeyCode::Char('j') + CONTROL` (Issue #226). Treating Ctrl+J as
-/// a commit key is safe inside the modal overlay: the overlay
-/// otherwise swallows every Ctrl-modified character, so we aren't
-/// shadowing a binding the user could already use here.
+/// `Alt+Enter` (the canonical binding on most terminals),
+/// `Ctrl+Enter` and `Cmd+Enter` (only when the host terminal opts
+/// into kitty keyboard protocol or xterm modifyOtherKeys), and
+/// `Ctrl+J` as a WSL / Windows Terminal fallback for Ctrl+Enter —
+/// those hosts deliver Ctrl+Enter as the raw LF byte (0x0A), which
+/// crossterm's control-byte branch decodes into exactly
+/// `KeyCode::Char('j') + CONTROL` (Issue #226). The Ctrl+J branch
+/// is gated on the modifier set being *exactly* CONTROL: a literal
+/// `Ctrl+Shift+J` or `Ctrl+Alt+J` typed on a host with extended-key
+/// reporting is not what the WSL byte path delivers, and treating
+/// those as commits would silently send the buffer when the user
+/// just held an extra modifier mid-composition.
+///
+/// Treating Ctrl+J as a commit key is safe inside the modal
+/// overlay: the overlay otherwise swallows every Ctrl-modified
+/// character, so we aren't shadowing a binding the user could
+/// already use here.
 ///
 /// Reused by the codex peer notification accept path so the same
 /// modifier rules apply consistently across modal prompts.
@@ -717,8 +725,7 @@ pub(crate) fn is_overlay_commit_key(key: KeyEvent) -> bool {
     {
         return true;
     }
-    matches!(key.code, KeyCode::Char('j') | KeyCode::Char('J'))
-        && key.modifiers.contains(KeyModifiers::CONTROL)
+    matches!(key.code, KeyCode::Char('j')) && key.modifiers == KeyModifiers::CONTROL
 }
 
 #[cfg(test)]
@@ -766,17 +773,15 @@ mod tests {
                 "Enter with {modifier:?} must commit"
             );
         }
-        for c in ['j', 'J'] {
-            let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
-            assert!(
-                is_overlay_commit_key(key),
-                "Ctrl+{c} must commit (WSL fallback)"
-            );
-        }
+        let ctrl_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL);
+        assert!(
+            is_overlay_commit_key(ctrl_j),
+            "Ctrl+J must commit (WSL fallback)"
+        );
     }
 
     #[test]
-    fn commit_key_rejects_bare_enter_and_unmodified_j() {
+    fn commit_key_rejects_bare_enter_and_unmodified_or_overmodified_j() {
         // Bare Enter is "insert newline" inside the multi-line
         // composer, and bare 'j' is just a literal character —
         // neither should commit.
@@ -792,11 +797,26 @@ mod tests {
             KeyCode::Char('j'),
             KeyModifiers::NONE
         )));
-        // Alt+J / Shift+J without Ctrl are typed characters, not the
-        // WSL fallback. Only Ctrl+J emulates Ctrl+Enter.
+        // The WSL fallback's premise is that the raw 0x0A byte
+        // arrives as Char('j') + CONTROL exactly. A user who really
+        // typed Ctrl+Shift+J or Ctrl+Alt+J on a host with extended
+        // key reporting did not press Ctrl+Enter — committing on
+        // those would silently send the buffer when an extra
+        // modifier was held mid-composition.
+        for extra in [KeyModifiers::SHIFT, KeyModifiers::ALT, KeyModifiers::SUPER] {
+            let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL | extra);
+            assert!(
+                !is_overlay_commit_key(key),
+                "Ctrl+J with extra {extra:?} must not commit"
+            );
+        }
+        // Capital 'J' never originates from the WSL LF byte path
+        // (crossterm always emits lowercase for control bytes); it
+        // only appears when the user typed a literal Shift+J, which
+        // is plainly not Ctrl+Enter.
         assert!(!is_overlay_commit_key(KeyEvent::new(
-            KeyCode::Char('j'),
-            KeyModifiers::ALT
+            KeyCode::Char('J'),
+            KeyModifiers::CONTROL
         )));
         assert!(!is_overlay_commit_key(KeyEvent::new(
             KeyCode::Char('J'),
