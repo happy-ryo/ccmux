@@ -141,7 +141,19 @@ name = "renga"
 # rather than a hard error (#203 / #220). Patch bump because the
 # frozen API surface is unchanged; the banner is a presentation
 # tweak and the dedupe / fallback are bug fixes.
-version = "1.1.1"
+# 1.1.2 routes terminal-level bracketed-paste (Event::Paste) to the
+# IME composition overlay when it has focus, so on WSL2 / Windows
+# Terminal / WezTerm a Ctrl+V no longer leaks pasted text through
+# to the back-pane PTY (typically Claude Code's input row) while
+# the user is composing in the overlay. CRLF / bare CR pasted from
+# Windows clipboards is normalized to LF inside the overlay so the
+# wrap/render path no longer renders stray `\r` as a zero-width
+# control glyph, and the normalization streams through an iterator
+# bounded by the existing 4096-char overlay cap so a megabyte-class
+# hostile paste no longer briefly allocates a megabyte just to drop
+# all but 4096 chars (#224). Patch bump: the frozen API surface is
+# unchanged; this is a routing bug fix in keyboard input handling.
+version = "1.1.2"
 edition = "2021"
 description = "AI-native terminal for orchestrating multiple Claude Code and Codex agents in one workspace"
 

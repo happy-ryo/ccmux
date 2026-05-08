@@ -9,6 +9,48 @@ rules in [`docs/semver-policy.md`](./docs/semver-policy.md).
 
 ## [Unreleased]
 
+## [1.1.2] — 2026-05-09
+
+Patch release. Bracketed-paste events now route to the IME composition
+overlay when it holds focus, so on WSL2 / Windows Terminal / WezTerm a
+Ctrl+V no longer leaks pasted text through to the back-pane PTY
+(typically Claude Code's input row) while the user is composing in the
+overlay. Pasted CRLF from Windows clipboards is normalized to LF inside
+the overlay buffer so stray `\r` no longer renders as a zero-width
+control glyph and desyncs the rendered cursor from the buffer cursor,
+and the normalization streams through an iterator bounded by the
+existing 4096-char overlay cap so a megabyte-class hostile paste no
+longer briefly allocates a megabyte just to drop all but 4096 chars.
+The frozen v1.0 API surface is unchanged — this is a routing bug fix in
+keyboard input handling.
+
+### Fixed
+
+- **Bracketed-paste (`Event::Paste`) is now spliced into the IME
+  composition overlay buffer at the cursor when the overlay is open,
+  instead of being unconditionally forwarded to the back-pane PTY.**
+  WSL2 / Windows Terminal / WezTerm surface Ctrl+V as a terminal-level
+  bracketed-paste, so the previous unconditional forward leaked pasted
+  text through to whatever foreground client owned the PTY (typically
+  Claude Code's input row) even while the user was actively composing
+  in the overlay. `App::handle_paste` now centralizes the routing
+  decision: if `self.overlay` is open the paste is spliced into the
+  composition buffer (honoring the existing 4096-char cap by truncating
+  the tail — a clipped paste is recoverable, a dropped paste is not),
+  otherwise the existing PTY path is used. The PTY-echo paste cooldown
+  is skipped on the overlay branch since there's no PTY echo to wait
+  for, so the overlay redraw fires immediately. Pasted CRLF / bare CR
+  from Windows clipboards is normalized to LF inside the overlay
+  buffer so the wrap/render path (which only treats `\n` as a hard
+  newline) no longer renders stray `\r` as a zero-width control glyph
+  and desyncs the rendered cursor from the buffer cursor by one char
+  per line. The CRLF normalization streams through an
+  `impl Iterator<Item = char>` bounded by `take(remaining)` against the
+  overlay cap, so a megabyte-class hostile paste short-circuits the
+  state machine the moment the cap is reached instead of allocating
+  the full normalized string upfront just to drop all but 4096 chars.
+  (#224)
+
 ## [1.1.1] — 2026-05-08
 
 Patch release. Peer channel notifications now carry a loud
