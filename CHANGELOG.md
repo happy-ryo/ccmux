@@ -9,6 +9,8 @@ rules in [`docs/semver-policy.md`](./docs/semver-policy.md).
 
 ## [Unreleased]
 
+## [1.1.3] — 2026-05-09
+
 ### Fixed
 
 - **IME composition overlay: `Ctrl+Enter` now commits on WSL2 / Windows
