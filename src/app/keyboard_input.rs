@@ -217,12 +217,19 @@ impl App {
             && matches!(key.code, KeyCode::Char('v') | KeyCode::Char('V'))
         {
             let focused_id = self.ws().focused_pane_id;
-            let pane_eligible = self
-                .ws()
-                .panes
-                .get(&focused_id)
-                .map(|p| p.is_clipboard_paste_target())
-                .unwrap_or(false);
+            // Only fire the fallback when the focused surface is the
+            // pane itself. The preview and file-tree sub-handlers
+            // below consume every key on their surfaces and don't
+            // expect a stray clipboard paste to land in the
+            // background pane's PTY.
+            let pane_focused = matches!(self.ws().focus_target, FocusTarget::Pane);
+            let pane_eligible = pane_focused
+                && self
+                    .ws()
+                    .panes
+                    .get(&focused_id)
+                    .map(|p| p.is_clipboard_paste_target())
+                    .unwrap_or(false);
             if pane_eligible {
                 if self.clipboard.is_none() {
                     self.clipboard = arboard::Clipboard::new().ok();

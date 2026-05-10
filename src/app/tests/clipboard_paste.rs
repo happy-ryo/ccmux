@@ -109,6 +109,39 @@ fn ctrl_v_is_not_consumed_when_pane_is_ineligible() {
 }
 
 #[test]
+fn ctrl_v_does_not_paste_into_pane_when_focus_is_on_the_sidebar() {
+    // Even on an otherwise eligible pane, Ctrl+V while the user is
+    // navigating the file tree must not synthesize a clipboard paste
+    // into the background pane's PTY. The file-tree key handler
+    // consumes every keystroke on its surface; this guard keeps the
+    // fallback consistent with that focus boundary so a user
+    // hopping between the tree and a Claude pane can't accidentally
+    // dump the clipboard into the wrong place.
+    let mut app = App::new(40, 80).expect("App::new");
+    let focused_id = app.ws().focused_pane_id;
+    app.ws_mut()
+        .panes
+        .get_mut(&focused_id)
+        .expect("focused pane exists")
+        .feed_for_test(b"\x1b[?2004h");
+    app.ws_mut().focus_target = FocusTarget::FileTree;
+    let ctrl_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
+    let consumed = app
+        .handle_key_event(ctrl_v)
+        .expect("handle_key_event Ctrl+V");
+    // The file-tree handler at the bottom of `handle_key_event`
+    // will still claim the key (returning Ok(true)), but the
+    // clipboard fallback must not be the one doing it — verified
+    // indirectly by asserting the focused pane has not entered
+    // post-paste cooldown.
+    let _ = consumed;
+    assert_eq!(
+        app.paste_cooldown, 0,
+        "clipboard fallback must skip when sidebar holds focus"
+    );
+}
+
+#[test]
 fn ctrl_alt_v_is_never_routed_through_the_clipboard_fallback() {
     // `key.modifiers.contains(CONTROL)` matches Ctrl+Alt+V too, but
     // crossterm's `key_event_to_bytes` translates Alt+Ctrl+Char as
