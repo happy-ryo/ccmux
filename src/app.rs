@@ -28,8 +28,8 @@ use self::codex_peer::{
     PendingCodexPeerMessage,
 };
 use self::codex_peer::{write_input_to_pane, CodexPeerNotificationState, PendingCodexPeerDelivery};
-pub(crate) use self::keyboard_input::key_event_to_bytes_pub;
 use self::keyboard_input::{extract_preview_selected_text, extract_selected_text};
+pub(crate) use self::keyboard_input::{is_clipboard_paste_chord, key_event_to_bytes_pub};
 use self::layout_ops::{
     default_command_for_role, dir_name, resolve_optional_cwd, strip_verbatim_prefix,
 };

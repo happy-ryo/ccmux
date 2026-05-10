@@ -684,10 +684,8 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             // available, empty clipboard) fall through to the
             // existing Ctrl/Alt swallow below — the chord becomes a
             // silent no-op rather than corrupting the buffer.
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                && !key.modifiers.contains(KeyModifiers::ALT)
-                && (c == 'v' || c == 'V')
-            {
+            if crate::app::is_clipboard_paste_chord(&key) {
+                let _ = c; // chord match already checked the code+mods together
                 if app.clipboard.is_none() {
                     app.clipboard = arboard::Clipboard::new().ok();
                 }

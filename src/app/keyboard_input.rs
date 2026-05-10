@@ -212,10 +212,7 @@ impl App {
         // Clipboard read or initialization failures fall through to
         // the existing `key_event_to_bytes` path so the user still
         // sees the historical 0x16 byte behavior.
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            && !key.modifiers.contains(KeyModifiers::ALT)
-            && matches!(key.code, KeyCode::Char('v') | KeyCode::Char('V'))
-        {
+        if is_clipboard_paste_chord(&key) {
             let focused_id = self.ws().focused_pane_id;
             // Only fire the fallback when the focused surface is the
             // pane itself. The preview and file-tree sub-handlers
@@ -548,6 +545,22 @@ pub(crate) fn extract_preview_selected_text(
 /// Public wrapper for key_event_to_bytes (used by main.rs paste detection).
 pub(crate) fn key_event_to_bytes_pub(key: &KeyEvent) -> Option<Vec<u8>> {
     key_event_to_bytes(key)
+}
+
+/// Recognize the chord that should engage the renga-side clipboard
+/// paste fallback. Accepts both byte-level variants the host can
+/// deliver: `Char('v') + CONTROL` (the byte 0x16, what every terminal
+/// emits for raw Ctrl+V without `modifyOtherKeys`, and what
+/// Ctrl+Shift+V collapses to at the byte level) and
+/// `Char('V') + CONTROL + SHIFT` (the kitty-keyboard-protocol form
+/// the same chord takes when extended key reporting is on). ALT
+/// must be absent — `Ctrl+Alt+V` is xterm's standard
+/// `ESC + ctrl-byte` meta encoding and shadowing it would silently
+/// break readline / emacs / Claude Code page-forward bindings.
+pub(crate) fn is_clipboard_paste_chord(key: &KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key.modifiers.contains(KeyModifiers::ALT)
+        && matches!(key.code, KeyCode::Char('v') | KeyCode::Char('V'))
 }
 
 /// Convert a crossterm KeyEvent into bytes suitable for PTY input.

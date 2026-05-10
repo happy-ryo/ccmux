@@ -172,28 +172,36 @@ fn ctrl_alt_v_is_never_routed_through_the_clipboard_fallback() {
 }
 
 #[test]
-fn ctrl_shift_v_is_treated_the_same_as_ctrl_v_at_byte_level() {
-    // At the byte level Ctrl+V and Ctrl+Shift+V both arrive as
-    // 0x16; without kitty keyboard protocol the host can't
-    // distinguish them and crossterm decodes both as
-    // `Char('v') + CONTROL`. With kitty protocol the chord arrives
-    // as `Char('V') + CONTROL + SHIFT` — both variants must reach
-    // the same fallback path. This test exercises the latter to
-    // catch a future regression that gated the handler on
-    // `modifiers == CONTROL` (exact match) instead of `contains`.
-    let mut app = App::new(40, 80).expect("App::new");
-    // No bracketed paste → gate refuses → handler returns Ok(false)
-    // even with the upper-case + CONTROL+SHIFT decoding. The point
-    // is that we *reach* the new gate, not that we paste.
-    let ctrl_shift_v = KeyEvent::new(
+fn paste_chord_matches_both_byte_level_variants_and_rejects_alt() {
+    // The chord matcher is the single source of truth for which
+    // KeyEvent decodings engage the clipboard fallback. Without
+    // kitty keyboard protocol the host collapses Ctrl+V and
+    // Ctrl+Shift+V to the byte 0x16, which crossterm decodes as
+    // `Char('v') + CONTROL`. With kitty / modifyOtherKeys on, the
+    // same chord arrives as `Char('V') + CONTROL + SHIFT`. Both
+    // must match. The Alt-bearing variants are xterm's standard
+    // ESC+ctrl-byte meta encoding (page-forward / forward-word in
+    // readline & emacs) and must NOT match, no matter what shift
+    // state the host attached. The bare-modifier `v` is regular
+    // typing and is also out of scope.
+    let plain_ctrl_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
+    let kitty_ctrl_shift_v = KeyEvent::new(
         KeyCode::Char('V'),
         KeyModifiers::CONTROL | KeyModifiers::SHIFT,
     );
-    let consumed = app
-        .handle_key_event(ctrl_shift_v)
-        .expect("handle_key_event Ctrl+Shift+V");
-    assert!(
-        !consumed,
-        "Ctrl+Shift+V on an ineligible pane must also fall through"
+    let ctrl_alt_v = KeyEvent::new(
+        KeyCode::Char('v'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT,
     );
+    let ctrl_alt_shift_v = KeyEvent::new(
+        KeyCode::Char('V'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT,
+    );
+    let plain_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
+
+    assert!(is_clipboard_paste_chord(&plain_ctrl_v));
+    assert!(is_clipboard_paste_chord(&kitty_ctrl_shift_v));
+    assert!(!is_clipboard_paste_chord(&ctrl_alt_v));
+    assert!(!is_clipboard_paste_chord(&ctrl_alt_shift_v));
+    assert!(!is_clipboard_paste_chord(&plain_v));
 }
