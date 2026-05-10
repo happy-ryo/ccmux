@@ -32,8 +32,9 @@
 
 pub mod install;
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io::{self, BufRead, Write};
+use std::process::Command;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -1358,19 +1359,160 @@ fn parse_string_args_array(args: &Value) -> std::result::Result<Vec<String>, Str
     }
 }
 
-/// Parse the `args` JSON array for `spawn_claude_pane`, rejecting
-/// entries that match any of the structured-field flags (which the
-/// caller must pass via `permission_mode` / `model`) or attempt to
-/// override the peer-channel flag. Matches both bare flags (`--foo`)
-/// and the `--foo=value` form so a caller can't sneak a reserved flag
-/// through by combining it with its value.
-fn validate_claude_extra_args(args: &[String]) -> std::result::Result<(), String> {
+/// TTL for the `claude --help` allowlist cache. Issue #229 calls for
+/// "process lifetime or ~5 minutes, whichever is shorter" — we keep
+/// the upper bound at 5 minutes so an in-place Claude upgrade that
+/// adds new flags is picked up without restarting renga.
+const CLAUDE_HELP_TTL: Duration = Duration::from_secs(300);
+
+/// Cache for the parsed allowlist. The Mutex is only held briefly to
+/// read or write the cache slot; the (potentially slow) `claude
+/// --help` subprocess runs *outside* the lock so concurrent spawns
+/// don't serialize on it. A racing double-fetch on cache miss is
+/// harmless — the second writer just overwrites the first with the
+/// same result.
+static CLAUDE_HELP_CACHE: Mutex<Option<(Instant, Arc<HashSet<String>>)>> = Mutex::new(None);
+
+/// Spawn-time soft validation (issue #229): consult `claude --help`
+/// and return the set of recognized CLI flags (long forms like
+/// `--resume`, short forms like `-p`). Returns `None` when the help
+/// text can't be obtained or parsed — the caller falls open in that
+/// case rather than blocking the spawn (a missing or upgraded Claude
+/// binary should never wedge renga's launch path).
+fn claude_help_flag_allowlist() -> Option<Arc<HashSet<String>>> {
+    // Fast path: cache hit, lock held briefly.
+    {
+        let guard = CLAUDE_HELP_CACHE.lock().ok()?;
+        if let Some((stamp, set)) = guard.as_ref() {
+            if stamp.elapsed() < CLAUDE_HELP_TTL {
+                return Some(Arc::clone(set));
+            }
+        }
+    }
+    // Slow path: fetch fresh outside the lock so other panes that hit
+    // the cache simultaneously aren't blocked behind our subprocess.
+    let parsed = match fetch_claude_help_text() {
+        Ok(text) => Arc::new(parse_claude_help_flags(&text)),
+        Err(e) => {
+            log_stderr(&format!(
+                "spawn_claude_pane: `claude --help` parse failed; \
+                 falling open on flag allowlist ({e})"
+            ));
+            return None;
+        }
+    };
+    if let Ok(mut guard) = CLAUDE_HELP_CACHE.lock() {
+        *guard = Some((Instant::now(), Arc::clone(&parsed)));
+    }
+    Some(parsed)
+}
+
+/// Run `claude --help` and capture stdout. Errors out on missing
+/// binary, non-zero exit, or non-UTF-8 output — all of which trigger
+/// the fall-open path in `claude_help_flag_allowlist`.
+fn fetch_claude_help_text() -> std::result::Result<String, String> {
+    let output = Command::new("claude")
+        .arg("--help")
+        .output()
+        .map_err(|e| format!("spawn failed: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("non-zero exit: {}", output.status));
+    }
+    String::from_utf8(output.stdout).map_err(|e| format!("non-UTF-8 stdout: {e}"))
+}
+
+/// Extract recognized flag tokens from `claude --help` output.
+///
+/// Every option line in Claude's help starts with whitespace + a flag
+/// (e.g. `  --resume   …`, `  -p, --print   …`). We pick those lines
+/// up by trimming leading whitespace and checking for a leading `-`,
+/// then split on whitespace and commas to walk the flag tokens. The
+/// first non-flag token (a value placeholder like `<dir>`, `[name]`,
+/// or the start of the description column) marks the boundary.
+///
+/// The `--foo=value` form is collapsed to its head (`--foo`) so the
+/// validator's `head` lookup matches regardless of which form a
+/// caller used.
+///
+/// Subcommand lines (`agents [options]`, `doctor`, …) are skipped
+/// because they don't start with `-`. Wrapped description text that
+/// happens to mention a `--flag` token is *not* picked up — the help
+/// emits each option on a single line, and continuation lines (if
+/// any) start with description text rather than a leading dash.
+fn parse_claude_help_flags(help_text: &str) -> HashSet<String> {
+    let mut flags = HashSet::new();
+    for line in help_text.lines() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with('-') {
+            continue;
+        }
+        // Normalize the comma between aliases (`-p, --print`) so a
+        // single split_whitespace pass walks both names.
+        let normalized = trimmed.replace(',', " ");
+        for tok in normalized.split_whitespace() {
+            if !tok.starts_with('-') {
+                // Hit the value placeholder or description — done.
+                break;
+            }
+            // Strip the `=value` half so `--foo=bar` registers as
+            // `--foo`. Tokens without `=` keep their full form.
+            let head = tok.split('=').next().unwrap_or(tok);
+            // Bare `-` / `--` aren't real flags; skip them so the
+            // allowlist doesn't accidentally accept them.
+            if head == "-" || head == "--" {
+                continue;
+            }
+            flags.insert(head.to_string());
+        }
+    }
+    flags
+}
+
+/// Render an abbreviated, sorted view of an allowlist for use in the
+/// `[invalid-params]` error message. Keeps the response small — full
+/// dumps of ~50 Claude flags would crowd the agent's context.
+fn abbreviate_flag_list(allowed: &HashSet<String>) -> String {
+    const MAX: usize = 12;
+    let mut sorted: Vec<&str> = allowed.iter().map(String::as_str).collect();
+    sorted.sort();
+    if sorted.len() > MAX {
+        let head_list = sorted[..MAX].join(", ");
+        format!("{head_list}, … ({} more)", sorted.len() - MAX)
+    } else {
+        sorted.join(", ")
+    }
+}
+
+/// Parse the `args` JSON array for `spawn_claude_pane`, rejecting:
+///
+/// 1. Entries that match a structured-field flag (`--permission-mode`,
+///    `--model`, `--dangerously-load-development-channels`) — these
+///    are owned by the structured fields, and letting `args[]` also
+///    inject them produces ambiguous command lines.
+/// 2. Flag-shaped entries (`-x` / `--foo` / `--foo=bar`) that don't
+///    appear in the soft-validation allowlist (`claude --help` output)
+///    — protects callers from typos and silently-forwarded unknown
+///    flags that surface as a Claude exit-1 inside the spawned pane
+///    (issue #229).
+///
+/// Both checks match on the head (the chunk before any `=`) so a
+/// caller can't sneak a reserved or unknown flag through by combining
+/// it with its value. Non-flag args (positional values, prompts,
+/// paths) pass through unconditionally.
+///
+/// `allowlist == None` disables soft validation — used both by the
+/// fall-open path when `claude --help` fails and by tests that want
+/// to exercise the reserved-flag branch in isolation.
+fn validate_claude_extra_args(
+    args: &[String],
+    allowlist: Option<&HashSet<String>>,
+) -> std::result::Result<(), String> {
     for a in args {
         // `split('=')` always yields at least one element, so
         // `next().unwrap_or("")` degrades to an empty head for inputs
         // that start with `=` or are empty — neither of which matches
-        // any reserved flag, so the `contains` check below falls
-        // through cleanly to "allowed".
+        // any reserved flag or starts with `-`, so both checks below
+        // fall through cleanly to "allowed".
         let head = a.split('=').next().unwrap_or("");
         if CLAUDE_RESERVED_FLAGS.contains(&head) {
             return Err(format!(
@@ -1384,6 +1526,17 @@ fn validate_claude_extra_args(args: &[String]) -> std::result::Result<(), String
                     _ => "<structured>",
                 }
             ));
+        }
+        // Soft validation: only kicks in when the token looks like a
+        // flag *and* an allowlist is available. Positional values
+        // (prompts, paths) and the fall-open path both pass through.
+        if let Some(allowed) = allowlist {
+            if a.starts_with('-') && !allowed.contains(head) {
+                return Err(format!(
+                    "unknown Claude CLI flag {head:?}; valid options from `claude --help`: {}",
+                    abbreviate_flag_list(allowed)
+                ));
+            }
         }
     }
     Ok(())
@@ -1407,7 +1560,15 @@ fn handle_spawn_claude_pane(id: &Value, args: &Value, ctx: &PeerCtx) -> Value {
         Ok(v) => v,
         Err(msg) => return err_response(id, -32602, &msg),
     };
-    if let Err(msg) = validate_claude_extra_args(&extra_args) {
+    // Skip the `claude --help` round-trip when there are no caller-
+    // supplied args — there's nothing to validate against, and we'd
+    // rather not pay the spawn-time cost on the trivial path.
+    let allowlist = if extra_args.is_empty() {
+        None
+    } else {
+        claude_help_flag_allowlist()
+    };
+    if let Err(msg) = validate_claude_extra_args(&extra_args, allowlist.as_deref()) {
         return err_response(id, -32602, &msg);
     }
 
@@ -2727,7 +2888,7 @@ mod tests {
             "--permission-mode",
             "--model",
         ] {
-            let err = validate_claude_extra_args(&[bad.to_string()])
+            let err = validate_claude_extra_args(&[bad.to_string()], None)
                 .expect_err("must reject reserved flag");
             assert!(
                 err.contains(bad),
@@ -2741,19 +2902,25 @@ mod tests {
         // `--model=opus` shares the `--model` head, so the validator
         // must split on `=` and still reject. Otherwise a caller could
         // sneak a second --model past the structured field.
-        let err = validate_claude_extra_args(&["--model=opus".to_string()])
+        let err = validate_claude_extra_args(&["--model=opus".to_string()], None)
             .expect_err("must reject --model=... form too");
         assert!(err.contains("--model"), "{err}");
     }
 
     #[test]
-    fn validate_claude_extra_args_allows_unrelated_flags() {
-        validate_claude_extra_args(&[
-            "--resume".to_string(),
-            "--verbose".to_string(),
-            "/some-workflow".to_string(),
-        ])
-        .expect("unrelated flags must be allowed");
+    fn validate_claude_extra_args_allows_unrelated_flags_when_allowlist_absent() {
+        // Fall-open path: when soft validation can't fetch / parse
+        // `claude --help`, any non-reserved flag passes through so a
+        // missing or upgraded Claude binary never wedges the spawn.
+        validate_claude_extra_args(
+            &[
+                "--resume".to_string(),
+                "--verbose".to_string(),
+                "/some-workflow".to_string(),
+            ],
+            None,
+        )
+        .expect("unrelated flags must be allowed when allowlist is absent");
     }
 
     #[test]
@@ -2841,8 +3008,236 @@ mod tests {
         // match any reserved flag. Guard so a future refactor that
         // normalizes flag names can't accidentally treat "" as a
         // reserved match.
-        validate_claude_extra_args(&["=oops".to_string(), String::new()])
+        validate_claude_extra_args(&["=oops".to_string(), String::new()], None)
             .expect("empty / no-head strings are not reserved flags");
+    }
+
+    /// Synthetic `claude --help` excerpt used by the parser and
+    /// validator tests. Mirrors the structure renga sees in
+    /// production: a Usage banner, an Options section with mixed
+    /// short/long aliases, value placeholders (`<...>`, `[...]`),
+    /// `--foo=value` documentation, and a Commands section that
+    /// must be skipped.
+    const SAMPLE_CLAUDE_HELP: &str = "\
+Usage: claude [options] [command] [prompt]
+
+Claude Code - starts an interactive session.
+
+Arguments:
+  prompt                                            Your prompt
+
+Options:
+  --add-dir <directories...>                        Additional directories
+  --resume                                          Resume conversation
+  -p, --print                                       Print and exit
+  --model <model>                                   Model for the session
+  --output-format <format>                          Output format (choices: \"text\", \"json\")
+  --allowedTools, --allowed-tools <tools...>        Allowed tools list
+  -d, --debug [filter]                              Enable debug mode
+  --permission-mode <mode>                          Permission mode
+  --dangerously-skip-permissions                    Skip permission checks
+  -h, --help                                        Display help for command
+  -v, --version                                     Output the version number
+  -w, --worktree [name]                             Create a new git worktree
+
+Commands:
+  agents [options]                                  Manage agents
+  doctor                                            Health check
+  plugin|plugins                                    Manage plugins
+";
+
+    #[test]
+    fn parse_claude_help_flags_extracts_long_and_short_forms() {
+        let flags = parse_claude_help_flags(SAMPLE_CLAUDE_HELP);
+        for expected in [
+            "--add-dir",
+            "--resume",
+            "-p",
+            "--print",
+            "--model",
+            "--output-format",
+            "--allowedTools",
+            "--allowed-tools",
+            "-d",
+            "--debug",
+            "--permission-mode",
+            "--dangerously-skip-permissions",
+            "-h",
+            "--help",
+            "-v",
+            "--version",
+            "-w",
+            "--worktree",
+        ] {
+            assert!(
+                flags.contains(expected),
+                "parser should extract {expected:?} from claude --help; got {flags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_claude_help_flags_skips_value_placeholders_and_subcommands() {
+        let flags = parse_claude_help_flags(SAMPLE_CLAUDE_HELP);
+        for noise in [
+            "<directories...>",
+            "<format>",
+            "<tools...>",
+            "<mode>",
+            "[filter]",
+            "[name]",
+            "agents",
+            "doctor",
+            "plugin|plugins",
+            "Usage:",
+            "prompt",
+            "claude",
+            "Arguments:",
+            "Options:",
+            "Commands:",
+            "-",
+            "--",
+        ] {
+            assert!(
+                !flags.contains(noise),
+                "parser should skip {noise:?}; got {flags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_claude_help_flags_handles_empty_input() {
+        // Defensive: a malformed or empty help dump must not panic
+        // and must yield an empty allowlist (which the validator
+        // then rejects every flag against — but the production path
+        // treats parse failure as a fall-open via fetch_*_text).
+        let flags = parse_claude_help_flags("");
+        assert!(flags.is_empty());
+    }
+
+    #[test]
+    fn validate_claude_extra_args_passes_known_flags_with_allowlist() {
+        let allowlist = parse_claude_help_flags(SAMPLE_CLAUDE_HELP);
+        validate_claude_extra_args(
+            &[
+                "--resume".to_string(),
+                "--print".to_string(),
+                "-d".to_string(),
+                "--output-format=json".to_string(),
+                "/some-workflow".to_string(),
+                "Hello prompt".to_string(),
+            ],
+            Some(&allowlist),
+        )
+        .expect("known flags + positional values must pass when allowlist is present");
+    }
+
+    #[test]
+    fn validate_claude_extra_args_rejects_unknown_flag_with_allowlist() {
+        // Issue #229's motivating example: the dispatcher accidentally
+        // forwarded `--skip-settings` (a flag that doesn't exist on
+        // the Claude CLI). With the allowlist active this is now
+        // rejected at the spawn boundary instead of failing later as
+        // a Claude exit-1 inside the spawned pane.
+        let allowlist = parse_claude_help_flags(SAMPLE_CLAUDE_HELP);
+        let err = validate_claude_extra_args(&["--skip-settings".to_string()], Some(&allowlist))
+            .expect_err("unknown flag must be rejected when allowlist is present");
+        assert!(
+            err.contains("--skip-settings"),
+            "error must name the rejected flag: {err}"
+        );
+        assert!(
+            err.contains("claude --help"),
+            "error must reference the source of the allowlist: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_claude_extra_args_rejects_unknown_flag_equals_value_form_with_allowlist() {
+        // `--unknown=value` must also be rejected: the validator
+        // splits on `=` and looks up the head, so `--unknown` is
+        // checked against the allowlist regardless of whether the
+        // caller used the equals-form or the space-separated form.
+        let allowlist = parse_claude_help_flags(SAMPLE_CLAUDE_HELP);
+        let err = validate_claude_extra_args(&["--unknown=value".to_string()], Some(&allowlist))
+            .expect_err("--unknown=value form must also be rejected");
+        assert!(err.contains("--unknown"), "{err}");
+    }
+
+    #[test]
+    fn validate_claude_extra_args_passes_positional_args_with_allowlist() {
+        // Non-flag args (prompts, file paths starting with `/`) must
+        // pass through unconditionally — soft validation only gates
+        // tokens that look like flags.
+        let allowlist = parse_claude_help_flags(SAMPLE_CLAUDE_HELP);
+        validate_claude_extra_args(
+            &[
+                "Hello, world!".to_string(),
+                "/some-workflow".to_string(),
+                "=oops".to_string(),
+                String::new(),
+            ],
+            Some(&allowlist),
+        )
+        .expect("positional args must always pass through soft validation");
+    }
+
+    #[test]
+    fn validate_claude_extra_args_reserved_flags_rejected_before_soft_check() {
+        // Regression for issue #229: even with an allowlist that
+        // happens to recognize the structured-field flags (which
+        // SAMPLE_CLAUDE_HELP does for --model and --permission-mode),
+        // the reserved-flag rejection MUST still fire so the caller
+        // gets the structured-field nudge rather than a confusing
+        // "unknown flag" error.
+        let allowlist = parse_claude_help_flags(SAMPLE_CLAUDE_HELP);
+        for bad in ["--model", "--permission-mode"] {
+            let err = validate_claude_extra_args(&[bad.to_string()], Some(&allowlist))
+                .expect_err("reserved flag must still be rejected with allowlist active");
+            assert!(err.contains(bad), "{err}");
+            assert!(
+                err.contains("structured field"),
+                "must mention structured field, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_claude_extra_args_falls_open_when_allowlist_is_none() {
+        // The production fall-open path: `claude --help` failed (binary
+        // missing, non-zero exit, etc.), so the caller passes None and
+        // we accept any non-reserved flag. Mirrors pre-issue-#229
+        // behavior so a missing Claude binary doesn't wedge spawning.
+        validate_claude_extra_args(
+            &[
+                "--brand-new-flag".to_string(),
+                "--probably-typo".to_string(),
+            ],
+            None,
+        )
+        .expect("must fall open when allowlist is None");
+    }
+
+    #[test]
+    fn abbreviate_flag_list_truncates_long_lists() {
+        let mut allowed = HashSet::new();
+        for i in 0..20 {
+            allowed.insert(format!("--flag-{i:02}"));
+        }
+        let rendered = abbreviate_flag_list(&allowed);
+        assert!(rendered.contains("--flag-00"), "{rendered}");
+        assert!(rendered.contains("8 more"), "{rendered}");
+    }
+
+    #[test]
+    fn abbreviate_flag_list_inlines_short_lists() {
+        let mut allowed = HashSet::new();
+        allowed.insert("--resume".to_string());
+        allowed.insert("--print".to_string());
+        let rendered = abbreviate_flag_list(&allowed);
+        assert!(rendered.contains("--resume"));
+        assert!(rendered.contains("--print"));
+        assert!(!rendered.contains("more"), "{rendered}");
     }
 
     #[test]
