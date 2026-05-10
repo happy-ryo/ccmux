@@ -72,6 +72,23 @@ fn clipboard_paste_target_no_when_alt_screen_without_bp() {
 }
 
 #[test]
+fn clipboard_paste_target_no_when_mouse_reporting_is_on() {
+    // Claude Code's `/tui fullscreen` mode enables DECSET 1003
+    // (`AnyMotion`) without switching to the alt screen, so it
+    // would otherwise sneak past the alt-screen gate while Claude
+    // is owning its own keyboard map. The mouse-protocol gate
+    // catches that case (and any other in-app mouse-driven UI).
+    let app = App::new(40, 80).expect("App::new");
+    let pane = app
+        .ws()
+        .panes
+        .get(&app.ws().focused_pane_id)
+        .expect("focused pane exists");
+    pane.feed_for_test(b"\x1b[?2004h\x1b[?1003h");
+    assert!(!pane.is_clipboard_paste_target());
+}
+
+#[test]
 fn ctrl_v_is_not_consumed_when_pane_is_ineligible() {
     // When the focused pane is *not* a clipboard-paste target the
     // chord must not be intercepted: `handle_key_event` should
@@ -92,14 +109,14 @@ fn ctrl_v_is_not_consumed_when_pane_is_ineligible() {
 }
 
 #[test]
-fn ctrl_v_falls_through_when_clipboard_returns_empty_text() {
-    // When the gate passes but the system clipboard read yields
-    // nothing (no arboard backend on this host, or an empty
-    // clipboard), the fallback must decline rather than synthesize
-    // an empty paste — an empty `handle_paste` round-trip would
-    // still fire `paste_cooldown` and swallow the chord with no
-    // visible effect, which is strictly worse than letting the
-    // historical 0x16 byte reach the PTY.
+fn ctrl_alt_v_is_never_routed_through_the_clipboard_fallback() {
+    // `key.modifiers.contains(CONTROL)` matches Ctrl+Alt+V too, but
+    // crossterm's `key_event_to_bytes` translates Alt+Ctrl+Char as
+    // `ESC + ctrl_byte` (the standard xterm meta encoding). Shadowing
+    // that with a clipboard paste would silently break ESC-prefixed
+    // bindings in emacs / readline / Claude Code (`Alt+Ctrl+V` is a
+    // common page-down/forward-page chord). The handler must opt out
+    // whenever ALT is held — even on an otherwise eligible pane.
     let mut app = App::new(40, 80).expect("App::new");
     let pane = app
         .ws()
@@ -107,21 +124,17 @@ fn ctrl_v_falls_through_when_clipboard_returns_empty_text() {
         .get(&app.ws().focused_pane_id)
         .expect("focused pane exists");
     pane.feed_for_test(b"\x1b[?2004h");
-    // Best-effort: clear the system clipboard so the test is
-    // deterministic on hosts where arboard *does* return data. If
-    // arboard fails to initialize (typical for headless CI runners
-    // without an X server) the fallback path naturally produces an
-    // empty string and the assertion still holds.
-    if let Ok(mut cb) = arboard::Clipboard::new() {
-        let _ = cb.set_text("");
-    }
-    let ctrl_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
+    assert!(pane.is_clipboard_paste_target());
+    let ctrl_alt_v = KeyEvent::new(
+        KeyCode::Char('v'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT,
+    );
     let consumed = app
-        .handle_key_event(ctrl_v)
-        .expect("handle_key_event Ctrl+V");
+        .handle_key_event(ctrl_alt_v)
+        .expect("handle_key_event Ctrl+Alt+V");
     assert!(
         !consumed,
-        "empty clipboard must fall through, not swallow the chord"
+        "Ctrl+Alt+V must bypass the fallback and reach key_event_to_bytes"
     );
 }
 

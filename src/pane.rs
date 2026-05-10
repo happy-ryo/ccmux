@@ -344,13 +344,20 @@ impl Pane {
     /// raw key event instead of triggering its own paste action.
     /// True only when the PTY application has opted into bracketed
     /// paste (Claude Code, modern bash/zsh, readline-style apps) AND
-    /// the pane is not in the alternate screen (vim / less / htop /
-    /// lazygit / Claude's `/tui fullscreen`, where `Ctrl+V` has a
-    /// native, non-paste meaning that we must not shadow).
+    /// the foreground app does not appear to own its own keyboard.
+    /// The latter is detected by two signals: alternate-screen mode
+    /// (vim / less / htop / lazygit / Codex full-screen UI) and an
+    /// active mouse-reporting mode (Claude Code's `/tui fullscreen`
+    /// enables DECSET 1003 without entering the alt screen, per
+    /// `shell_accepts_command_injection`'s docs). When either is
+    /// active we leave `Ctrl+V`'s byte unchanged so the app's own
+    /// binding wins.
     pub fn is_clipboard_paste_target(&self) -> bool {
         let parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
         let screen = parser.screen();
-        screen.bracketed_paste() && !screen.alternate_screen()
+        screen.bracketed_paste()
+            && !screen.alternate_screen()
+            && matches!(screen.mouse_protocol_mode(), vt100::MouseProtocolMode::None)
     }
 
     /// Decide how a mouse-wheel event at `(local_col, local_row)` — pane

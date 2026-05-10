@@ -213,6 +213,7 @@ impl App {
         // the existing `key_event_to_bytes` path so the user still
         // sees the historical 0x16 byte behavior.
         if key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT)
             && matches!(key.code, KeyCode::Char('v') | KeyCode::Char('V'))
         {
             let focused_id = self.ws().focused_pane_id;
@@ -232,8 +233,14 @@ impl App {
                     .and_then(|cb| cb.get_text().ok())
                     .unwrap_or_default();
                 if !text.is_empty() {
-                    self.handle_paste(&text)?;
-                    self.paste_cooldown = 5;
+                    let routed_to_overlay = self.handle_paste(&text)?;
+                    if !routed_to_overlay {
+                        // Mirror main.rs's Event::Paste cooldown so
+                        // the post-paste PTY echo settles before the
+                        // next redraw fires. Overlay routing has no
+                        // PTY round-trip and skips this.
+                        self.paste_cooldown = 5;
+                    }
                     return Ok(true);
                 }
             }
