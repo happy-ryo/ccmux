@@ -9,6 +9,29 @@ rules in [`docs/semver-policy.md`](./docs/semver-policy.md).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-05-10
+
+First minor release after v1.1.x. Adds soft validation of
+`spawn_claude_pane` `args[]` against the parsed `claude --help` output
+so common flag typos are surfaced at MCP-call time rather than via a
+cryptic Claude startup failure inside the spawned pane. The frozen v1.0
+MCP wire shape is unchanged — input field types, required/optional
+status, and error-code names are all preserved; the new validator only
+adds a soft-fail path on previously-accepted-but-bogus flag spellings.
+
+### Added
+
+- **`spawn_claude_pane` soft-validates flag-like `args[]` entries
+  against the parsed output of `claude --help`.** Help text is fetched
+  once per process and cached for 5 minutes; if the parser fails or
+  `claude --help` is unreachable the validator falls open so a
+  transient `claude` outage cannot block pane spawns. Reserved-flag
+  rejection (`--dangerously-load-development-channels`,
+  `--permission-mode`, `--model` — already required for security
+  routing because renga injects its own values for those) still runs
+  first, so the soft validator never sees a reserved flag. Refs #229.
+  (#230)
+
 ## [1.1.3] — 2026-05-09
 
 ### Fixed
