@@ -10,6 +10,7 @@ mod layout_config;
 mod macos_tip;
 mod mcp_peer;
 mod pane;
+mod perf_trace;
 mod preview;
 mod ui;
 mod version_check;
@@ -89,6 +90,11 @@ fn main() -> Result<()> {
         ratatui_image::picker::Picker::from_query_stdio()
             .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks()),
     );
+
+    // Diagnostic perf trace. No-op unless `RENGA_PERF_TRACE=1` is set
+    // in the environment; opt-in by design so production runs see zero
+    // cost. See `src/perf_trace.rs` for the output format.
+    perf_trace::init();
 
     // Setup terminal
     enable_raw_mode()?;
@@ -422,6 +428,18 @@ fn run_event_loop(
 
         // Only render when something changed (and no cooldown is active)
         if app.dirty && app.paste_cooldown == 0 && app.resize_cooldown == 0 {
+            let _draw_section = perf_trace::is_enabled().then(|| {
+                let panes = app.workspaces.get(app.active_tab).map(|w| w.panes.len()).unwrap_or(0);
+                perf_trace::Section::with_extra(
+                    "draw_total",
+                    format!(
+                        "selection_active={} dragging={} panes={}",
+                        app.selection.is_some(),
+                        app.dragging.is_some(),
+                        panes,
+                    ),
+                )
+            });
             app.dirty = false;
             // Defense-in-depth for the Windows conpty caret-leak
             // originally reported in #25 / fixed in #36: while any pane
@@ -509,7 +527,20 @@ fn run_event_loop(
                     app.dirty = true;
                 }
                 Event::Mouse(mouse) => {
-                    app.handle_mouse_event(mouse);
+                    if perf_trace::is_enabled() {
+                        let kind = format!("{:?}", mouse.kind);
+                        perf_trace::log(&format!(
+                            "mouse_in kind={} col={} row={} mods={:?}",
+                            kind, mouse.column, mouse.row, mouse.modifiers
+                        ));
+                        let _s = perf_trace::Section::with_extra(
+                            "mouse_handle",
+                            format!("kind={}", kind),
+                        );
+                        app.handle_mouse_event(mouse);
+                    } else {
+                        app.handle_mouse_event(mouse);
+                    }
                     app.dirty = true;
                 }
                 Event::Resize(cols, rows) => {

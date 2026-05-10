@@ -87,12 +87,24 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         ])
         .split(area);
 
-    render_tab_bar(app, frame, chunks[0]);
-    render_main_area(app, frame, chunks[1]);
+    {
+        let _s = crate::perf_trace::is_enabled()
+            .then(|| crate::perf_trace::Section::new("draw.tab_bar"));
+        render_tab_bar(app, frame, chunks[0]);
+    }
+    {
+        let _s = crate::perf_trace::is_enabled()
+            .then(|| crate::perf_trace::Section::new("draw.main_area"));
+        render_main_area(app, frame, chunks[1]);
+    }
     if show_macos_tip {
+        let _s = crate::perf_trace::is_enabled()
+            .then(|| crate::perf_trace::Section::new("draw.macos_tip"));
         render_macos_tip(app, frame, chunks[2]);
     }
     if show_status {
+        let _s = crate::perf_trace::is_enabled()
+            .then(|| crate::perf_trace::Section::new("draw.status_bar"));
         render_status_bar(app, frame, chunks[3]);
     }
     // The IME composition overlay is drawn last so its centered box
@@ -101,8 +113,12 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     // (not `chunks[1]`) keeps it visually centered on the whole
     // window even when the status bar is visible.
     if show_overlay {
+        let _s = crate::perf_trace::is_enabled()
+            .then(|| crate::perf_trace::Section::new("draw.ime_overlay"));
         render_ime_overlay(app, frame, area);
     } else if show_codex_peer_notification {
+        let _s = crate::perf_trace::is_enabled()
+            .then(|| crate::perf_trace::Section::new("draw.codex_peer_notification"));
         render_codex_peer_notification(app, frame, area);
     }
 }
@@ -665,6 +681,18 @@ fn render_panes(app: &mut App, frame: &mut Frame, area: Rect) {
                 |s| matches!(s.target, crate::app::SelectionTarget::Pane(id) if id == pane_id),
             );
             let claude_state = app.claude_monitor.state(pane_id);
+            let _s = crate::perf_trace::is_enabled().then(|| {
+                crate::perf_trace::Section::with_extra(
+                    "draw.pane",
+                    format!(
+                        "id={} rows={} cols={} selection={}",
+                        pane_id,
+                        rect.height,
+                        rect.width,
+                        pane_sel.is_some(),
+                    ),
+                )
+            });
             render_single_pane(pane, is_focused, pane_sel, &claude_state, frame, rect);
         }
     }
@@ -828,7 +856,28 @@ fn render_terminal_content(
     frame: &mut Frame,
     area: Rect,
 ) {
+    let lock_start = crate::perf_trace::is_enabled().then(std::time::Instant::now);
     let parser = pane.parser.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(t0) = lock_start {
+        let lock_us = t0.elapsed().as_micros() as u64;
+        if lock_us > 50 {
+            crate::perf_trace::log(&format!(
+                "draw.pane.parser_lock_wait_us={} rows={} cols={}",
+                lock_us, area.height, area.width
+            ));
+        }
+    }
+    let _cells_section = crate::perf_trace::is_enabled().then(|| {
+        crate::perf_trace::Section::with_extra(
+            "draw.pane.terminal_content",
+            format!(
+                "rows={} cols={} selection={}",
+                area.height,
+                area.width,
+                selection.is_some(),
+            ),
+        )
+    });
     let screen = parser.screen();
 
     let rows = area.height as usize;
