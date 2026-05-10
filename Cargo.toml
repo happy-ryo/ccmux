@@ -167,7 +167,19 @@ name = "renga"
 # README.ja, and the docs site keymap tables now call out the WSL
 # caveat next to the Alt+Enter row (#226 / #227). Patch bump: the
 # frozen API surface is unchanged; this is a keyboard-input bug fix.
-version = "1.1.3"
+# 1.2.0 makes `spawn_claude_pane` soft-validate flag-like entries in
+# `args[]` against the parsed output of `claude --help` (#229 / #230).
+# Help text is fetched once per process and cached for 5 minutes; if
+# the parser fails or `claude --help` is unreachable the validator
+# falls open so a transient `claude` outage cannot block pane spawns.
+# Reserved-flag rejection (`--dangerously-load-development-channels`,
+# `--permission-mode`, `--model` — already required for security
+# routing) still runs first. New behavior on an existing MCP tool's
+# input shape, additive: previously-accepted args remain accepted
+# unless they are clearly mis-spelled flags. Minor bump under the
+# v1.0 semver policy because the validation surface is new even
+# though no existing field shape changed.
+version = "1.2.0"
 edition = "2021"
 description = "AI-native terminal for orchestrating multiple Claude Code and Codex agents in one workspace"
 
