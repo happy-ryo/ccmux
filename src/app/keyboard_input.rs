@@ -4,6 +4,19 @@ impl App {
     // ─── Key handling ─────────────────────────────────────
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<bool> {
+        // DEBUG: log every key event reaching renga so the user can
+        // share the trace on a host where Ctrl+Shift+V looks like a
+        // no-op. If nothing shows up for a chord press, the host
+        // terminal swallowed it before it reached renga's stdin.
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/renga-paste-trace.log")
+            .ok()
+            .and_then(|mut f| {
+                use std::io::Write;
+                writeln!(f, "KEY_IN code={:?} mods={:?}", key.code, key.modifiers).ok()
+            });
         // First-launch macOS tip: dismiss on any key, but fall through
         // so the key still performs its normal action. The banner is a
         // transient hint, not a modal — the user shouldn't have to
