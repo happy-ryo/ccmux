@@ -214,12 +214,26 @@ impl App {
         // sees the historical 0x16 byte behavior.
         if is_clipboard_paste_chord(&key) {
             let focused_id = self.ws().focused_pane_id;
-            // Only fire the fallback when the focused surface is the
-            // pane itself. The preview and file-tree sub-handlers
-            // below consume every key on their surfaces and don't
-            // expect a stray clipboard paste to land in the
-            // background pane's PTY.
             let pane_focused = matches!(self.ws().focus_target, FocusTarget::Pane);
+            // DEBUG: capture every gate decision so the user can share
+            // the log on a host where the fallback isn't firing. The
+            // file is opened append-only so multiple Ctrl+V presses
+            // accumulate.
+            let (bp, alt_screen, mp_mode, claude) = self
+                .ws()
+                .panes
+                .get(&focused_id)
+                .map(|p| {
+                    let parser = p.parser.lock().unwrap_or_else(|e| e.into_inner());
+                    let screen = parser.screen();
+                    (
+                        screen.bracketed_paste(),
+                        screen.alternate_screen(),
+                        format!("{:?}", screen.mouse_protocol_mode()),
+                        p.is_claude_running(),
+                    )
+                })
+                .unwrap_or((false, false, "<no_pane>".into(), false));
             let pane_eligible = pane_focused
                 && self
                     .ws()
@@ -227,24 +241,65 @@ impl App {
                     .get(&focused_id)
                     .map(|p| p.is_clipboard_paste_target())
                     .unwrap_or(false);
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/renga-paste-trace.log")
+                .ok()
+                .and_then(|mut f| {
+                    use std::io::Write;
+                    writeln!(
+                        f,
+                        "CTRL_V key={:?} pane_focused={} bp={} alt={} mp={} claude={} eligible={}",
+                        key, pane_focused, bp, alt_screen, mp_mode, claude, pane_eligible
+                    )
+                    .ok()
+                });
             if pane_eligible {
                 if self.clipboard.is_none() {
                     self.clipboard = arboard::Clipboard::new().ok();
                 }
+                let arboard_init_ok = self.clipboard.is_some();
                 let text = self
                     .clipboard
                     .as_mut()
                     .and_then(|cb| cb.get_text().ok())
                     .unwrap_or_default();
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/renga-paste-trace.log")
+                    .ok()
+                    .and_then(|mut f| {
+                        use std::io::Write;
+                        writeln!(
+                            f,
+                            "  arboard_init_ok={} text_len={} text_preview={:?}",
+                            arboard_init_ok,
+                            text.len(),
+                            text.chars().take(40).collect::<String>()
+                        )
+                        .ok()
+                    });
                 if !text.is_empty() {
                     let routed_to_overlay = self.handle_paste(&text)?;
                     if !routed_to_overlay {
-                        // Mirror main.rs's Event::Paste cooldown so
-                        // the post-paste PTY echo settles before the
-                        // next redraw fires. Overlay routing has no
-                        // PTY round-trip and skips this.
                         self.paste_cooldown = 5;
                     }
+                    let _ = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/tmp/renga-paste-trace.log")
+                        .ok()
+                        .and_then(|mut f| {
+                            use std::io::Write;
+                            writeln!(
+                                f,
+                                "  -> handle_paste called, routed_to_overlay={}",
+                                routed_to_overlay
+                            )
+                            .ok()
+                        });
                     return Ok(true);
                 }
             }

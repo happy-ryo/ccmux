@@ -487,6 +487,21 @@ fn run_event_loop(
                 }
                 Event::Key(_) => {}
                 Event::Paste(text) => {
+                    let _ = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/tmp/renga-paste-trace.log")
+                        .ok()
+                        .and_then(|mut f| {
+                            use std::io::Write;
+                            writeln!(
+                                f,
+                                "EVENT_PASTE bytes={} preview={:?}",
+                                text.len(),
+                                text.chars().take(40).collect::<String>()
+                            )
+                            .ok()
+                        });
                     let routed_to_overlay = app.handle_paste(&text)?;
                     if !routed_to_overlay {
                         app.paste_cooldown = 5;
