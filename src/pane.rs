@@ -339,6 +339,20 @@ impl Pane {
         parser.screen().bracketed_paste()
     }
 
+    /// Whether this pane should accept a renga-side clipboard paste
+    /// when the host terminal forwards `Ctrl+V` / `Ctrl+Shift+V` as a
+    /// raw key event instead of triggering its own paste action.
+    /// True only when the PTY application has opted into bracketed
+    /// paste (Claude Code, modern bash/zsh, readline-style apps) AND
+    /// the pane is not in the alternate screen (vim / less / htop /
+    /// lazygit / Claude's `/tui fullscreen`, where `Ctrl+V` has a
+    /// native, non-paste meaning that we must not shadow).
+    pub fn is_clipboard_paste_target(&self) -> bool {
+        let parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
+        let screen = parser.screen();
+        screen.bracketed_paste() && !screen.alternate_screen()
+    }
+
     /// Decide how a mouse-wheel event at `(local_col, local_row)` — pane
     /// content-area coordinates, 0-origin — should be handled. Returns:
     ///
@@ -550,6 +564,16 @@ impl Pane {
     pub(crate) fn set_codex_transcript_overlay_hint_for_test(&self, active: bool) {
         self.codex_transcript_overlay_hint
             .store(active, Ordering::Relaxed);
+    }
+
+    /// Feed bytes directly into the vt100 parser, bypassing the
+    /// PTY-reader thread. Tests use this to put the parser into a
+    /// known state (bracketed-paste mode, alternate screen, …)
+    /// without actually exercising the child shell.
+    #[cfg(test)]
+    pub(crate) fn feed_for_test(&self, bytes: &[u8]) {
+        let mut parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
+        parser.process(bytes);
     }
 
     #[cfg(test)]

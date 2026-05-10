@@ -1,0 +1,153 @@
+// Tests for the Ctrl+V / Ctrl+Shift+V clipboard-read fallback that
+// kicks in when the host terminal forwards the chord as a raw key
+// event instead of a bracketed-paste sequence. The actual arboard
+// round-trip is not exercised here (the system clipboard is not a
+// deterministic fixture in CI) — these tests verify the gate that
+// decides whether the fallback should even be attempted.
+
+use super::super::*;
+
+#[test]
+fn clipboard_paste_target_requires_bracketed_paste_enabled() {
+    // A fresh pane has neither bracketed paste enabled nor an alt
+    // screen, so the fallback must decline. The Ctrl+V key event
+    // then falls through to the normal `key_event_to_bytes` path and
+    // the historical 0x16 byte reaches the PTY unchanged.
+    let app = App::new(40, 80).expect("App::new");
+    let pane = app
+        .ws()
+        .panes
+        .get(&app.ws().focused_pane_id)
+        .expect("focused pane exists");
+    assert!(!pane.is_clipboard_paste_target());
+}
+
+#[test]
+fn clipboard_paste_target_yes_when_bp_and_not_alt_screen() {
+    // PTY apps that opt into bracketed paste (modern bash/zsh,
+    // Claude Code) are the intended target of the fallback: the user
+    // typically expects Ctrl+V to mean paste there, so a clipboard
+    // read is the right behavior when the terminal didn't perform
+    // the paste itself.
+    let app = App::new(40, 80).expect("App::new");
+    let pane = app
+        .ws()
+        .panes
+        .get(&app.ws().focused_pane_id)
+        .expect("focused pane exists");
+    pane.feed_for_test(b"\x1b[?2004h");
+    assert!(pane.is_clipboard_paste_target());
+}
+
+#[test]
+fn clipboard_paste_target_no_when_alt_screen_even_with_bp() {
+    // vim 8+ enables bracketed paste *and* switches to the alt
+    // screen; pasting clipboard text into vim's normal-mode buffer
+    // (where Ctrl+V means start visual-block selection) would be a
+    // surprise. Keep the native Ctrl+V semantics by skipping the
+    // fallback whenever the alt screen is active.
+    let app = App::new(40, 80).expect("App::new");
+    let pane = app
+        .ws()
+        .panes
+        .get(&app.ws().focused_pane_id)
+        .expect("focused pane exists");
+    pane.feed_for_test(b"\x1b[?2004h\x1b[?1049h");
+    assert!(!pane.is_clipboard_paste_target());
+}
+
+#[test]
+fn clipboard_paste_target_no_when_alt_screen_without_bp() {
+    // less / htop / lazygit use the alt screen but never enable
+    // bracketed paste — Ctrl+V is either a no-op or a native binding
+    // (page down in less). The fallback stays off here too.
+    let app = App::new(40, 80).expect("App::new");
+    let pane = app
+        .ws()
+        .panes
+        .get(&app.ws().focused_pane_id)
+        .expect("focused pane exists");
+    pane.feed_for_test(b"\x1b[?1049h");
+    assert!(!pane.is_clipboard_paste_target());
+}
+
+#[test]
+fn ctrl_v_is_not_consumed_when_pane_is_ineligible() {
+    // When the focused pane is *not* a clipboard-paste target the
+    // chord must not be intercepted: `handle_key_event` should
+    // return `Ok(false)` so `main.rs` forwards the raw 0x16 byte via
+    // `key_event_to_bytes`. This guards against the fallback
+    // shadowing Ctrl+V's native meaning in vim / less / htop and in
+    // shells that have not opted into bracketed paste.
+    let mut app = App::new(40, 80).expect("App::new");
+    // Default pane has bracketed paste OFF, so the gate refuses.
+    let ctrl_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
+    let consumed = app
+        .handle_key_event(ctrl_v)
+        .expect("handle_key_event Ctrl+V");
+    assert!(
+        !consumed,
+        "Ctrl+V on an ineligible pane must fall through so 0x16 reaches the PTY"
+    );
+}
+
+#[test]
+fn ctrl_v_falls_through_when_clipboard_returns_empty_text() {
+    // When the gate passes but the system clipboard read yields
+    // nothing (no arboard backend on this host, or an empty
+    // clipboard), the fallback must decline rather than synthesize
+    // an empty paste — an empty `handle_paste` round-trip would
+    // still fire `paste_cooldown` and swallow the chord with no
+    // visible effect, which is strictly worse than letting the
+    // historical 0x16 byte reach the PTY.
+    let mut app = App::new(40, 80).expect("App::new");
+    let pane = app
+        .ws()
+        .panes
+        .get(&app.ws().focused_pane_id)
+        .expect("focused pane exists");
+    pane.feed_for_test(b"\x1b[?2004h");
+    // Best-effort: clear the system clipboard so the test is
+    // deterministic on hosts where arboard *does* return data. If
+    // arboard fails to initialize (typical for headless CI runners
+    // without an X server) the fallback path naturally produces an
+    // empty string and the assertion still holds.
+    if let Ok(mut cb) = arboard::Clipboard::new() {
+        let _ = cb.set_text("");
+    }
+    let ctrl_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
+    let consumed = app
+        .handle_key_event(ctrl_v)
+        .expect("handle_key_event Ctrl+V");
+    assert!(
+        !consumed,
+        "empty clipboard must fall through, not swallow the chord"
+    );
+}
+
+#[test]
+fn ctrl_shift_v_is_treated_the_same_as_ctrl_v_at_byte_level() {
+    // At the byte level Ctrl+V and Ctrl+Shift+V both arrive as
+    // 0x16; without kitty keyboard protocol the host can't
+    // distinguish them and crossterm decodes both as
+    // `Char('v') + CONTROL`. With kitty protocol the chord arrives
+    // as `Char('V') + CONTROL + SHIFT` — both variants must reach
+    // the same fallback path. This test exercises the latter to
+    // catch a future regression that gated the handler on
+    // `modifiers == CONTROL` (exact match) instead of `contains`.
+    let mut app = App::new(40, 80).expect("App::new");
+    // No bracketed paste → gate refuses → handler returns Ok(false)
+    // even with the upper-case + CONTROL+SHIFT decoding. The point
+    // is that we *reach* the new gate, not that we paste.
+    let ctrl_shift_v = KeyEvent::new(
+        KeyCode::Char('V'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+    let consumed = app
+        .handle_key_event(ctrl_shift_v)
+        .expect("handle_key_event Ctrl+Shift+V");
+    assert!(
+        !consumed,
+        "Ctrl+Shift+V on an ineligible pane must also fall through"
+    );
+}

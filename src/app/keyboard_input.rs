@@ -195,6 +195,51 @@ impl App {
             // No selection — fall through to forward Ctrl+C to PTY
         }
 
+        // Ctrl+V / Ctrl+Shift+V — renga-side clipboard paste fallback
+        // for hosts whose terminal layer does not handle the paste
+        // shortcut. At the byte level both chords arrive as 0x16 and
+        // crossterm decodes them as `Char('v') + CONTROL`, so the
+        // single check covers both. When the host *does* handle the
+        // shortcut (the common path on WSL2 / Windows Terminal /
+        // WezTerm) crossterm receives `Event::Paste` instead and this
+        // handler never runs, so the fallback is purely additive.
+        //
+        // Gated on `is_clipboard_paste_target` to protect Ctrl+V's
+        // native meaning in vim / less / htop / lazygit (alt-screen)
+        // and in apps that have not opted into bracketed paste
+        // (Ctrl+V there is typically a no-op or a quote-next prefix,
+        // both of which we must not shadow with surprise paste).
+        // Clipboard read or initialization failures fall through to
+        // the existing `key_event_to_bytes` path so the user still
+        // sees the historical 0x16 byte behavior.
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('v') | KeyCode::Char('V'))
+        {
+            let focused_id = self.ws().focused_pane_id;
+            let pane_eligible = self
+                .ws()
+                .panes
+                .get(&focused_id)
+                .map(|p| p.is_clipboard_paste_target())
+                .unwrap_or(false);
+            if pane_eligible {
+                if self.clipboard.is_none() {
+                    self.clipboard = arboard::Clipboard::new().ok();
+                }
+                let text = self
+                    .clipboard
+                    .as_mut()
+                    .and_then(|cb| cb.get_text().ok())
+                    .unwrap_or_default();
+                if !text.is_empty() {
+                    self.handle_paste(&text)?;
+                    self.paste_cooldown = 5;
+                    return Ok(true);
+                }
+            }
+            // Fall through: forward raw 0x16 byte via key_event_to_bytes.
+        }
+
         // Ctrl+T / Alt+T — new tab (Alt+T groups with Alt-based tab nav)
         if (key.modifiers == KeyModifiers::CONTROL || key.modifiers == KeyModifiers::ALT)
             && matches!(key.code, KeyCode::Char('t') | KeyCode::Char('T'))

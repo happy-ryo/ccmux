@@ -673,6 +673,37 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 app.dirty = true;
                 return Ok(true);
             }
+            // Ctrl+V / Ctrl+Shift+V — clipboard-read fallback for
+            // hosts whose terminal didn't surface the paste as an
+            // Event::Paste. PR #224 left this as out-of-scope; the
+            // overlay swallowed the chord and produced nothing. We
+            // now read the host clipboard via arboard and splice
+            // it into the composition buffer through
+            // `OverlayState::insert_str`, which honors the 4096-char
+            // cap and normalizes CRLF. Failures (no arboard backend
+            // available, empty clipboard) fall through to the
+            // existing Ctrl/Alt swallow below — the chord becomes a
+            // silent no-op rather than corrupting the buffer.
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT)
+                && (c == 'v' || c == 'V')
+            {
+                if app.clipboard.is_none() {
+                    app.clipboard = arboard::Clipboard::new().ok();
+                }
+                let text = app
+                    .clipboard
+                    .as_mut()
+                    .and_then(|cb| cb.get_text().ok())
+                    .unwrap_or_default();
+                if !text.is_empty() {
+                    if let Some(o) = app.overlay.as_mut() {
+                        o.insert_str(&text);
+                    }
+                    app.dirty = true;
+                }
+                return Ok(true);
+            }
             if key
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)

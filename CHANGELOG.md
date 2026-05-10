@@ -9,6 +9,23 @@ rules in [`docs/semver-policy.md`](./docs/semver-policy.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Renga-side clipboard paste fallback for `Ctrl+V` / `Ctrl+Shift+V`
+  when the host terminal forwards the chord as a raw key event
+  instead of a bracketed-paste sequence.** On some WSL2 + Windows
+  Terminal / WezTerm configurations the host's paste shortcut never
+  reaches its own paste action, so the byte `0x16` would arrive at
+  the focused pane unchanged and produce no visible paste. Renga
+  now reads the system clipboard via the existing `arboard`
+  dependency and routes the text through `App::handle_paste`, which
+  in turn delivers it to the IME overlay (if open) or to the
+  focused PTY with the usual bracketed-paste wrap. Gated on the
+  focused pane having bracketed paste enabled AND not being in the
+  alternate screen, so vim / less / htop / lazygit keep their
+  native Ctrl+V semantics. Clipboard read failures fall through to
+  the historical `0x16`-to-PTY path. (Closes #232)
+
 ## [1.2.0] — 2026-05-10
 
 First minor release after v1.1.x. Adds soft validation of
