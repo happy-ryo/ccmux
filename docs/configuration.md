@@ -39,18 +39,21 @@ overlay_catchup_ms = 3000
 
 > A third `mode` value, `"always"`, used to auto-open the overlay on every Claude pane focus. It was removed because the auto-open never worked reliably in practice. Users who want the overlay ready on focus should press `Ctrl+;` once.
 
-## `[ui]` — UI language
+## `[ui]` — UI language and event-loop rate
 
 ```toml
 [ui]
 lang = "auto"   # "auto" | "ja" | "en"
+fps = 30
 ```
 
 | Key | Type | Default | CLI flag | Notes |
 |---|---|---|---|---|
 | `lang` | `"auto" \| "ja" \| "en"` | `"auto"` | `--lang <auto\|ja\|en>` | Language for status bar hints and preview panel error messages. `auto` detects from the OS locale via `sys-locale` (wraps `nl_langinfo` on Unix and `GetUserDefaultLocaleName` on Windows). Locales starting with `ja` render in Japanese; everything else falls back to English. Values are case-insensitive in both CLI and TOML. |
+| `fps` | u16 | `30` | `--fps <FPS>` | Main event-loop target rate. Drives the crossterm poll timeout used while the TUI is idle; higher values reduce input latency and make animations smoother at the cost of more wakeups. `0` is clamped to `1` at runtime so a bad config or CLI override never turns into a busy-spin. |
 
 **Precedence for `lang`**: CLI > config > OS locale detection > English fallback.
+**Precedence for `fps`**: CLI > config > default (with the `0`→`1` clamp applied last).
 
 ## See also
 
