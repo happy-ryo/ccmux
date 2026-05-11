@@ -210,7 +210,7 @@ pub static MESSAGES_JA: Messages = Messages {
     preview_not_regular: "通常ファイルではありません",
     macos_tip_line1: "\u{26A0} macOS: Alt+<キー> には端末の Option=Meta 設定が必要です",
     macos_tip_line2:
-        "  https://github.com/happy-ryo/renga#macos-option-as-meta  (任意のキーで消去)",
+        "  https://github.com/happy-ryo/renga/blob/main/docs/keymap.md#macos-option-as-meta  (任意のキーで消去)",
 };
 
 pub static MESSAGES_EN: Messages = Messages {
@@ -246,7 +246,7 @@ pub static MESSAGES_EN: Messages = Messages {
     preview_not_regular: "Not a regular file",
     macos_tip_line1: "\u{26A0} macOS: Alt+<key> shortcuts require Option=Meta in your terminal",
     macos_tip_line2:
-        "  https://github.com/happy-ryo/renga#macos-option-as-meta  (press any key to dismiss)",
+        "  https://github.com/happy-ryo/renga/blob/main/docs/keymap.md#macos-option-as-meta  (press any key to dismiss)",
 };
 
 #[cfg(test)]
