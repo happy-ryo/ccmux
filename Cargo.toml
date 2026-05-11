@@ -179,7 +179,11 @@ name = "renga"
 # unless they are clearly mis-spelled flags. Minor bump under the
 # v1.0 semver policy because the validation surface is new even
 # though no existing field shape changed.
-version = "1.2.0"
+# 1.2.1 rebuilds the Linux npm release artifact with musl so the
+# downloaded binary does not require the glibc version from the
+# release runner (`GLIBC_2.39` on ubuntu-latest at the time of the
+# broken 1.2.0 artifact). Patch bump: packaging-only compatibility fix.
+version = "1.2.1"
 edition = "2021"
 description = "AI-native terminal for orchestrating multiple Claude Code and Codex agents in one workspace"
 
