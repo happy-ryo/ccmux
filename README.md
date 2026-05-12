@@ -359,7 +359,7 @@ _Event monitoring:_
 | `Alt+Left/Right` | Previous / next tab |
 | `Alt+R` | Rename tab (session only) |
 | `Alt+S` | Toggle status bar |
-| `Alt+P` | Insert the peer-enabled Claude Code launch command into the focused pane (see [Peer messaging](#peer-messaging-between-claude-code-panes)) |
+| `Alt+P` | Insert the peer-enabled Claude Code launch command into the focused pane (see [Peer messaging](#peer-messaging-between-claude-code-panes)). Silently no-ops when the focused pane is in alt-screen mode (vim, less, lazygit, a running Claude / Codex TUI) or its title contains "claude" — by design, so the command bytes aren't injected as keystrokes into a running TUI. Switch focus to a shell-prompt pane and press again (Issue #234). |
 | `Ctrl+F` | Toggle file tree |
 | `Ctrl+P` | Swap preview/terminal layout |
 | `Ctrl+Right/Left` | Cycle focus (sidebar, preview, panes) |
