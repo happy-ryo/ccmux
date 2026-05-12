@@ -26,6 +26,21 @@ rules in [`docs/semver-policy.md`](./docs/semver-policy.md).
   native Ctrl+V semantics. Clipboard read failures fall through to
   the historical `0x16`-to-PTY path. (Closes #232)
 
+## [1.2.1] — 2026-05-11
+
+Patch release. Rebuilds the Linux npm release artifact with the musl
+target so npm-installed `renga` no longer inherits the glibc version
+from GitHub Actions' `ubuntu-latest` image.
+
+### Fixed
+
+- **Linux npm installs no longer fail on distributions older than the
+  release runner's glibc with `GLIBC_2.39 not found`.** The release
+  workflow now builds `renga-linux-x64` for
+  `x86_64-unknown-linux-musl` and installs `musl-tools` only for that
+  matrix entry, keeping the published filename and npm installer
+  contract unchanged. (#235)
+
 ## [1.2.0] — 2026-05-10
 
 First minor release after v1.1.x. Adds soft validation of
