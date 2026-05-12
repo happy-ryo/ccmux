@@ -9,6 +9,44 @@ rules in [`docs/semver-policy.md`](./docs/semver-policy.md).
 
 ## [Unreleased]
 
+## [1.2.2] — 2026-05-13
+
+Patch release. Reorganizes the README into a ~200-line landing-style
+file with detail moved under `docs/`, documents the intentional Alt+P
+silent-no-op gating for alt-screen / claude-titled panes so the refusal
+isn't mistaken for a bug, and raises the `claude_monitor::context_limit()`
+baseline to 500K only for Opus while Sonnet / Haiku / unknown stay at
+200K so the status-bar token-usage ratio reflects each model's real
+context window. The frozen v1.0 API surface (MCP wire shape, CLI flags,
+config keys, env vars) is unchanged.
+
+### Changed
+
+- **`claude_monitor::context_limit()` returns 500K for Opus by default,
+  keeping Sonnet / Haiku / unknown at the prior 200K.** Previously
+  every model fell through to a single 200K baseline, which made the
+  status-bar token-usage ratio over-report context pressure on Opus
+  panes where the real window is 500K. The existing 1M overrides
+  (`[1m]` suffix and `opus-4-6`) are preserved and continue to take
+  precedence; only the per-model default changed. (#241)
+
+### Documentation
+
+- **README slimmed to ~200 lines; detail moved under `docs/`.**
+  Keybindings now live in `docs/keymap.md`, configuration in
+  `docs/configuration.md`, IME behavior in `docs/ime.md`, and peer
+  messaging in `docs/peer-messaging.md`. The README now acts as a
+  landing page with links into the topic docs instead of trying to
+  cover everything inline. (#237)
+- **Alt+P silent-no-op caveat documented in the keymap doc.** The
+  Alt+P launch-line insertion is intentionally a no-op on panes that
+  are in the alt-screen (e.g., running an interactive TUI) or whose
+  pane title is `claude`, so the chord is never displayed in the
+  rendered output of an already-claude pane and never overwrites the
+  TUI buffer of an unrelated app. The keymap doc now calls this out
+  next to the Alt+P row so users don't read the refusal as a bug.
+  (#240, Closes #234)
+
 ## [1.2.1] — 2026-05-11
 
 Patch release. Rebuilds the Linux npm release artifact with the musl
