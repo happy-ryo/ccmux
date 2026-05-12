@@ -78,18 +78,19 @@ impl ClaudeState {
     /// into the JSONL, **without** the `[1m]` suffix even when the
     /// session is running the 1M variant. Opus 4.6 ships with a 1M
     /// context by default for Pro / Max users, so it's treated as 1M
-    /// here. Sonnet and Haiku still default to 200K; the explicit
-    /// `[1m]` / `-1m` suffix path catches any future model that does
-    /// spell it out.
+    /// here. Other models use a 500K baseline so the status-bar usage
+    /// ratio better reflects the actual Claude 4.X context windows
+    /// (especially `[1m]` variants); the explicit `[1m]` / `-1m`
+    /// suffix path catches any future model that does spell it out.
     pub fn context_limit(&self) -> u64 {
         match self.model.as_deref() {
             Some(m) if m.contains("[1m]") || m.contains("-1m") => 1_000_000,
             // Opus 4.6+: 1M context is default.
             Some(m) if m.contains("opus-4-6") => 1_000_000,
-            Some(m) if m.contains("haiku") => 200_000,
-            Some(m) if m.contains("sonnet") => 200_000,
-            Some(m) if m.contains("opus") => 200_000,
-            _ => 200_000,
+            Some(m) if m.contains("haiku") => 500_000,
+            Some(m) if m.contains("sonnet") => 500_000,
+            Some(m) if m.contains("opus") => 500_000,
+            _ => 500_000,
         }
     }
 
@@ -614,14 +615,14 @@ mod tests {
         state.model = Some("claude-opus-4-6[1m]".to_string());
         assert_eq!(state.context_limit(), 1_000_000);
 
-        // Older Opus remains 200K.
+        // Older Opus uses the 500K baseline.
         state.model = Some("claude-opus-4-5".to_string());
-        assert_eq!(state.context_limit(), 200_000);
+        assert_eq!(state.context_limit(), 500_000);
 
-        // Sonnet / Haiku default to 200K.
+        // Sonnet / Haiku also use the 500K baseline.
         state.model = Some("claude-sonnet-4-6".to_string());
-        assert_eq!(state.context_limit(), 200_000);
+        assert_eq!(state.context_limit(), 500_000);
         state.model = Some("claude-haiku-4-5".to_string());
-        assert_eq!(state.context_limit(), 200_000);
+        assert_eq!(state.context_limit(), 500_000);
     }
 }
