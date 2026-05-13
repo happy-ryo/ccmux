@@ -195,7 +195,12 @@ name = "renga"
 # config keys, env vars) is unchanged — README/docs reorg is content
 # only, and the per-model context_limit change is a presentation tweak
 # to the status-bar ratio, not a new public field.
-version = "1.2.2"
+# 1.2.3 fixes clipboard copy on WSL by falling back to `clip.exe` when
+# the regular clipboard backend is unavailable and by bridging OSC 52
+# clipboard requests emitted by pane-local applications such as Claude
+# Code into renga's clipboard path. Patch bump: clipboard transport
+# compatibility fix; the frozen v1.0 API surface is unchanged.
+version = "1.2.3"
 edition = "2021"
 description = "AI-native terminal for orchestrating multiple Claude Code and Codex agents in one workspace"
 

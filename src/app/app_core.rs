@@ -272,14 +272,50 @@ impl App {
 
     /// Copy text to clipboard, reusing the handle if available.
     pub(crate) fn copy_to_clipboard(&mut self, text: &str) {
-        if self.clipboard.is_none() {
-            self.clipboard = arboard::Clipboard::new().ok();
-        }
         if let Some(ref mut cb) = self.clipboard {
-            let _ = cb.set_text(text);
+            if cb.set_text(text).is_ok() {
+                return;
+            }
+            self.clipboard = None;
+        }
+
+        self.clipboard = arboard::Clipboard::new().ok();
+        if let Some(ref mut cb) = self.clipboard {
+            if cb.set_text(text).is_ok() {
+                return;
+            }
+        }
+
+        if running_under_wsl() {
+            let _ = copy_to_windows_clipboard(text);
         }
     }
+}
 
+fn running_under_wsl() -> bool {
+    std::env::var_os("WSL_INTEROP").is_some()
+        || std::env::var_os("WSL_DISTRO_NAME").is_some()
+        || std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .map(|release| release.to_ascii_lowercase().contains("microsoft"))
+            .unwrap_or(false)
+}
+
+fn copy_to_windows_clipboard(text: &str) -> std::io::Result<()> {
+    let mut child = Command::new("clip.exe")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(text.as_bytes())?;
+    }
+
+    child.wait()?;
+    Ok(())
+}
+
+impl App {
     /// Recompute pane rectangles and apply sizes to every PTY in the
     /// active workspace. Returns `true` if any pane was actually
     /// resized (so callers can decide whether to enter the post-resize
