@@ -183,7 +183,24 @@ name = "renga"
 # downloaded binary does not require the glibc version from the
 # release runner (`GLIBC_2.39` on ubuntu-latest at the time of the
 # broken 1.2.0 artifact). Patch bump: packaging-only compatibility fix.
-version = "1.2.1"
+# 1.2.2 reorganizes the README to ~200 lines with detail moved under
+# `docs/` (#237), documents the intentional Alt+P silent-no-op gating
+# for alt-screen / claude-titled panes in the keymap doc so the refusal
+# isn't mistaken for a bug (#240, Closes #234), and raises the
+# `claude_monitor::context_limit()` baseline to 500K only for Opus
+# (other than the existing 1M overrides `[1m]` / `opus-4-6`) while
+# Sonnet / Haiku / unknown stay at the prior 200K so the status-bar
+# token-usage ratio reflects the real per-model context window (#241).
+# Patch bump: the frozen v1.0 API surface (MCP wire shape, CLI flags,
+# config keys, env vars) is unchanged — README/docs reorg is content
+# only, and the per-model context_limit change is a presentation tweak
+# to the status-bar ratio, not a new public field.
+# 1.2.3 fixes clipboard copy on WSL by falling back to `clip.exe` when
+# the regular clipboard backend is unavailable and by bridging OSC 52
+# clipboard requests emitted by pane-local applications such as Claude
+# Code into renga's clipboard path. Patch bump: clipboard transport
+# compatibility fix; the frozen v1.0 API surface is unchanged.
+version = "1.2.3"
 edition = "2021"
 description = "AI-native terminal for orchestrating multiple Claude Code and Codex agents in one workspace"
 
