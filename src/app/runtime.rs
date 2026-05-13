@@ -72,6 +72,9 @@ impl App {
                     }
                 }
                 AppEvent::PtyOutput(_) => {}
+                AppEvent::ClipboardCopy(text) => {
+                    self.copy_to_clipboard(&text);
+                }
             }
         }
         if had_events {

@@ -941,6 +941,7 @@ fn pty_reader_thread(
     const TAIL_CAP: usize = 256;
     let mut tail: Vec<u8> = Vec::with_capacity(TAIL_CAP * 2);
     let mut control_tail: Vec<u8> = Vec::with_capacity(64);
+    let mut osc52_tail: Vec<u8> = Vec::with_capacity(4096);
 
     let mut buf = [0u8; 4096];
     loop {
@@ -1015,6 +1016,13 @@ fn pty_reader_thread(
                 if let Some(enabled) = detect_alternate_scroll_toggle(&control_tail) {
                     alternate_scroll_mode.store(enabled, Ordering::Relaxed);
                 }
+                osc52_tail.extend_from_slice(data);
+                for text in drain_osc52_copies(&mut osc52_tail) {
+                    let _ = event_tx.send(AppEvent::ClipboardCopy(text));
+                }
+                if osc52_tail.len() > 1_048_576 {
+                    osc52_tail.clear();
+                }
 
                 let mut parser = parser.lock().unwrap_or_else(|e| e.into_inner());
                 parser.process(data);
@@ -1038,6 +1046,125 @@ fn pty_reader_thread(
             }
         }
     }
+}
+
+fn drain_osc52_copies(buf: &mut Vec<u8>) -> Vec<String> {
+    const PREFIX: &[u8] = b"\x1b]52;";
+    let mut copies = Vec::new();
+    let mut search_from = 0;
+
+    loop {
+        let Some(start_rel) = find_subslice(&buf[search_from..], PREFIX) else {
+            keep_possible_prefix_suffix(buf, PREFIX);
+            break;
+        };
+        let start = search_from + start_rel;
+        let payload_start = start + PREFIX.len();
+        let Some((term_start, term_end)) = find_osc_terminator(buf, payload_start) else {
+            if start > 0 {
+                buf.drain(..start);
+            }
+            break;
+        };
+
+        if let Some(text) = decode_osc52_body(&buf[payload_start..term_start]) {
+            copies.push(text);
+        }
+        buf.drain(..term_end);
+        search_from = 0;
+    }
+
+    copies
+}
+
+fn decode_osc52_body(body: &[u8]) -> Option<String> {
+    let sep = body.iter().position(|&b| b == b';')?;
+    let payload = &body[sep + 1..];
+    if payload == b"?" {
+        return None;
+    }
+    let bytes = decode_base64(payload)?;
+    String::from_utf8(bytes).ok()
+}
+
+fn find_osc_terminator(buf: &[u8], from: usize) -> Option<(usize, usize)> {
+    let mut i = from;
+    while i < buf.len() {
+        if buf[i] == b'\x07' {
+            return Some((i, i + 1));
+        }
+        if buf[i] == b'\x1b' && buf.get(i + 1) == Some(&b'\\') {
+            return Some((i, i + 2));
+        }
+        i += 1;
+    }
+    None
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn keep_possible_prefix_suffix(buf: &mut Vec<u8>, prefix: &[u8]) {
+    let keep = prefix.len().saturating_sub(1);
+    if buf.len() <= keep {
+        return;
+    }
+    let start = buf.len() - keep;
+    let suffix = buf[start..].to_vec();
+    buf.clear();
+    buf.extend_from_slice(&suffix);
+}
+
+fn decode_base64(input: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let mut quartet = [0u8; 4];
+    let mut n = 0;
+
+    for &b in input {
+        if b.is_ascii_whitespace() {
+            continue;
+        }
+        quartet[n] = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => 64,
+            _ => return None,
+        };
+        n += 1;
+        if n == 4 {
+            push_base64_quartet(&mut out, quartet)?;
+            n = 0;
+        }
+    }
+
+    if n > 0 {
+        for slot in quartet.iter_mut().skip(n) {
+            *slot = 64;
+        }
+        push_base64_quartet(&mut out, quartet)?;
+    }
+
+    Some(out)
+}
+
+fn push_base64_quartet(out: &mut Vec<u8>, q: [u8; 4]) -> Option<()> {
+    if q[0] == 64 || q[1] == 64 {
+        return None;
+    }
+    out.push((q[0] << 2) | (q[1] >> 4));
+    if q[2] != 64 {
+        out.push((q[1] << 4) | (q[2] >> 2));
+    }
+    if q[3] != 64 {
+        out.push((q[2] << 6) | q[3]);
+    }
+    Some(())
 }
 
 /// Extract path from OSC 7 escape sequence: \x1b]7;file://HOST/PATH(\x07|\x1b\\)
@@ -1234,6 +1361,29 @@ fn detect_shell_unix() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drain_osc52_copies_decodes_bel_terminated_payload() {
+        let mut buf = b"\x1b]52;c;aGVsbG8=\x07".to_vec();
+        assert_eq!(drain_osc52_copies(&mut buf), vec!["hello"]);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn drain_osc52_copies_decodes_st_terminated_payload() {
+        let mut buf = b"\x1b]52;c;44GT44KT44Gr44Gh44Gv\x1b\\".to_vec();
+        assert_eq!(drain_osc52_copies(&mut buf), vec!["こんにちは"]);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn drain_osc52_copies_handles_split_sequence() {
+        let mut buf = b"\x1b]52;c;aGVs".to_vec();
+        assert!(drain_osc52_copies(&mut buf).is_empty());
+        buf.extend_from_slice(b"bG8=\x07");
+        assert_eq!(drain_osc52_copies(&mut buf), vec!["hello"]);
+        assert!(buf.is_empty());
+    }
 
     #[test]
     fn wheel_report_sgr_up_matches_xterm_format() {

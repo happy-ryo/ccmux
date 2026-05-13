@@ -113,6 +113,8 @@ pub enum AppCommand {
 pub enum AppEvent {
     /// PTY output received for a pane.
     PtyOutput(#[allow(dead_code)] usize),
+    /// A pane emitted OSC 52 with clipboard text.
+    ClipboardCopy(String),
     /// PTY process exited for a pane.
     PtyEof(usize),
     /// Shell changed working directory (pane_id, new path).
